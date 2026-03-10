@@ -4,6 +4,7 @@ const { asyncHandler } = require('../middleware/errorHandler');
 const { body } = require('express-validator');
 const { validate } = require('../middleware/validate');
 const { supabaseAdmin } = require('../config/supabase');
+const { getPlatformSetting } = require('../utils/platformSettings');
 
 router.use(authenticate);
 
@@ -136,9 +137,11 @@ router.get(
       .eq('driver_paid', false)
       .eq('status', 'delivered');
 
-    const DRIVER_DELIVERY_FEE = parseFloat(process.env.DRIVER_DELIVERY_FEE || '8.00');
+    const driverDeliveryFee = parseFloat(
+      await getPlatformSetting('driver_delivery_fee', '8.00')
+    );
     const pendingAmount = (unpaidOrders || []).reduce(
-      (s, o) => s + DRIVER_DELIVERY_FEE + parseFloat(o.tip_amount || 0),
+      (s, o) => s + driverDeliveryFee + parseFloat(o.tip_amount || 0),
       0
     );
 

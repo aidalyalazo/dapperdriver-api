@@ -2,6 +2,7 @@ const cron = require('node-cron');
 const { supabaseAdmin } = require('../config/supabase');
 const stripeService = require('../services/stripeService');
 const { sendPayoutNotification } = require('../services/fcmService');
+const { getPlatformSetting } = require('../utils/platformSettings');
 
 /**
  * DapperDriver — Monday Auto-Payout Job
@@ -11,12 +12,10 @@ const { sendPayoutNotification } = require('../services/fcmService');
  * calculates their earnings and transfers via Stripe Connect.
  *
  * Driver earnings model:
- *   Per-delivery flat fee (DRIVER_DELIVERY_FEE) + optional tip.
+ *   Per-delivery flat fee ('driver_delivery_fee' from platform_settings) + optional tip.
  *   The platform retains the 25% commission from the boutique side;
  *   driver pay is a separate line item already accounted for in total_amount.
  */
-
-const DRIVER_DELIVERY_FEE = parseFloat(process.env.DRIVER_DELIVERY_FEE || '8.00');
 
 // ── Main payout function ───────────────────────────────────────────────────
 
@@ -24,6 +23,12 @@ async function runMondayPayouts() {
   console.log('[PAYOUT JOB] Starting Monday driver payouts...');
 
   try {
+    // Read fee from platform_settings so the admin can change it without a redeploy
+    const driverDeliveryFee = parseFloat(
+      await getPlatformSetting('driver_delivery_fee', '8.00')
+    );
+    console.log(`[PAYOUT JOB] Using driver_delivery_fee: $${driverDeliveryFee.toFixed(2)}`);
+
     // Fetch all delivered, unpaid orders that have an assigned driver
     const { data: orders, error } = await supabaseAdmin
       .from('orders')
@@ -56,7 +61,7 @@ async function runMondayPayouts() {
         };
       }
       byDriver[driverId].orderIds.push(order.id);
-      byDriver[driverId].total += DRIVER_DELIVERY_FEE + (parseFloat(order.tip_amount) || 0);
+      byDriver[driverId].total += driverDeliveryFee + (parseFloat(order.tip_amount) || 0);
     }
 
     const results = { success: 0, failed: 0, skipped: 0 };

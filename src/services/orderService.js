@@ -1,5 +1,6 @@
 const { supabaseAdmin } = require('../config/supabase');
 const { sendOrderNotification } = require('./fcmService');
+const { getPlatformSetting } = require('../utils/platformSettings');
 
 /**
  * Valid order status transitions.
@@ -194,10 +195,12 @@ async function listOrders({ shopperId, boutiqueId, driverId, status, page = 1, l
 }
 
 /**
- * Simple delivery fee estimator (replace with real geo-based logic).
+ * Delivery fee — reads 'default_delivery_fee' from platform_settings so the
+ * admin panel can update it without touching environment variables or code.
  */
 async function getDeliveryFee(_address) {
-  return parseFloat(process.env.DEFAULT_DELIVERY_FEE || '4.99');
+  const fee = await getPlatformSetting('default_delivery_fee', '4.99');
+  return parseFloat(fee);
 }
 
 module.exports = { createOrder, updateOrderStatus, assignDriver, getOrder, listOrders };
