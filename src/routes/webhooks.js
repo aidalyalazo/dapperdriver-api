@@ -149,33 +149,33 @@ router.post(
           break;
         }
 
-        // ── Transfer paid to recipient ─────────────────────────────────────
-        case 'transfer.paid': {
-          const transfer = event.data.object;
-          const payoutId = transfer.metadata?.payout_id;
+        // ── Payout paid to recipient bank account ─────────────────────────
+        case 'payout.paid': {
+          const payout = event.data.object;
+          const payoutId = payout.metadata?.payout_id;
           if (payoutId) {
             await supabaseAdmin
               .from('payouts')
-              .update({ status: 'paid', stripe_transfer_id: transfer.id })
+              .update({ status: 'paid', stripe_transfer_id: payout.id })
               .eq('id', payoutId)
               .catch(() => {});
 
             // Notify recipient
-            const { data: payout } = await supabaseAdmin
+            const { data: payoutRecord } = await supabaseAdmin
               .from('payouts')
               .select('recipient_id, recipient_type, amount')
               .eq('id', payoutId)
               .single()
               .catch(() => ({ data: null }));
 
-            if (payout) {
+            if (payoutRecord) {
               await supabaseAdmin
                 .from('notifications')
                 .insert({
-                  user_id: payout.recipient_id,
+                  user_id: payoutRecord.recipient_id,
                   type: 'payout_sent',
                   title: '💸 Payout Sent',
-                  body: `Your payout of $${parseFloat(payout.amount).toFixed(2)} has been sent to your bank account.`,
+                  body: `Your payout of $${parseFloat(payoutRecord.amount).toFixed(2)} has been sent to your bank account.`,
                   data: { payout_id: payoutId },
                   is_read: false,
                   sent_push: false,
@@ -186,10 +186,10 @@ router.post(
           break;
         }
 
-        // ── Transfer failed ───────────────────────────────────────────────
-        case 'transfer.failed': {
-          const transfer = event.data.object;
-          const payoutId = transfer.metadata?.payout_id;
+        // ── Payout failed ─────────────────────────────────────────────────
+        case 'payout.failed': {
+          const payout = event.data.object;
+          const payoutId = payout.metadata?.payout_id;
           if (payoutId) {
             await supabaseAdmin
               .from('payouts')
@@ -197,8 +197,15 @@ router.post(
               .eq('id', payoutId)
               .catch(() => {});
           }
-          // Alert admin
-          console.error('[WEBHOOK] ⚠️ Transfer FAILED:', transfer.id, 'Payout:', payoutId);
+          console.error('[WEBHOOK] ⚠️ Payout FAILED:', payout.id, 'Payout record:', payoutId);
+          break;
+        }
+
+        // ── Transfer reversed (refund/reversal) ───────────────────────────
+        case 'transfer.reversed': {
+          const transfer = event.data.object;
+          console.log('[WEBHOOK] Transfer reversed:', transfer.id, 'Amount reversed:', transfer.amount_reversed);
+          // Log for manual review — reversals are rare and handled case-by-case
           break;
         }
 
