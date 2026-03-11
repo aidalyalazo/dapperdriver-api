@@ -34,12 +34,17 @@ router.post(
   asyncHandler(async (req, res) => {
     const { email, password, role, full_name, phone } = req.body;
 
-    // 1. Create Supabase Auth user with role in metadata
+    // 1. Create Supabase Auth user WITHOUT role in metadata first.
+    //    A DB trigger on auth.users fires on INSERT and tries to create
+    //    a profile row based on the role — but it fails for boutique/driver
+    //    because those tables have different schemas. So we create the user
+    //    with no role, let the trigger create a default shoppers row,
+    //    then handle the profile ourselves.
     const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
       email,
       password,
-      email_confirm: true, // skip email verification in dev; set false in prod
-      user_metadata: { role, full_name },
+      email_confirm: true,
+      user_metadata: { full_name },
     });
 
     if (authError) {
@@ -48,34 +53,48 @@ router.post(
 
     const userId = authData.user.id;
 
-    // 2. Insert into the appropriate profile table
-    const profileTable = role === 'boutique' ? 'boutiques' : role === 'driver' ? 'drivers' : 'shoppers';
-    const profileData = {
-      email,
-      phone:     phone || null,
-      created_at: new Date().toISOString(),
-    };
+    // 2. Update user metadata to include the real role
+    await supabaseAdmin.auth.admin.updateUserById(userId, {
+      user_metadata: { role, full_name },
+    });
 
-    // Each table uses a different column name for the user's name
-    // and a different key for the auth user id
-    if (role === 'shopper') {
-      profileData.id           = userId;  // shoppers.id = auth user id
-      profileData.display_name = full_name;
-    } else if (role === 'boutique') {
-      profileData.user_id    = userId;  // boutiques uses separate user_id column
-      profileData.owner_name = full_name;
-      profileData.name       = req.body.boutique_name || full_name;
-      // status defaults to 'pending' in DB
+    // 3. The trigger may have auto-created a shoppers row.
+    //    For non-shopper roles, delete it and create the correct profile.
+    if (role !== 'shopper') {
+      // Remove the auto-created shoppers row (if trigger created one)
+      await supabaseAdmin.from('shoppers').delete().eq('id', userId);
+
+      const profileTable = role === 'boutique' ? 'boutiques' : 'drivers';
+      const profileData = {
+        email,
+        phone: phone || null,
+        created_at: new Date().toISOString(),
+      };
+
+      if (role === 'boutique') {
+        profileData.user_id    = userId;
+        profileData.owner_name = full_name;
+        profileData.name       = req.body.boutique_name || full_name;
+      } else {
+        profileData.id        = userId;
+        profileData.full_name = full_name;
+      }
+
+      const { error: profileError } = await supabaseAdmin.from(profileTable).insert(profileData);
+      if (profileError) {
+        await supabaseAdmin.auth.admin.deleteUser(userId);
+        return res.status(400).json({ error: profileError.message });
+      }
     } else {
-      profileData.id         = userId;  // drivers.id = auth user id
-      profileData.full_name  = full_name;
-    }
+      // Shopper: trigger already created the row, just update it
+      const { error: updateError } = await supabaseAdmin.from('shoppers')
+        .update({ display_name: full_name, email, phone: phone || null })
+        .eq('id', userId);
 
-    const { error: profileError } = await supabaseAdmin.from(profileTable).insert(profileData);
-    if (profileError) {
-      // Rollback auth user if profile insert fails
-      await supabaseAdmin.auth.admin.deleteUser(userId);
-      return res.status(400).json({ error: profileError.message });
+      if (updateError) {
+        await supabaseAdmin.auth.admin.deleteUser(userId);
+        return res.status(400).json({ error: updateError.message });
+      }
     }
 
     res.status(201).json({
