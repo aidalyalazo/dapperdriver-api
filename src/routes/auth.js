@@ -51,20 +51,23 @@ router.post(
     // 2. Insert into the appropriate profile table
     const profileTable = role === 'boutique' ? 'boutiques' : role === 'driver' ? 'drivers' : 'shoppers';
     const profileData = {
-      id:        userId,
       email,
       phone:     phone || null,
       created_at: new Date().toISOString(),
     };
 
     // Each table uses a different column name for the user's name
+    // and a different key for the auth user id
     if (role === 'shopper') {
+      profileData.id           = userId;  // shoppers.id = auth user id
       profileData.display_name = full_name;
     } else if (role === 'boutique') {
+      profileData.user_id    = userId;  // boutiques uses separate user_id column
       profileData.owner_name = full_name;
       profileData.name       = req.body.boutique_name || full_name;
-      profileData.status     = 'pending'; // Requires admin approval
+      // status defaults to 'pending' in DB
     } else {
+      profileData.id         = userId;  // drivers.id = auth user id
       profileData.full_name  = full_name;
     }
 
