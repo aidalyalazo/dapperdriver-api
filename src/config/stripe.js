@@ -13,20 +13,15 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
 });
 
 /**
- * Platform commission rate (25%).
- * The remaining 75% is transferred to the boutique's connected account.
- */
-const PLATFORM_COMMISSION_RATE = 0.25;
-
-/**
- * Calculate the split for a given order total (in cents).
- * @param {number} totalCents  — total charge in cents
+ * Calculate the split for a given subtotal (in cents) using a commission rate.
+ * @param {number} subtotalCents  — subtotal in cents
+ * @param {number} commissionRate — commission rate as decimal (e.g., 0.25 for 25%)
  * @returns {{ platformFee: number, boutiqueAmount: number }}
  */
-function calculateSplit(totalCents) {
-  const platformFee = Math.round(totalCents * PLATFORM_COMMISSION_RATE);
-  const boutiqueAmount = totalCents - platformFee;
+function calculateSplit(subtotalCents, commissionRate) {
+  const platformFee = Math.round(subtotalCents * commissionRate);
+  const boutiqueAmount = subtotalCents - platformFee;
   return { platformFee, boutiqueAmount };
 }
 
-module.exports = { stripe, PLATFORM_COMMISSION_RATE, calculateSplit };
+module.exports = { stripe, calculateSplit };

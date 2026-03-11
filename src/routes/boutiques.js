@@ -264,4 +264,142 @@ router.delete(
   })
 );
 
+/**
+ * POST /api/v1/boutiques/:id/follow
+ * Shopper: follow a boutique
+ */
+router.post(
+  '/:id/follow',
+  authenticate,
+  requireRole('shopper'),
+  asyncHandler(async (req, res) => {
+    const boutiqueId = req.params.id;
+    const shopperId = req.userId;
+
+    // Insert follow relationship
+    const { error } = await supabaseAdmin.from('boutique_follows').insert({
+      shopper_id: shopperId,
+      boutique_id: boutiqueId,
+    });
+
+    if (error) {
+      if (error.code === '23505') {
+        // Already following
+        return res.json({ message: 'Already following.' });
+      }
+      throw new Error(error.message);
+    }
+
+    // Increment boutique follower_count
+    const { data: boutique } = await supabaseAdmin
+      .from('boutiques')
+      .select('follower_count')
+      .eq('user_id', boutiqueId)
+      .single()
+      .catch(() => ({ data: null }));
+
+    if (boutique) {
+      await supabaseAdmin
+        .from('boutiques')
+        .update({ follower_count: (boutique.follower_count || 0) + 1 })
+        .eq('user_id', boutiqueId)
+        .catch(() => {});
+    }
+
+    res.status(201).json({ message: 'Now following boutique.' });
+  })
+);
+
+/**
+ * DELETE /api/v1/boutiques/:id/follow
+ * Shopper: unfollow a boutique
+ */
+router.delete(
+  '/:id/follow',
+  authenticate,
+  requireRole('shopper'),
+  asyncHandler(async (req, res) => {
+    const boutiqueId = req.params.id;
+    const shopperId = req.userId;
+
+    await supabaseAdmin
+      .from('boutique_follows')
+      .delete()
+      .eq('shopper_id', shopperId)
+      .eq('boutique_id', boutiqueId);
+
+    // Decrement follower_count
+    const { data: boutique } = await supabaseAdmin
+      .from('boutiques')
+      .select('follower_count')
+      .eq('user_id', boutiqueId)
+      .single()
+      .catch(() => ({ data: null }));
+
+    if (boutique) {
+      await supabaseAdmin
+        .from('boutiques')
+        .update({ follower_count: Math.max(0, (boutique.follower_count || 1) - 1) })
+        .eq('user_id', boutiqueId)
+        .catch(() => {});
+    }
+
+    res.json({ message: 'Unfollowed boutique.' });
+  })
+);
+
+/**
+ * POST /api/v1/boutiques/me/cashout
+ * Boutique owner: request payout
+ */
+router.post(
+  '/me/cashout',
+  requireRole('boutique'),
+  asyncHandler(async (req, res) => {
+    const { cashOut } = require('../services/payoutService');
+    const result = await cashOut({
+      recipientId: req.userId,
+      recipientType: 'boutique',
+    });
+    res.json(result);
+  })
+);
+
+/**
+ * PUT /api/v1/boutiques/me/hours
+ * Boutique owner: set operating hours for all 7 days
+ * Body: [{ day_of_week (0-6), open_time, close_time, is_closed }, ...]
+ */
+router.put(
+  '/me/hours',
+  requireRole('boutique'),
+  [body('hours').isArray()],
+  validate,
+  asyncHandler(async (req, res) => {
+    const boutiqueId = req.userId;
+    const { hours } = req.body;
+
+    // Delete existing hours for this boutique
+    await supabaseAdmin
+      .from('boutique_hours')
+      .delete()
+      .eq('boutique_id', boutiqueId);
+
+    // Insert new hours
+    const hoursToInsert = hours.map((h) => ({
+      boutique_id: boutiqueId,
+      day_of_week: h.day_of_week,
+      open_time: h.open_time || null,
+      close_time: h.close_time || null,
+      is_closed: h.is_closed || false,
+    }));
+
+    const { error } = await supabaseAdmin.from('boutique_hours').insert(hoursToInsert);
+
+    if (error) throw new Error(error.message);
+
+    res.json({ message: 'Hours updated.' });
+  })
+);
+
 module.exports = router;

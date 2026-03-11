@@ -23,11 +23,11 @@ async function runMondayPayouts() {
   console.log('[PAYOUT JOB] Starting Monday driver payouts...');
 
   try {
-    // Read fee from platform_settings so the admin can change it without a redeploy
-    const driverDeliveryFee = parseFloat(
-      await getPlatformSetting('driver_delivery_fee', '8.00')
+    // Read driver payout settings from platform_settings
+    const driverPayoutSetting = await require('../utils/platformSettings').getPlatformSettingJson(
+      'driver_payout_rate',
+      { delivery_fee_cut: 80, tip_cut: 100 }
     );
-    console.log(`[PAYOUT JOB] Using driver_delivery_fee: $${driverDeliveryFee.toFixed(2)}`);
 
     // Fetch all delivered, unpaid orders that have an assigned driver
     const { data: orders, error } = await supabaseAdmin
@@ -35,7 +35,8 @@ async function runMondayPayouts() {
       .select(`
         id,
         driver_id,
-        tip_amount,
+        tip,
+        driver_earnings,
         delivered_at,
         drivers (id, full_name, stripe_account_id, fcm_token)
       `)
@@ -61,7 +62,9 @@ async function runMondayPayouts() {
         };
       }
       byDriver[driverId].orderIds.push(order.id);
-      byDriver[driverId].total += driverDeliveryFee + (parseFloat(order.tip_amount) || 0);
+      // driver_earnings already includes delivery fee rate calculation from DB
+      byDriver[driverId].total +=
+        parseFloat(order.driver_earnings || 0) + parseFloat(order.tip || 0);
     }
 
     const results = { success: 0, failed: 0, skipped: 0 };
@@ -126,14 +129,14 @@ async function runMondayPayouts() {
 
 // ── Schedule ───────────────────────────────────────────────────────────────
 
-// Every Monday at 08:00 AM
-cron.schedule('0 8 * * 1', () => {
+// Every Monday at 09:00 AM
+cron.schedule('0 9 * * 1', () => {
   runMondayPayouts();
 }, {
   timezone: process.env.PAYOUT_TIMEZONE || 'America/New_York',
 });
 
-console.log('[PAYOUT JOB] Monday payout cron registered (08:00 AM every Monday).');
+console.log('[PAYOUT JOB] Monday payout cron registered (09:00 AM every Monday).');
 
 // Export for manual trigger / testing
 module.exports = { runMondayPayouts };

@@ -175,4 +175,53 @@ router.get(
   })
 );
 
+/**
+ * POST /api/v1/drivers/me/cashout
+ * Driver: request payout
+ */
+router.post(
+  '/me/cashout',
+  requireRole('driver'),
+  asyncHandler(async (req, res) => {
+    const { cashOut } = require('../services/payoutService');
+    const result = await cashOut({
+      recipientId: req.userId,
+      recipientType: 'driver',
+    });
+    res.json(result);
+  })
+);
+
+/**
+ * POST /api/v1/drivers/me/documents
+ * Driver: upload document (license, insurance, etc.)
+ * Body: { type, file_url }
+ */
+router.post(
+  '/me/documents',
+  requireRole('driver'),
+  asyncHandler(async (req, res) => {
+    const { type, file_url } = req.body;
+
+    if (!type || !file_url) {
+      throw Object.assign(new Error('type and file_url are required'), { status: 400 });
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('driver_documents')
+      .insert({
+        driver_id: req.userId,
+        type,
+        file_url,
+        status: 'pending',
+      })
+      .select()
+      .single();
+
+    if (error) throw new Error(error.message);
+
+    res.status(201).json(data);
+  })
+);
+
 module.exports = router;

@@ -15,9 +15,13 @@ const orderRoutes = require('./routes/orders');
 const paymentRoutes = require('./routes/payments');
 const notificationRoutes = require('./routes/notifications');
 const webhookRoutes = require('./routes/webhooks'); // raw body required
+const productsRouter = require('./routes/products');
+const searchRouter = require('./routes/search');
+const adminRouter = require('./routes/admin');
 
 // Jobs
 require('./jobs/mondayPayouts');
+require('./jobs/orderTimeoutProcessor');
 
 const { errorHandler } = require('./middleware/errorHandler');
 
@@ -62,6 +66,9 @@ app.use('/api/v1/drivers', driverRoutes);
 app.use('/api/v1/orders', orderRoutes);
 app.use('/api/v1/payments', paymentRoutes);
 app.use('/api/v1/notifications', notificationRoutes);
+app.use('/api/v1/products', productsRouter);
+app.use('/api/v1', searchRouter);
+app.use('/api/v1', adminRouter);
 
 // ── 404 ────────────────────────────────────────────────────────────────────
 app.use((_req, res) => res.status(404).json({ error: 'Route not found' }));

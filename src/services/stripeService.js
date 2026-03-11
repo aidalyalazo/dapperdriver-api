@@ -126,6 +126,7 @@ async function createOrderPaymentIntent({ order, paymentMethodId, shopperId }) {
     customer:             customerId,
     payment_method:       paymentMethodId,
     confirm:              true,
+    capture_method:       'manual',
     automatic_payment_methods: { enabled: true, allow_redirects: 'never' },
     metadata: {
       order_id:    order.id,
@@ -193,6 +194,13 @@ async function refundPaymentIntent(paymentIntentId) {
   return refund;
 }
 
+/**
+ * Capture a PaymentIntent that was authorized but not captured.
+ */
+async function capturePaymentIntent(paymentIntentId) {
+  return stripe.paymentIntents.capture(paymentIntentId);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // DRIVER PAYOUTS (called by Monday cron)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -238,5 +246,6 @@ module.exports = {
   createOrderPaymentIntent,
   transferToBoutique,
   refundPaymentIntent,
+  capturePaymentIntent,
   payoutDriver,
 };
