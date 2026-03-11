@@ -321,7 +321,7 @@ async function getOrder(orderId) {
       `
       *,
       order_items (*, products (*)),
-      shoppers   (id, full_name, phone, avatar_url),
+      shoppers   (id, display_name, phone, avatar_url),
       boutiques  (id, name, address, logo_url),
       drivers    (id, full_name, phone, avatar_url, vehicle_info),
       order_timeline (status, timestamp, created_by)

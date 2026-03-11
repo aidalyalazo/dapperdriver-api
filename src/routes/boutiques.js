@@ -42,7 +42,7 @@ router.get(
       .select(`
         *,
         products (id, name, price, images, category, in_stock, source),
-        reviews  (id, rating, comment, created_at, shoppers(full_name, avatar_url))
+        reviews  (id, rating, comment, created_at, shoppers(display_name, avatar_url))
       `)
       .eq('id', req.params.id)
       .eq('is_active', true)

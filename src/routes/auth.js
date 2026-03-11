@@ -53,14 +53,19 @@ router.post(
     const profileData = {
       id:        userId,
       email,
-      full_name,
       phone:     phone || null,
       created_at: new Date().toISOString(),
     };
 
-    if (role === 'boutique') {
+    // Each table uses a different column name for the user's name
+    if (role === 'shopper') {
+      profileData.display_name = full_name;
+    } else if (role === 'boutique') {
+      profileData.owner_name = full_name;
       profileData.name       = req.body.boutique_name || full_name;
-      profileData.is_active  = false; // Requires admin approval
+      profileData.status     = 'pending'; // Requires admin approval
+    } else {
+      profileData.full_name  = full_name;
     }
 
     const { error: profileError } = await supabaseAdmin.from(profileTable).insert(profileData);

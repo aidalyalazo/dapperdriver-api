@@ -17,7 +17,7 @@ router.get(
   asyncHandler(async (req, res) => {
     const { data, error } = await supabaseAdmin
       .from('shoppers')
-      .select('id, full_name, email, phone, avatar_url, default_address, created_at')
+      .select('id, display_name, email, phone, avatar_url, default_address, created_at')
       .eq('id', req.userId)
       .single();
 
@@ -34,13 +34,13 @@ router.patch(
   '/me',
   requireRole('shopper'),
   [
-    body('full_name').optional().isString().trim().notEmpty(),
+    body('display_name').optional().isString().trim().notEmpty(),
     body('phone').optional().isMobilePhone(),
     body('default_address').optional().isObject(),
     validate,
   ],
   asyncHandler(async (req, res) => {
-    const allowed = ['full_name', 'phone', 'avatar_url', 'default_address'];
+    const allowed = ['display_name', 'phone', 'avatar_url', 'default_address'];
     const updates = Object.fromEntries(
       Object.entries(req.body).filter(([k]) => allowed.includes(k))
     );
