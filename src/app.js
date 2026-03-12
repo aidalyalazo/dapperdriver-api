@@ -18,6 +18,7 @@ const webhookRoutes = require('./routes/webhooks'); // raw body required
 const productsRouter = require('./routes/products');
 const searchRouter = require('./routes/search');
 const adminRouter = require('./routes/admin');
+const citiesRouter = require('./routes/cities');
 
 // Jobs
 require('./jobs/mondayPayouts');
@@ -69,6 +70,7 @@ app.use('/api/v1/notifications', notificationRoutes);
 app.use('/api/v1/products', productsRouter);
 app.use('/api/v1', searchRouter);
 app.use('/api/v1', adminRouter);
+app.use('/api/v1/cities', citiesRouter);
 
 // ── 404 ────────────────────────────────────────────────────────────────────
 app.use((_req, res) => res.status(404).json({ error: 'Route not found' }));
