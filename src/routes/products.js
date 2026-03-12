@@ -25,19 +25,18 @@ router.get(
     let query = supabaseAdmin
       .from('products')
       .select(
-        `id, name, price, images, category, in_stock, source, boutique_id,
-         boutiques(id, name, logo_url, city_id)`,
+        `id, name, price, compare_price, images, category, colors, sizes, stock, status, source, boutique_id, description, tags, total_sold,
+         boutiques(id, name, logo_url, logo_initials, city_id)`,
         { count: 'exact' }
       )
-      .eq('in_stock', true)
+      .eq('status', 'active')
       .order('created_at', { ascending: false })
       .range((page - 1) * limit, page * limit - 1);
 
     if (boutique_id) query = query.eq('boutique_id', boutique_id);
-    if (category) query = query.eq('category', category);
+    if (category) query = query.ilike('category', `%${category}%`);
     if (search) query = query.ilike('name', `%${search}%`);
     if (source) query = query.eq('source', source);
-    if (in_stock !== undefined) query = query.eq('in_stock', in_stock === 'true');
 
     // Filter by city if provided (via boutique relationship)
     if (city_id) {
@@ -56,7 +55,7 @@ router.get(
     }
 
     res.json({
-      products: filtered,
+      data: filtered,
       total: count,
       page: parseInt(page),
       limit: parseInt(limit),

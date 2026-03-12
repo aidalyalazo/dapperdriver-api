@@ -15,19 +15,21 @@ router.get(
   '/',
   asyncHandler(async (req, res) => {
     const { search, city, page = 1, limit = 20 } = req.query;
+    const { status, category } = req.query;
     let q = supabaseAdmin
       .from('boutiques')
-      .select('id, name, logo_url, banner_url, city, address, rating, total_reviews, tags', { count: 'exact' })
-      .eq('is_active', true)
+      .select('id, name, slug, description, logo_url, logo_initials, logo_bg, address, city_id, rating, review_count, follower_count, primary_category, category_tags, style_tags, price_tier, status', { count: 'exact' })
       .order('rating', { ascending: false })
       .range((page - 1) * limit, page * limit - 1);
 
-    if (search) q = q.ilike('name', `%${search}%`);
-    if (city)   q = q.eq('city', city);
+    if (status)   q = q.eq('status', status);
+    if (search)   q = q.ilike('name', `%${search}%`);
+    if (city)     q = q.eq('city_id', city);
+    if (category) q = q.or(`primary_category.ilike.%${category}%,category_tags.cs.{${category}}`);
 
     const { data, error, count } = await q;
     if (error) throw new Error(error.message);
-    res.json({ boutiques: data, total: count, page: parseInt(page), limit: parseInt(limit) });
+    res.json({ data, total: count, page: parseInt(page), limit: parseInt(limit) });
   })
 );
 
@@ -39,13 +41,8 @@ router.get(
   asyncHandler(async (req, res) => {
     const { data, error } = await supabaseAdmin
       .from('boutiques')
-      .select(`
-        *,
-        products (id, name, price, images, category, in_stock, source),
-        reviews  (id, rating, comment, created_at, shoppers(display_name, avatar_url))
-      `)
+      .select('*')
       .eq('id', req.params.id)
-      .eq('is_active', true)
       .single();
 
     if (error) throw Object.assign(new Error('Boutique not found'), { status: 404 });
