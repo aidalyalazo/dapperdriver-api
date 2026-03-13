@@ -384,6 +384,171 @@ router.delete(
   })
 );
 
+// ──────────────── CART ────────────────
+
+/**
+ * GET /api/v1/shoppers/me/cart
+ * Get all cart items with product details.
+ */
+router.get(
+  '/me/cart',
+  requireRole('shopper'),
+  asyncHandler(async (req, res) => {
+    const { data, error } = await supabaseAdmin
+      .from('cart_items')
+      .select(`
+        id, quantity, selected_color, selected_size, created_at,
+        products(id, name, price, compare_price, images, category, boutique_id, stock,
+          boutiques(id, name, logo_initials))
+      `)
+      .eq('shopper_id', req.userId)
+      .order('created_at', { ascending: false });
+
+    if (error) throw new Error(error.message);
+    res.json({ data });
+  })
+);
+
+/**
+ * POST /api/v1/shoppers/me/cart
+ * Add item to cart (or increment quantity if same product+color+size exists).
+ */
+router.post(
+  '/me/cart',
+  requireRole('shopper'),
+  [
+    body('product_id').isUUID().withMessage('product_id must be a UUID'),
+    body('quantity').optional().isInt({ min: 1 }),
+    body('color').optional().isString(),
+    body('size').optional().isString(),
+    validate,
+  ],
+  asyncHandler(async (req, res) => {
+    const { product_id, quantity = 1, color = null, size = null } = req.body;
+
+    // Check if this exact combination already exists
+    const { data: existing } = await supabaseAdmin
+      .from('cart_items')
+      .select('id, quantity')
+      .eq('shopper_id', req.userId)
+      .eq('product_id', product_id)
+      .is('selected_color', color ? undefined : null)
+      .is('selected_size', size ? undefined : null);
+
+    // Build proper query for matching color/size
+    let matchQuery = supabaseAdmin
+      .from('cart_items')
+      .select('id, quantity')
+      .eq('shopper_id', req.userId)
+      .eq('product_id', product_id);
+
+    if (color) {
+      matchQuery = matchQuery.eq('selected_color', color);
+    } else {
+      matchQuery = matchQuery.is('selected_color', null);
+    }
+    if (size) {
+      matchQuery = matchQuery.eq('selected_size', size);
+    } else {
+      matchQuery = matchQuery.is('selected_size', null);
+    }
+
+    const { data: match } = await matchQuery;
+
+    if (match && match.length > 0) {
+      // Update quantity
+      const { data, error } = await supabaseAdmin
+        .from('cart_items')
+        .update({
+          quantity: match[0].quantity + quantity,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', match[0].id)
+        .select()
+        .single();
+
+      if (error) throw new Error(error.message);
+      return res.json(data);
+    }
+
+    // Insert new cart item
+    const { data, error } = await supabaseAdmin
+      .from('cart_items')
+      .insert({
+        shopper_id: req.userId,
+        product_id,
+        quantity,
+        selected_color: color,
+        selected_size: size,
+      })
+      .select()
+      .single();
+
+    if (error) throw new Error(error.message);
+    res.status(201).json(data);
+  })
+);
+
+/**
+ * PATCH /api/v1/shoppers/me/cart/:itemId
+ * Update cart item quantity.
+ */
+router.patch(
+  '/me/cart/:itemId',
+  requireRole('shopper'),
+  [body('quantity').isInt({ min: 1 }).withMessage('quantity must be >= 1'), validate],
+  asyncHandler(async (req, res) => {
+    const { data, error } = await supabaseAdmin
+      .from('cart_items')
+      .update({
+        quantity: req.body.quantity,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', req.params.itemId)
+      .eq('shopper_id', req.userId)
+      .select()
+      .single();
+
+    if (error) throw new Error(error.message);
+    res.json(data);
+  })
+);
+
+/**
+ * DELETE /api/v1/shoppers/me/cart/:itemId
+ * Remove item from cart.
+ */
+router.delete(
+  '/me/cart/:itemId',
+  requireRole('shopper'),
+  asyncHandler(async (req, res) => {
+    await supabaseAdmin
+      .from('cart_items')
+      .delete()
+      .eq('id', req.params.itemId)
+      .eq('shopper_id', req.userId);
+
+    res.json({ message: 'Item removed from cart.' });
+  })
+);
+
+/**
+ * DELETE /api/v1/shoppers/me/cart
+ * Clear entire cart.
+ */
+router.delete(
+  '/me/cart',
+  requireRole('shopper'),
+  asyncHandler(async (req, res) => {
+    await supabaseAdmin
+      .from('cart_items')
+      .delete()
+      .eq('shopper_id', req.userId);
+
+    res.json({ message: 'Cart cleared.' });
+  })
+);
+
 /**
  * GET /api/v1/shoppers/me/following
  */

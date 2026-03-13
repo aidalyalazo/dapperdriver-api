@@ -64,6 +64,26 @@ router.get(
 );
 
 /**
+ * GET /api/v1/products/:id
+ * Get a single product by ID.
+ */
+router.get(
+  '/:id',
+  asyncHandler(async (req, res) => {
+    const { data, error } = await supabaseAdmin
+      .from('products')
+      .select(
+        `*, boutiques(id, name, logo_url, logo_initials, city_id)`
+      )
+      .eq('id', req.params.id)
+      .single();
+
+    if (error) throw Object.assign(new Error('Product not found'), { status: 404 });
+    res.json(data);
+  })
+);
+
+/**
  * POST /api/v1/products/:id/save
  * Shopper: save product to saved items
  */
