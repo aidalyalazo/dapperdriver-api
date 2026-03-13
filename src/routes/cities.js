@@ -11,7 +11,7 @@ router.get(
   asyncHandler(async (req, res) => {
     const { data, error } = await supabaseAdmin
       .from('cities')
-      .select('id, name, slug, status')
+      .select('id, name, slug, status, tax_rate')
       .eq('status', 'live')
       .order('name');
 

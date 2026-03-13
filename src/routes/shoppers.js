@@ -177,7 +177,7 @@ router.get(
       .select(`
         id, created_at,
         products(id, name, price, compare_price, images, category, boutique_id, stock,
-          boutiques(id, name, logo_initials))
+          boutiques(id, name, logo_initials, city_id))
       `)
       .eq('shopper_id', req.userId)
       .order('created_at', { ascending: false });
@@ -422,7 +422,7 @@ router.get(
       .select(`
         id, quantity, selected_color, selected_size, created_at,
         products(id, name, price, compare_price, images, category, boutique_id, stock,
-          boutiques(id, name, logo_initials))
+          boutiques(id, name, logo_initials, city_id))
       `)
       .eq('shopper_id', req.userId)
       .order('created_at', { ascending: false });
@@ -449,14 +449,35 @@ router.post(
   asyncHandler(async (req, res) => {
     const { product_id, quantity = 1, color = null, size = null } = req.body;
 
-    // Check if this exact combination already exists
-    const { data: existing } = await supabaseAdmin
+    // Get the new product's boutique city
+    const { data: newProduct } = await supabaseAdmin
+      .from('products')
+      .select('boutique_id, boutiques(city_id)')
+      .eq('id', product_id)
+      .single();
+
+    if (!newProduct) {
+      return res.status(404).json({ error: 'Product not found' });
+    }
+
+    const newCityId = newProduct.boutiques?.city_id;
+
+    // Check if cart has items from a different city
+    const { data: cartItems } = await supabaseAdmin
       .from('cart_items')
-      .select('id, quantity')
+      .select('id, products(boutique_id, boutiques(city_id))')
       .eq('shopper_id', req.userId)
-      .eq('product_id', product_id)
-      .is('selected_color', color ? undefined : null)
-      .is('selected_size', size ? undefined : null);
+      .limit(1);
+
+    if (cartItems && cartItems.length > 0) {
+      const existingCityId = cartItems[0].products?.boutiques?.city_id;
+      if (existingCityId && newCityId && existingCityId !== newCityId) {
+        return res.status(400).json({
+          error: 'Cannot mix items from different cities. Clear your cart first or remove items from the other city.',
+          code: 'DIFFERENT_CITY'
+        });
+      }
+    }
 
     // Build proper query for matching color/size
     let matchQuery = supabaseAdmin
