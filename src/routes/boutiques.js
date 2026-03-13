@@ -286,21 +286,21 @@ router.post(
       throw new Error(error.message);
     }
 
-    // Increment boutique follower_count
-    const { data: boutique } = await supabaseAdmin
-      .from('boutiques')
-      .select('follower_count')
-      .eq('id', boutiqueId)
-      .single()
-      .catch(() => ({ data: null }));
-
-    if (boutique) {
-      await supabaseAdmin
+    // Increment boutique follower_count (best-effort)
+    try {
+      const { data: boutique } = await supabaseAdmin
         .from('boutiques')
-        .update({ follower_count: (boutique.follower_count || 0) + 1 })
+        .select('follower_count')
         .eq('id', boutiqueId)
-        .catch(() => {});
-    }
+        .single();
+
+      if (boutique) {
+        await supabaseAdmin
+          .from('boutiques')
+          .update({ follower_count: (boutique.follower_count || 0) + 1 })
+          .eq('id', boutiqueId);
+      }
+    } catch (_) { /* non-critical */ }
 
     res.status(201).json({ message: 'Now following boutique.' });
   })
@@ -324,21 +324,21 @@ router.delete(
       .eq('shopper_id', shopperId)
       .eq('boutique_id', boutiqueId);
 
-    // Decrement follower_count
-    const { data: boutique } = await supabaseAdmin
-      .from('boutiques')
-      .select('follower_count')
-      .eq('id', boutiqueId)
-      .single()
-      .catch(() => ({ data: null }));
-
-    if (boutique) {
-      await supabaseAdmin
+    // Decrement follower_count (best-effort)
+    try {
+      const { data: boutique } = await supabaseAdmin
         .from('boutiques')
-        .update({ follower_count: Math.max(0, (boutique.follower_count || 1) - 1) })
+        .select('follower_count')
         .eq('id', boutiqueId)
-        .catch(() => {});
-    }
+        .single();
+
+      if (boutique) {
+        await supabaseAdmin
+          .from('boutiques')
+          .update({ follower_count: Math.max(0, (boutique.follower_count || 1) - 1) })
+          .eq('id', boutiqueId);
+      }
+    } catch (_) { /* non-critical */ }
 
     res.json({ message: 'Unfollowed boutique.' });
   })
