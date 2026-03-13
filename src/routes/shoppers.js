@@ -165,6 +165,29 @@ router.delete(
 );
 
 /**
+ * GET /api/v1/shoppers/me/saved-items
+ * Get all saved products with product + boutique details.
+ */
+router.get(
+  '/me/saved-items',
+  requireRole('shopper'),
+  asyncHandler(async (req, res) => {
+    const { data, error } = await supabaseAdmin
+      .from('saved_items')
+      .select(`
+        id, created_at,
+        products(id, name, price, compare_price, images, category, boutique_id, stock,
+          boutiques(id, name, logo_initials))
+      `)
+      .eq('shopper_id', req.userId)
+      .order('created_at', { ascending: false });
+
+    if (error) throw new Error(error.message);
+    res.json({ data });
+  })
+);
+
+/**
  * PATCH /api/v1/shoppers/me/addresses/:id
  */
 router.patch(
