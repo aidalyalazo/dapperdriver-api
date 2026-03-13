@@ -35,7 +35,7 @@ router.get(
 
     if (boutique_id) query = query.eq('boutique_id', boutique_id);
     if (category) query = query.ilike('category', `%${category}%`);
-    if (search) query = query.ilike('name', `%${search}%`);
+    if (search) query = query.or(`name.ilike.%${search}%,category.ilike.%${search}%,description.ilike.%${search}%`);
     if (source) query = query.eq('source', source);
 
     // Filter by city if provided (via boutique relationship)

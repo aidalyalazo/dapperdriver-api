@@ -23,7 +23,7 @@ router.get(
       .range((page - 1) * limit, page * limit - 1);
 
     if (status)   q = q.eq('status', status);
-    if (search)   q = q.ilike('name', `%${search}%`);
+    if (search)   q = q.or(`name.ilike.%${search}%,description.ilike.%${search}%,primary_category.ilike.%${search}%`);
     if (city)     q = q.eq('city_id', city);
     if (category) q = q.or(`primary_category.ilike.%${category}%,category_tags.cs.{${category}}`);
 
