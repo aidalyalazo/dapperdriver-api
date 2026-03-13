@@ -393,12 +393,12 @@ router.get(
   asyncHandler(async (req, res) => {
     const { data, error } = await supabaseAdmin
       .from('boutique_follows')
-      .select('boutiques(id, name, logo_url, rating)')
+      .select('boutiques(id, name, slug, description, logo_url, logo_initials, logo_bg, rating, review_count, follower_count, primary_category, category_tags, style_tags, price_tier, status, city_id)')
       .eq('shopper_id', req.userId)
       .order('created_at', { ascending: false });
 
     if (error) throw new Error(error.message);
-    res.json(data.map((f) => f.boutiques));
+    res.json({ data: data.map((f) => f.boutiques).filter(Boolean) });
   })
 );
 
