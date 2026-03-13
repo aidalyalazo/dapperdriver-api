@@ -270,24 +270,13 @@ router.post(
   authenticate,
   requireRole('shopper'),
   asyncHandler(async (req, res) => {
-    const boutiqueId = req.params.id;   // boutique PK (id)
-    const shopperId = req.userId;       // auth user UUID
+    const boutiqueId = req.params.id;
+    const shopperId = req.userId;
 
-    // Look up the boutique's user_id (FK target) from its id (PK)
-    const { data: boutiqueRow, error: lookupErr } = await supabaseAdmin
-      .from('boutiques')
-      .select('user_id, follower_count')
-      .eq('id', boutiqueId)
-      .single();
-
-    if (lookupErr || !boutiqueRow) {
-      return res.status(404).json({ error: 'Boutique not found.' });
-    }
-
-    // Insert follow — FK references boutiques(user_id), not boutiques(id)
+    // Insert follow relationship (FK now references boutiques.id directly)
     const { error } = await supabaseAdmin.from('boutique_follows').insert({
       shopper_id: shopperId,
-      boutique_id: boutiqueRow.user_id,
+      boutique_id: boutiqueId,
     });
 
     if (error) {
@@ -298,11 +287,20 @@ router.post(
     }
 
     // Increment boutique follower_count
-    await supabaseAdmin
+    const { data: boutique } = await supabaseAdmin
       .from('boutiques')
-      .update({ follower_count: (boutiqueRow.follower_count || 0) + 1 })
+      .select('follower_count')
       .eq('id', boutiqueId)
-      .catch(() => {});
+      .single()
+      .catch(() => ({ data: null }));
+
+    if (boutique) {
+      await supabaseAdmin
+        .from('boutiques')
+        .update({ follower_count: (boutique.follower_count || 0) + 1 })
+        .eq('id', boutiqueId)
+        .catch(() => {});
+    }
 
     res.status(201).json({ message: 'Now following boutique.' });
   })
@@ -317,28 +315,27 @@ router.delete(
   authenticate,
   requireRole('shopper'),
   asyncHandler(async (req, res) => {
-    const boutiqueId = req.params.id;   // boutique PK (id)
+    const boutiqueId = req.params.id;
     const shopperId = req.userId;
 
-    // Look up the boutique's user_id (FK target) from its id (PK)
-    const { data: boutiqueRow } = await supabaseAdmin
+    await supabaseAdmin
+      .from('boutique_follows')
+      .delete()
+      .eq('shopper_id', shopperId)
+      .eq('boutique_id', boutiqueId);
+
+    // Decrement follower_count
+    const { data: boutique } = await supabaseAdmin
       .from('boutiques')
-      .select('user_id, follower_count')
+      .select('follower_count')
       .eq('id', boutiqueId)
       .single()
       .catch(() => ({ data: null }));
 
-    if (boutiqueRow) {
-      await supabaseAdmin
-        .from('boutique_follows')
-        .delete()
-        .eq('shopper_id', shopperId)
-        .eq('boutique_id', boutiqueRow.user_id);
-
-      // Decrement follower_count
+    if (boutique) {
       await supabaseAdmin
         .from('boutiques')
-        .update({ follower_count: Math.max(0, (boutiqueRow.follower_count || 1) - 1) })
+        .update({ follower_count: Math.max(0, (boutique.follower_count || 1) - 1) })
         .eq('id', boutiqueId)
         .catch(() => {});
     }
