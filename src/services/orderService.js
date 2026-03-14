@@ -61,13 +61,16 @@ async function createOrder({
   let cityId = null;
   const cityName = deliveryAddress?.city;
   if (cityName) {
-    const { data: city } = await supabaseAdmin
-      .from('cities')
-      .select('id')
-      .ilike('name', `%${cityName.trim()}%`)
-      .single()
-      .catch(() => ({ data: null }));
-    cityId = city?.id || null;
+    try {
+      const { data: city } = await supabaseAdmin
+        .from('cities')
+        .select('id')
+        .ilike('name', `%${cityName.trim()}%`)
+        .single();
+      cityId = city?.id || null;
+    } catch (_) {
+      cityId = null;
+    }
   }
 
   const taxRate = await getTaxRate(cityName);
@@ -97,12 +100,15 @@ async function createOrder({
   const taxAmount = Math.round(taxableAmount * taxRate * 100) / 100;
 
   // 6. Get commission rate (boutique-specific or platform default)
-  const { data: boutique } = await supabaseAdmin
-    .from('boutiques')
-    .select('commission_rate')
-    .eq('user_id', boutiqueId)
-    .single()
-    .catch(() => ({ data: null }));
+  let boutique = null;
+  try {
+    const { data } = await supabaseAdmin
+      .from('boutiques')
+      .select('commission_rate')
+      .eq('id', boutiqueId)
+      .single();
+    boutique = data;
+  } catch (_) {}
 
   let commissionRate = 0.25; // Default 25%
   if (boutique?.commission_rate != null) {
