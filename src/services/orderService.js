@@ -344,25 +344,60 @@ async function assignDriver({ orderId, driverId }) {
 
 /**
  * Fetch a single order with all related data.
+ * Uses separate queries to avoid FK join issues.
  */
 async function getOrder(orderId) {
-  const { data, error } = await supabaseAdmin
+  // 1. Get the order itself
+  const { data: order, error } = await supabaseAdmin
     .from('orders')
-    .select(
-      `
-      *,
-      order_items (*, products (*)),
-      shoppers   (id, display_name, phone, avatar_url),
-      boutiques  (id, name, address, logo_url),
-      drivers    (id, full_name, phone, avatar_url, vehicle_info),
-      order_timeline (status, timestamp, created_by)
-    `
-    )
+    .select('*')
     .eq('id', orderId)
     .single();
 
-  if (error) throw Object.assign(new Error('Order not found'), { status: 404 });
-  return data;
+  if (error || !order) throw Object.assign(new Error('Order not found'), { status: 404 });
+
+  // 2. Get order items with product details
+  try {
+    const { data: items } = await supabaseAdmin
+      .from('order_items')
+      .select('*, products (*)')
+      .eq('order_id', orderId);
+    order.order_items = items || [];
+  } catch (_) { order.order_items = []; }
+
+  // 3. Get boutique info
+  try {
+    const { data: boutique } = await supabaseAdmin
+      .from('boutiques')
+      .select('id, name, address, logo_url')
+      .eq('id', order.boutique_id)
+      .single();
+    order.boutiques = boutique;
+  } catch (_) { order.boutiques = null; }
+
+  // 4. Get driver info (if assigned)
+  if (order.driver_id) {
+    try {
+      const { data: driver } = await supabaseAdmin
+        .from('drivers')
+        .select('id, full_name, phone, avatar_url, vehicle_info')
+        .eq('user_id', order.driver_id)
+        .single();
+      order.drivers = driver;
+    } catch (_) { order.drivers = null; }
+  }
+
+  // 5. Get timeline
+  try {
+    const { data: timeline } = await supabaseAdmin
+      .from('order_timeline')
+      .select('status, timestamp, created_by')
+      .eq('order_id', orderId)
+      .order('timestamp', { ascending: true });
+    order.order_timeline = timeline || [];
+  } catch (_) { order.order_timeline = []; }
+
+  return order;
 }
 
 /**
@@ -371,7 +406,7 @@ async function getOrder(orderId) {
 async function listOrders({ shopperId, boutiqueId, driverId, status, page = 1, limit = 20 }) {
   let query = supabaseAdmin
     .from('orders')
-    .select('*, order_items(count)', { count: 'exact' })
+    .select('*, order_items(*)', { count: 'exact' })
     .order('created_at', { ascending: false })
     .range((page - 1) * limit, page * limit - 1);
 
@@ -382,6 +417,19 @@ async function listOrders({ shopperId, boutiqueId, driverId, status, page = 1, l
 
   const { data, error, count } = await query;
   if (error) throw new Error(error.message);
+
+  // Enrich with boutique info
+  if (data && data.length > 0) {
+    const boutiqueIds = [...new Set(data.map((o) => o.boutique_id).filter(Boolean))];
+    try {
+      const { data: boutiques } = await supabaseAdmin
+        .from('boutiques')
+        .select('id, name, logo_url')
+        .in('id', boutiqueIds);
+      const bMap = Object.fromEntries((boutiques || []).map((b) => [b.id, b]));
+      data.forEach((o) => { o.boutiques = bMap[o.boutique_id] || null; });
+    } catch (_) {}
+  }
 
   return { orders: data, total: count, page, limit };
 }
