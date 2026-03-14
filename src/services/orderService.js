@@ -167,7 +167,6 @@ async function createOrder({
     product_id: i.product_id,
     quantity: i.quantity,
     unit_price: i.unit_price,
-    subtotal: i.unit_price * i.quantity,
   }));
 
   const { error: itemsError } = await supabaseAdmin.from('order_items').insert(orderItems);
