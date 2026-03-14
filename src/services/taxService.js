@@ -11,15 +11,18 @@ const { getPlatformSettingJson } = require('../utils/platformSettings');
  */
 async function getTaxRate(cityName) {
   if (cityName) {
-    const { data } = await supabaseAdmin
-      .from('cities')
-      .select('tax_rate')
-      .ilike('name', `%${cityName.trim()}%`)
-      .single()
-      .catch(() => ({ data: null }));
+    try {
+      const { data } = await supabaseAdmin
+        .from('cities')
+        .select('tax_rate')
+        .ilike('name', `%${cityName.trim()}%`)
+        .single();
 
-    if (data?.tax_rate != null) {
-      return parseFloat(data.tax_rate);
+      if (data?.tax_rate != null) {
+        return parseFloat(data.tax_rate);
+      }
+    } catch (_) {
+      // City not found, fall through to default
     }
   }
 

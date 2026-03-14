@@ -41,13 +41,16 @@ async function validatePromo({ code, boutiqueId, subtotal, shopperId }) {
   }
 
   // Check if shopper already used it
-  const { data: used } = await supabaseAdmin
-    .from('promo_redemptions')
-    .select('id')
-    .eq('promo_id', promo.id)
-    .eq('shopper_id', shopperId)
-    .single()
-    .catch(() => ({ data: null }));
+  let used = null;
+  try {
+    const { data } = await supabaseAdmin
+      .from('promo_redemptions')
+      .select('id')
+      .eq('promo_id', promo.id)
+      .eq('shopper_id', shopperId)
+      .single();
+    used = data;
+  } catch (_) {}
 
   if (used) {
     throw Object.assign(new Error('You have already used this promo code'), { status: 422 });
