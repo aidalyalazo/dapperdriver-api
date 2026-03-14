@@ -133,7 +133,26 @@ async function createOrder({
   // 9. Calculate total
   const totalAmount = subtotal + deliveryFee + taxAmount - promoDiscount;
 
-  // 10. Create order
+  // 10. Fetch product details for order items (need name + price for order_items table)
+  const productIds = items.map((i) => i.product_id);
+  let productsMap = {};
+  try {
+    const { data: products } = await supabaseAdmin
+      .from('products')
+      .select('id, name, price, image_url')
+      .in('id', productIds);
+    if (products) {
+      productsMap = Object.fromEntries(products.map((p) => [p.id, p]));
+    }
+  } catch (_) {}
+
+  // 11. Format delivery address as TEXT (DB column is TEXT, not JSONB)
+  const deliveryAddressText = typeof deliveryAddress === 'object'
+    ? [deliveryAddress.street, deliveryAddress.city, deliveryAddress.state, deliveryAddress.zip]
+        .filter(Boolean).join(', ')
+    : deliveryAddress;
+
+  // 12. Create order
   const { data: order, error } = await supabaseAdmin
     .from('orders')
     .insert({
@@ -150,8 +169,8 @@ async function createOrder({
       driver_earnings: driverEarnings,
       city_id: cityId,
       payment_status: 'authorized',
-      delivery_address: deliveryAddress,
-      notes: notes || null,
+      delivery_address: deliveryAddressText,
+      delivery_notes: notes || null,
       promo_id: promoId,
     })
     .select()
@@ -161,13 +180,20 @@ async function createOrder({
     throw Object.assign(new Error(error.message), { status: 400 });
   }
 
-  // 11. Insert order items
-  const orderItems = items.map((i) => ({
-    order_id: order.id,
-    product_id: i.product_id,
-    quantity: i.quantity,
-    unit_price: i.unit_price,
-  }));
+  // 13. Insert order items (DB requires name + price as NOT NULL)
+  const orderItems = items.map((i) => {
+    const product = productsMap[i.product_id] || {};
+    return {
+      order_id: order.id,
+      product_id: i.product_id,
+      name: product.name || 'Item',
+      price: i.unit_price,
+      qty: i.quantity,
+      quantity: i.quantity,
+      unit_price: i.unit_price,
+      image_url: product.image_url || null,
+    };
+  });
 
   const { error: itemsError } = await supabaseAdmin.from('order_items').insert(orderItems);
   if (itemsError) throw Object.assign(new Error(itemsError.message), { status: 400 });
