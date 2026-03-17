@@ -35,7 +35,7 @@ router.patch(
   requireRole('shopper'),
   [
     body('display_name').optional().isString().trim().notEmpty(),
-    body('phone').optional().isMobilePhone(),
+    body('phone').optional().isMobilePhone('any'),
     body('default_address').optional().isObject(),
     validate,
   ],

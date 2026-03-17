@@ -19,6 +19,7 @@ const productsRouter = require('./routes/products');
 const searchRouter = require('./routes/search');
 const adminRouter = require('./routes/admin');
 const citiesRouter = require('./routes/cities');
+const reviewsRouter = require('./routes/reviews');
 
 // Jobs
 require('./jobs/mondayPayouts');
@@ -71,6 +72,7 @@ app.use('/api/v1/products', productsRouter);
 app.use('/api/v1/cities', citiesRouter);
 app.use('/api/v1', searchRouter);
 app.use('/api/v1/admin', adminRouter);
+app.use('/api/v1/reviews', reviewsRouter);
 
 // ── 404 ────────────────────────────────────────────────────────────────────
 app.use((_req, res) => res.status(404).json({ error: 'Route not found' }));

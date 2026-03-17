@@ -192,6 +192,8 @@ async function createOrder({
       quantity: i.quantity,
       unit_price: i.unit_price,
       image_url: product.image_url || null,
+      selected_size: i.selected_size || null,
+      selected_color: i.selected_color || null,
     };
   });
 
