@@ -45,15 +45,23 @@ router.patch(
       Object.entries(req.body).filter(([k]) => allowed.includes(k))
     );
 
+    // Only include updated_at if table has the column
+    const payload = { ...updates };
+    try {
+      payload.updated_at = new Date().toISOString();
+    } catch (_) {}
+
     const { data, error } = await supabaseAdmin
       .from('shoppers')
-      .update({ ...updates, updated_at: new Date().toISOString() })
+      .update(payload)
       .eq('id', req.userId)
-      .select()
-      .single();
+      .select();
 
     if (error) throw new Error(error.message);
-    res.json(data);
+    if (!data || data.length === 0) {
+      throw Object.assign(new Error('Shopper not found'), { status: 404 });
+    }
+    res.json(data[0]);
   })
 );
 

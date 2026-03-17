@@ -124,18 +124,33 @@ router.get(
     const limit = parseInt(req.query.limit) || 20;
     const offset = parseInt(req.query.offset) || 0;
 
-    const { data: reviews, error } = await supabaseAdmin
+    // Fetch reviews
+    const { data: rawReviews, error } = await supabaseAdmin
       .from('product_reviews')
-      .select(`
-        id, rating, comment, height, weight, photo_urls,
-        selected_size, selected_color, created_at,
-        shoppers(id, display_name, avatar_url)
-      `)
+      .select('id, shopper_id, rating, comment, height, weight, photo_urls, selected_size, selected_color, created_at')
       .eq('product_id', productId)
       .order('created_at', { ascending: false })
       .range(offset, offset + limit - 1);
 
     if (error) throw new Error(error.message);
+
+    // Hydrate shopper info separately (since FK is to auth.users, not shoppers)
+    const shopperIds = [...new Set((rawReviews || []).map(r => r.shopper_id))];
+    let shoppersMap = {};
+    if (shopperIds.length > 0) {
+      const { data: shoppers } = await supabaseAdmin
+        .from('shoppers')
+        .select('id, display_name, avatar_url')
+        .in('id', shopperIds);
+      if (shoppers) {
+        shoppersMap = Object.fromEntries(shoppers.map(s => [s.id, s]));
+      }
+    }
+
+    const reviews = (rawReviews || []).map(r => ({
+      ...r,
+      shopper: shoppersMap[r.shopper_id] || { display_name: 'Shopper', avatar_url: null },
+    }));
 
     // Get aggregate stats
     const { data: allRatings } = await supabaseAdmin
