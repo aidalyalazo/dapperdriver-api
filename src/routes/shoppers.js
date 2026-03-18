@@ -17,7 +17,7 @@ router.get(
   asyncHandler(async (req, res) => {
     const { data, error } = await supabaseAdmin
       .from('shoppers')
-      .select('id, display_name, email, phone, avatar_url, default_address, created_at')
+      .select('id, display_name, full_name, email, phone, avatar_url, default_address, created_at')
       .eq('id', req.userId)
       .single();
 
@@ -45,15 +45,9 @@ router.patch(
       Object.entries(req.body).filter(([k]) => allowed.includes(k))
     );
 
-    // Only include updated_at if table has the column
-    const payload = { ...updates };
-    try {
-      payload.updated_at = new Date().toISOString();
-    } catch (_) {}
-
     const { data, error } = await supabaseAdmin
       .from('shoppers')
-      .update(payload)
+      .update(updates)
       .eq('id', req.userId)
       .select();
 
