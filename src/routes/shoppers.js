@@ -17,8 +17,8 @@ router.get(
   asyncHandler(async (req, res) => {
     const { data, error } = await supabaseAdmin
       .from('shoppers')
-      .select('id, display_name, full_name, email, phone, avatar_url, default_address, created_at')
-      .eq('id', req.userId)
+      .select('id, user_id, display_name, full_name, email, phone, avatar_url, default_address, created_at, style_preferences, size_tops, size_bottoms, size_shoes')
+      .eq('user_id', req.userId)
       .single();
 
     if (error) throw Object.assign(new Error('Shopper not found'), { status: 404 });
@@ -48,7 +48,7 @@ router.patch(
     const { data, error } = await supabaseAdmin
       .from('shoppers')
       .update(updates)
-      .eq('id', req.userId)
+      .eq('user_id', req.userId)
       .select();
 
     if (error) throw new Error(error.message);
