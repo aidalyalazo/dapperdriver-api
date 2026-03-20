@@ -116,11 +116,12 @@ router.patch(
   '/me',
   requireRole('boutique'),
   asyncHandler(async (req, res) => {
-    const allowed = ['name', 'description', 'phone', 'address', 'logo_url', 'banner_url',
-                     'style_tags', 'category_tags', 'primary_category', 'price_tier', 'email'];
+    const allowed = ['name', 'description', 'phone', 'address', 'logo_url', 'logo_initials', 'logo_bg',
+                     'style_tags', 'category_tags', 'primary_category', 'price_tier', 'email',
+                     'website', 'slug', 'owner_name'];
 
     // Map client field names to DB column names
-    const fieldMap = { bio: 'description', tags: 'style_tags' };
+    const fieldMap = { bio: 'description', tags: 'style_tags', banner_url: 'logo_bg' };
     const mapped = {};
     for (const [k, v] of Object.entries(req.body)) {
       const dbCol = fieldMap[k] || k;
@@ -231,7 +232,9 @@ router.post(
     const boutiqueId = await getBoutiqueId(req.userId);
     if (!boutiqueId) return res.status(404).json({ error: 'Boutique not found' });
 
-    const { name, description, price, category, images, image_urls, inventory_count, stock_quantity, sizes, colors, source } = req.body;
+    const { name, description, price, compare_price, category, images, image_urls, stock, stock_quantity, inventory_count, sizes, colors, tags, sku, source } = req.body;
+
+    const stockVal = stock || stock_quantity || inventory_count || 0;
 
     const { data, error } = await supabaseAdmin
       .from('products')
@@ -240,15 +243,16 @@ router.post(
         name,
         description:     description || null,
         price,
+        compare_price:   compare_price || null,
         category,
         images:          images || image_urls || [],
-        image_urls:      image_urls || images || [],
-        inventory_count: inventory_count || stock_quantity || 0,
-        stock_quantity:  stock_quantity || inventory_count || 0,
-        in_stock:        (inventory_count || stock_quantity || 0) > 0,
+        stock:           stockVal,
         sizes:           sizes || [],
         colors:          colors || [],
+        tags:            tags || [],
+        sku:             sku || null,
         source:          source || 'manual',
+        status:          'active',
       })
       .select()
       .single();
@@ -273,8 +277,8 @@ router.patch(
       return res.status(422).json({ error: `source must be one of: ${VALID_SOURCES.join(', ')}` });
     }
 
-    const allowed = ['name', 'description', 'price', 'category', 'images', 'image_urls',
-                     'inventory_count', 'stock_quantity', 'in_stock', 'sizes', 'colors', 'source'];
+    const allowed = ['name', 'description', 'price', 'compare_price', 'category', 'images',
+                     'stock', 'sizes', 'colors', 'tags', 'sku', 'source', 'status'];
     const updates = Object.fromEntries(
       Object.entries(req.body).filter(([k]) => allowed.includes(k))
     );
