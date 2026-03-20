@@ -5,6 +5,20 @@ const { body, query } = require('express-validator');
 const { validate } = require('../middleware/validate');
 const { supabaseAdmin } = require('../config/supabase');
 
+/**
+ * Helper: get the boutique's table ID from the auth user ID.
+ * boutiques.user_id = auth user ID, boutiques.id = table row UUID.
+ */
+async function getBoutiqueId(userId) {
+  const { data, error } = await supabaseAdmin
+    .from('boutiques')
+    .select('id')
+    .eq('user_id', userId)
+    .single();
+  if (error || !data) return null;
+  return data.id;
+}
+
 // Public routes (no auth required)
 
 /**
@@ -87,7 +101,7 @@ router.get(
     const { data, error } = await supabaseAdmin
       .from('boutiques')
       .select('*')
-      .eq('id', req.userId)
+      .eq('user_id', req.userId)
       .single();
 
     if (error) throw Object.assign(new Error('Boutique not found'), { status: 404 });
@@ -101,23 +115,23 @@ router.get(
 router.patch(
   '/me',
   requireRole('boutique'),
-  [
-    body('name').optional().isString().trim().notEmpty(),
-    body('bio').optional().isString(),
-    body('phone').optional().isMobilePhone(),
-    body('tags').optional().isArray(),
-    validate,
-  ],
   asyncHandler(async (req, res) => {
-    const allowed = ['name', 'bio', 'phone', 'address', 'logo_url', 'banner_url', 'tags', 'social_links'];
-    const updates = Object.fromEntries(
-      Object.entries(req.body).filter(([k]) => allowed.includes(k))
-    );
+    const allowed = ['name', 'description', 'phone', 'address', 'logo_url', 'banner_url',
+                     'style_tags', 'category_tags', 'primary_category', 'price_tier', 'email'];
+
+    // Map client field names to DB column names
+    const fieldMap = { bio: 'description', tags: 'style_tags' };
+    const mapped = {};
+    for (const [k, v] of Object.entries(req.body)) {
+      const dbCol = fieldMap[k] || k;
+      if (allowed.includes(dbCol)) mapped[dbCol] = v;
+    }
+    const updates = mapped;
 
     const { data, error } = await supabaseAdmin
       .from('boutiques')
       .update({ ...updates, updated_at: new Date().toISOString() })
-      .eq('id', req.userId)
+      .eq('user_id', req.userId)
       .select()
       .single();
 
@@ -134,7 +148,8 @@ router.get(
   '/me/dashboard',
   requireRole('boutique'),
   asyncHandler(async (req, res) => {
-    const boutiqueId = req.userId;
+    const boutiqueId = await getBoutiqueId(req.userId);
+    if (!boutiqueId) return res.status(404).json({ error: 'Boutique not found' });
 
     const [ordersRes, revenueRes, pendingRes] = await Promise.all([
       supabaseAdmin
@@ -167,6 +182,28 @@ router.get(
 );
 
 /**
+ * GET /api/v1/boutiques/me/products
+ * Boutique owner's own products.
+ */
+router.get(
+  '/me/products',
+  requireRole('boutique'),
+  asyncHandler(async (req, res) => {
+    const boutiqueId = await getBoutiqueId(req.userId);
+    if (!boutiqueId) return res.status(404).json({ error: 'Boutique not found' });
+
+    const { data, error } = await supabaseAdmin
+      .from('products')
+      .select('*')
+      .eq('boutique_id', boutiqueId)
+      .order('created_at', { ascending: false });
+
+    if (error) throw new Error(error.message);
+    res.json({ products: data });
+  })
+);
+
+/**
  * Valid inventory source integrations.
  * 'manual'     = entered by hand in the boutique dashboard.
  * Others       = synced automatically from a third-party platform (future).
@@ -191,19 +228,26 @@ router.post(
     validate,
   ],
   asyncHandler(async (req, res) => {
-    const { name, description, price, category, images, inventory_count, source } = req.body;
+    const boutiqueId = await getBoutiqueId(req.userId);
+    if (!boutiqueId) return res.status(404).json({ error: 'Boutique not found' });
+
+    const { name, description, price, category, images, image_urls, inventory_count, stock_quantity, sizes, colors, source } = req.body;
 
     const { data, error } = await supabaseAdmin
       .from('products')
       .insert({
-        boutique_id:     req.userId,
+        boutique_id:     boutiqueId,
         name,
         description:     description || null,
         price,
         category,
-        images:          images || [],
-        inventory_count: inventory_count || 0,
-        in_stock:        (inventory_count || 0) > 0,
+        images:          images || image_urls || [],
+        image_urls:      image_urls || images || [],
+        inventory_count: inventory_count || stock_quantity || 0,
+        stock_quantity:  stock_quantity || inventory_count || 0,
+        in_stock:        (inventory_count || stock_quantity || 0) > 0,
+        sizes:           sizes || [],
+        colors:          colors || [],
         source:          source || 'manual',
       })
       .select()
@@ -221,12 +265,16 @@ router.patch(
   '/me/products/:productId',
   requireRole('boutique'),
   asyncHandler(async (req, res) => {
+    const boutiqueId = await getBoutiqueId(req.userId);
+    if (!boutiqueId) return res.status(404).json({ error: 'Boutique not found' });
+
     // Validate source if provided
     if (req.body.source && !VALID_SOURCES.includes(req.body.source)) {
       return res.status(422).json({ error: `source must be one of: ${VALID_SOURCES.join(', ')}` });
     }
 
-    const allowed = ['name', 'description', 'price', 'category', 'images', 'inventory_count', 'in_stock', 'source'];
+    const allowed = ['name', 'description', 'price', 'category', 'images', 'image_urls',
+                     'inventory_count', 'stock_quantity', 'in_stock', 'sizes', 'colors', 'source'];
     const updates = Object.fromEntries(
       Object.entries(req.body).filter(([k]) => allowed.includes(k))
     );
@@ -235,7 +283,7 @@ router.patch(
       .from('products')
       .update({ ...updates, updated_at: new Date().toISOString() })
       .eq('id', req.params.productId)
-      .eq('boutique_id', req.userId) // ensure ownership
+      .eq('boutique_id', boutiqueId) // ensure ownership
       .select()
       .single();
 
@@ -251,11 +299,12 @@ router.delete(
   '/me/products/:productId',
   requireRole('boutique'),
   asyncHandler(async (req, res) => {
+    const boutiqueId = await getBoutiqueId(req.userId);
     await supabaseAdmin
       .from('products')
       .update({ is_active: false })
       .eq('id', req.params.productId)
-      .eq('boutique_id', req.userId);
+      .eq('boutique_id', boutiqueId);
 
     res.json({ message: 'Product deactivated.' });
   })
@@ -372,7 +421,8 @@ router.put(
   [body('hours').isArray()],
   validate,
   asyncHandler(async (req, res) => {
-    const boutiqueId = req.userId;
+    const boutiqueId = await getBoutiqueId(req.userId);
+    if (!boutiqueId) return res.status(404).json({ error: 'Boutique not found' });
     const { hours } = req.body;
 
     // Delete existing hours for this boutique
