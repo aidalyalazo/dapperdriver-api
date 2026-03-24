@@ -113,7 +113,7 @@ router.patch(
   '/me/status',
   requireRole('driver'),
   [
-    body('status').isIn(['available', 'offline', 'on_delivery']).withMessage('Invalid status'),
+    body('status').isIn(['online', 'offline', 'busy']).withMessage('Invalid status'),
     validate,
   ],
   asyncHandler(async (req, res) => {
