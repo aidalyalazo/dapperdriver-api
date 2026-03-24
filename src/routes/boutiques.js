@@ -98,13 +98,19 @@ router.get(
   '/me',
   requireRole('boutique'),
   asyncHandler(async (req, res) => {
+    console.log('[BOUTIQUE /me] userId:', req.userId, 'email:', req.user?.email, 'role:', req.user?.user_metadata?.role);
+
     const { data, error } = await supabaseAdmin
       .from('boutiques')
       .select('*')
       .eq('user_id', req.userId)
       .single();
 
-    if (error) throw Object.assign(new Error('Boutique not found'), { status: 404 });
+    if (error) {
+      console.log('[BOUTIQUE /me] NOT FOUND for user_id:', req.userId, 'error:', error.message);
+      throw Object.assign(new Error('Boutique not found'), { status: 404 });
+    }
+    console.log('[BOUTIQUE /me] FOUND:', data.name);
     res.json(data);
   })
 );
