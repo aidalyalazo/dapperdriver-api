@@ -81,7 +81,16 @@ const listOrders = asyncHandler(async (req, res) => {
 
   const filters = { status, page: parseInt(page) || 1, limit: parseInt(limit) || 20 };
   if (role === 'shopper')  filters.shopperId = req.userId;
-  if (role === 'boutique') filters.boutiqueId = req.userId;
+  if (role === 'boutique') {
+    // Resolve boutique table ID from auth user ID
+    const { supabaseAdmin } = require('../config/supabase');
+    const { data: boutique } = await supabaseAdmin
+      .from('boutiques')
+      .select('id')
+      .eq('user_id', req.userId)
+      .single();
+    if (boutique) filters.boutiqueId = boutique.id;
+  }
   if (role === 'driver')   filters.driverId = req.userId;
 
   const result = await orderService.listOrders(filters);
