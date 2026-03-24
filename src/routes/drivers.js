@@ -9,6 +9,19 @@ const { getPlatformSetting } = require('../utils/platformSettings');
 router.use(authenticate);
 
 /**
+ * Helper: get driver row ID from auth user ID.
+ */
+async function getDriverId(userId) {
+  const { data, error } = await supabaseAdmin
+    .from('drivers')
+    .select('id')
+    .eq('user_id', userId)
+    .single();
+  if (error || !data) return null;
+  return data.id;
+}
+
+/**
  * GET /api/v1/drivers/me
  */
 router.get(
@@ -17,12 +30,53 @@ router.get(
   asyncHandler(async (req, res) => {
     const { data, error } = await supabaseAdmin
       .from('drivers')
-      .select('id, full_name, email, phone, avatar_url, status, vehicle_info, city, rating, total_deliveries, created_at')
-      .eq('id', req.userId)
+      .select('*')
+      .eq('user_id', req.userId)
       .single();
 
     if (error) throw Object.assign(new Error('Driver not found'), { status: 404 });
     res.json(data);
+  })
+);
+
+/**
+ * GET /api/v1/drivers/me/dashboard
+ * Driver dashboard stats.
+ */
+router.get(
+  '/me/dashboard',
+  requireRole('driver'),
+  asyncHandler(async (req, res) => {
+    const driverId = await getDriverId(req.userId);
+    if (!driverId) return res.status(404).json({ error: 'Driver not found' });
+
+    const [deliveredRes, activeRes, earningsRes] = await Promise.all([
+      supabaseAdmin
+        .from('orders')
+        .select('id', { count: 'exact', head: true })
+        .eq('driver_id', driverId)
+        .eq('status', 'delivered'),
+      supabaseAdmin
+        .from('orders')
+        .select('id', { count: 'exact', head: true })
+        .eq('driver_id', driverId)
+        .in('status', ['ready', 'picked_up', 'in_transit']),
+      supabaseAdmin
+        .from('orders')
+        .select('delivery_fee, tip_amount')
+        .eq('driver_id', driverId)
+        .eq('status', 'delivered'),
+    ]);
+
+    const totalEarnings = (earningsRes.data || []).reduce(
+      (s, o) => s + parseFloat(o.delivery_fee || 0) + parseFloat(o.tip_amount || 0), 0
+    );
+
+    res.json({
+      total_deliveries: deliveredRes.count || 0,
+      active_deliveries: activeRes.count || 0,
+      total_earnings: totalEarnings.toFixed(2),
+    });
   })
 );
 
@@ -32,15 +86,9 @@ router.get(
 router.patch(
   '/me',
   requireRole('driver'),
-  [
-    body('full_name').optional().isString().trim().notEmpty(),
-    body('phone').optional().isMobilePhone(),
-    body('vehicle_info').optional().isObject(),
-    body('city').optional().isString(),
-    validate,
-  ],
   asyncHandler(async (req, res) => {
-    const allowed = ['full_name', 'phone', 'avatar_url', 'vehicle_info', 'city'];
+    const allowed = ['full_name', 'phone', 'vehicle_make', 'vehicle_model',
+                     'vehicle_year', 'vehicle_color', 'license_plate', 'city_id'];
     const updates = Object.fromEntries(
       Object.entries(req.body).filter(([k]) => allowed.includes(k))
     );
@@ -48,7 +96,7 @@ router.patch(
     const { data, error } = await supabaseAdmin
       .from('drivers')
       .update({ ...updates, updated_at: new Date().toISOString() })
-      .eq('id', req.userId)
+      .eq('user_id', req.userId)
       .select()
       .single();
 
@@ -71,8 +119,8 @@ router.patch(
   asyncHandler(async (req, res) => {
     const { data, error } = await supabaseAdmin
       .from('drivers')
-      .update({ status: req.body.status, last_seen: new Date().toISOString() })
-      .eq('id', req.userId)
+      .update({ status: req.body.status, updated_at: new Date().toISOString() })
+      .eq('user_id', req.userId)
       .select('id, status')
       .single();
 
@@ -99,10 +147,11 @@ router.patch(
     const { error } = await supabaseAdmin
       .from('drivers')
       .update({
-        current_location: `POINT(${lng} ${lat})`, // PostGIS format
-        last_seen:        new Date().toISOString(),
+        current_lat: lat,
+        current_lng: lng,
+        last_location_at: new Date().toISOString(),
       })
-      .eq('id', req.userId);
+      .eq('user_id', req.userId);
 
     if (error) throw new Error(error.message);
     res.json({ message: 'Location updated.' });
@@ -111,45 +160,102 @@ router.patch(
 
 /**
  * GET /api/v1/drivers/me/earnings
- * Driver earnings summary — weekly breakdown.
+ * Driver earnings summary.
  */
 router.get(
   '/me/earnings',
   requireRole('driver'),
   asyncHandler(async (req, res) => {
+    const driverId = await getDriverId(req.userId);
+
     const { data: payouts, error } = await supabaseAdmin
       .from('payouts')
       .select('amount, paid_at, stripe_transfer_id')
-      .eq('recipient_id', req.userId)
+      .eq('recipient_id', driverId || req.userId)
       .eq('recipient_type', 'driver')
       .order('paid_at', { ascending: false })
-      .limit(52); // ~1 year of weekly payouts
+      .limit(52);
 
     if (error) throw new Error(error.message);
 
-    const totalPaid = payouts.reduce((s, p) => s + parseFloat(p.amount), 0);
+    const totalPaid = (payouts || []).reduce((s, p) => s + parseFloat(p.amount || 0), 0);
 
-    // Unpaid (delivered but not yet paid out)
+    // Unpaid deliveries
     const { data: unpaidOrders } = await supabaseAdmin
       .from('orders')
-      .select('tip_amount')
-      .eq('driver_id', req.userId)
-      .eq('driver_paid', false)
+      .select('delivery_fee, tip_amount')
+      .eq('driver_id', driverId || req.userId)
       .eq('status', 'delivered');
 
-    const driverDeliveryFee = parseFloat(
-      await getPlatformSetting('driver_delivery_fee', '8.00')
-    );
     const pendingAmount = (unpaidOrders || []).reduce(
-      (s, o) => s + driverDeliveryFee + parseFloat(o.tip_amount || 0),
+      (s, o) => s + parseFloat(o.delivery_fee || 0) + parseFloat(o.tip_amount || 0),
       0
     );
 
     res.json({
-      total_paid:       totalPaid.toFixed(2),
-      pending_payout:   pendingAmount.toFixed(2),
-      payout_history:   payouts,
+      total_paid:     totalPaid.toFixed(2),
+      pending_payout: pendingAmount.toFixed(2),
+      payout_history: payouts || [],
     });
+  })
+);
+
+/**
+ * GET /api/v1/drivers/me/deliveries
+ * Driver's assigned orders.
+ */
+router.get(
+  '/me/deliveries',
+  requireRole('driver'),
+  asyncHandler(async (req, res) => {
+    const driverId = await getDriverId(req.userId);
+    if (!driverId) return res.status(404).json({ error: 'Driver not found' });
+
+    const { status } = req.query;
+    let q = supabaseAdmin
+      .from('orders')
+      .select('*, order_items(*)')
+      .eq('driver_id', driverId)
+      .order('created_at', { ascending: false })
+      .limit(50);
+
+    if (status) q = q.eq('status', status);
+
+    const { data, error } = await q;
+    if (error) throw new Error(error.message);
+    res.json({ deliveries: data || [] });
+  })
+);
+
+/**
+ * PATCH /api/v1/drivers/me/deliveries/:orderId/status
+ * Update delivery status (picked_up, in_transit, delivered).
+ */
+router.patch(
+  '/me/deliveries/:orderId/status',
+  requireRole('driver'),
+  [
+    body('status').isIn(['picked_up', 'in_transit', 'delivered']).withMessage('Invalid status'),
+    validate,
+  ],
+  asyncHandler(async (req, res) => {
+    const driverId = await getDriverId(req.userId);
+    const { orderId } = req.params;
+
+    const { data, error } = await supabaseAdmin
+      .from('orders')
+      .update({
+        status: req.body.status,
+        updated_at: new Date().toISOString(),
+        ...(req.body.status === 'delivered' ? { delivered_at: new Date().toISOString() } : {}),
+      })
+      .eq('id', orderId)
+      .eq('driver_id', driverId)
+      .select()
+      .single();
+
+    if (error) throw Object.assign(new Error('Order not found or not assigned to you'), { status: 404 });
+    res.json(data);
   })
 );
 
@@ -164,10 +270,10 @@ router.get(
     const { city } = req.query;
     let q = supabaseAdmin
       .from('drivers')
-      .select('id, full_name, phone, city, rating, vehicle_info')
+      .select('id, user_id, full_name, phone, city_id, rating, vehicle_make, vehicle_color, license_plate')
       .eq('status', 'available');
 
-    if (city) q = q.eq('city', city);
+    if (city) q = q.eq('city_id', city);
 
     const { data, error } = await q;
     if (error) throw new Error(error.message);
@@ -177,7 +283,6 @@ router.get(
 
 /**
  * POST /api/v1/drivers/me/cashout
- * Driver: request payout
  */
 router.post(
   '/me/cashout',
@@ -194,8 +299,6 @@ router.post(
 
 /**
  * POST /api/v1/drivers/me/documents
- * Driver: upload document (license, insurance, etc.)
- * Body: { type, file_url }
  */
 router.post(
   '/me/documents',

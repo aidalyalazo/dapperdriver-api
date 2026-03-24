@@ -76,7 +76,8 @@ router.post(
         profileData.owner_name = full_name;
         profileData.name       = req.body.boutique_name || full_name;
       } else {
-        profileData.id        = userId;
+        // driver
+        profileData.user_id   = userId;
         profileData.full_name = full_name;
       }
 
