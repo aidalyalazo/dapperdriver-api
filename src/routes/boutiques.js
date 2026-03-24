@@ -48,11 +48,13 @@ router.get(
 );
 
 /**
- * GET /api/v1/boutiques/:id
+ * GET /api/v1/boutiques/:id  (public)
+ * Skip 'me' — that's handled by the authenticated /me route below.
  */
 router.get(
   '/:id',
-  asyncHandler(async (req, res) => {
+  asyncHandler(async (req, res, next) => {
+    if (req.params.id === 'me') return next('route');
     const { data, error } = await supabaseAdmin
       .from('boutiques')
       .select('*')
@@ -65,11 +67,12 @@ router.get(
 );
 
 /**
- * GET /api/v1/boutiques/:id/products
+ * GET /api/v1/boutiques/:id/products  (public)
  */
 router.get(
   '/:id/products',
-  asyncHandler(async (req, res) => {
+  asyncHandler(async (req, res, next) => {
+    if (req.params.id === 'me') return next('route');
     const { category, in_stock, page = 1, limit = 40 } = req.query;
     let q = supabaseAdmin
       .from('products')
