@@ -37,10 +37,10 @@ router.post(
 
     // Check valid_from / valid_until dates
     const now = new Date();
-    if (promo.valid_from && new Date(promo.valid_from) > now) {
+    if (promo.starts_at && new Date(promo.starts_at) > now) {
       return res.status(400).json({ valid: false, error: 'Promo code is not yet valid' });
     }
-    if (promo.valid_until && new Date(promo.valid_until) < now) {
+    if (promo.expires_at && new Date(promo.expires_at) < now) {
       return res.status(400).json({ valid: false, error: 'Promo code has expired' });
     }
 
@@ -50,10 +50,10 @@ router.post(
     }
 
     // Check min_order_amount
-    if (promo.min_order_amount != null && order_total < parseFloat(promo.min_order_amount)) {
+    if (promo.min_order_value != null && order_total < parseFloat(promo.min_order_value)) {
       return res.status(400).json({
         valid: false,
-        error: `Minimum order amount is $${parseFloat(promo.min_order_amount).toFixed(2)}`,
+        error: `Minimum order amount is $${parseFloat(promo.min_order_value).toFixed(2)}`,
       });
     }
 
