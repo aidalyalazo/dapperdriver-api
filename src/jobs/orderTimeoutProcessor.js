@@ -28,8 +28,7 @@ async function processTimedOutRefunds() {
       .select(`
         id,
         stripe_payment_intent_id,
-        shopper_id,
-        shoppers (push_token)
+        shopper_id
       `)
       .eq('status', 'cancelled')
       .eq('payment_status', 'refund_pending')
@@ -58,8 +57,8 @@ async function processTimedOutRefunds() {
           .update({ payment_status: 'refunded', refunded_at: new Date().toISOString() })
           .eq('id', order.id);
 
-        // FCM push to shopper
-        const token = order.shoppers?.push_token;
+        // FCM push to shopper (disabled — push_token not yet implemented)
+        const token = null;
         if (token) {
           await sendOrderNotification({
             tokens: [token],
