@@ -214,7 +214,7 @@ router.get(
     const { status } = req.query;
     let q = supabaseAdmin
       .from('orders')
-      .select('*, order_items(*)')
+      .select('*, order_items(*), boutiques!orders_boutique_id_fkey(name, logo_url, address)')
       .eq('driver_id', driverId)
       .order('created_at', { ascending: false })
       .limit(50);
@@ -223,7 +223,16 @@ router.get(
 
     const { data, error } = await q;
     if (error) throw new Error(error.message);
-    res.json({ deliveries: data || [] });
+
+    // Flatten boutique info into each delivery
+    const deliveries = (data || []).map(d => ({
+      ...d,
+      boutique_name: d.boutiques?.name || 'Store',
+      boutique_logo: d.boutiques?.logo_url || null,
+      boutique_address: d.boutiques?.address || null,
+    }));
+
+    res.json({ deliveries });
   })
 );
 
