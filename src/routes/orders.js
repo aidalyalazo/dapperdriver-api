@@ -135,4 +135,70 @@ router.post(
   })
 );
 
+// POST   /api/v1/orders/:id/driver-rating   — Shopper: rate the driver
+router.post(
+  '/:id/driver-rating',
+  requireRole('shopper'),
+  [
+    body('rating').isInt({ min: 1, max: 5 }).withMessage('rating must be 1-5'),
+    body('comment').optional().isString(),
+  ],
+  validate,
+  asyncHandler(async (req, res) => {
+    const { supabaseAdmin } = require('../config/supabase');
+    const orderId = req.params.id;
+    const { rating, comment } = req.body;
+
+    // Fetch order and verify ownership + driver assignment
+    const { data: order } = await supabaseAdmin
+      .from('orders')
+      .select('shopper_id, driver_id, notes')
+      .eq('id', orderId)
+      .single();
+
+    if (!order) throw Object.assign(new Error('Order not found'), { status: 404 });
+    if (order.shopper_id !== req.userId) {
+      throw Object.assign(new Error('Unauthorized'), { status: 403 });
+    }
+    if (!order.driver_id) {
+      throw Object.assign(new Error('Order has no assigned driver'), { status: 400 });
+    }
+
+    // Store driver rating on the order (in notes JSON)
+    const existingNotes = order.notes ? (typeof order.notes === 'string' ? (() => { try { return JSON.parse(order.notes); } catch { return { text: order.notes }; } })() : order.notes) : {};
+    const updatedNotes = {
+      ...existingNotes,
+      driver_rating: rating,
+      driver_comment: comment || '',
+    };
+
+    await supabaseAdmin
+      .from('orders')
+      .update({ notes: JSON.stringify(updatedNotes) })
+      .eq('id', orderId);
+
+    // Update driver's average rating
+    // Fetch current driver stats
+    const { data: driver } = await supabaseAdmin
+      .from('drivers')
+      .select('rating, total_deliveries')
+      .eq('id', order.driver_id)
+      .single();
+
+    if (driver) {
+      const currentRating = parseFloat(driver.rating || 5);
+      const deliveries = parseInt(driver.total_deliveries || 0) || 1;
+      // Weighted average: include this new rating
+      const newRating = ((currentRating * deliveries) + rating) / (deliveries + 1);
+
+      await supabaseAdmin
+        .from('drivers')
+        .update({ rating: parseFloat(newRating.toFixed(2)) })
+        .eq('id', order.driver_id);
+    }
+
+    res.json({ success: true, rating });
+  })
+);
+
 module.exports = router;
