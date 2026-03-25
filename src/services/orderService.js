@@ -382,8 +382,8 @@ async function getOrder(orderId) {
     try {
       const { data: driver } = await supabaseAdmin
         .from('drivers')
-        .select('id, full_name, phone, avatar_url, vehicle_info')
-        .eq('user_id', order.driver_id)
+        .select('id, user_id, full_name, phone, vehicle_make, vehicle_model, vehicle_color, license_plate, rating')
+        .eq('id', order.driver_id)
         .single();
       order.drivers = driver;
     } catch (_) { order.drivers = null; }
