@@ -235,19 +235,21 @@ router.patch(
   '/me/deliveries/:orderId/status',
   requireRole('driver'),
   [
-    body('status').isIn(['picked_up', 'in_transit', 'delivered']).withMessage('Invalid status'),
+    body('status').isIn(['confirmed', 'ready', 'picked_up', 'in_transit', 'delivered']).withMessage('Invalid status'),
     validate,
   ],
   asyncHandler(async (req, res) => {
     const driverId = await getDriverId(req.userId);
     const { orderId } = req.params;
 
+    const isDecline = req.body.status === 'confirmed' || req.body.status === 'ready';
     const { data, error } = await supabaseAdmin
       .from('orders')
       .update({
         status: req.body.status,
         updated_at: new Date().toISOString(),
         ...(req.body.status === 'delivered' ? { delivered_at: new Date().toISOString() } : {}),
+        ...(isDecline ? { driver_id: null, driver_assigned_at: null } : {}),
       })
       .eq('id', orderId)
       .eq('driver_id', driverId)
