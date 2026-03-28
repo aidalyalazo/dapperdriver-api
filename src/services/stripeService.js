@@ -48,6 +48,20 @@ async function createAccountLink({ stripeAccountId, boutiqueId }) {
 }
 
 /**
+ * Generate an onboarding link for a driver.
+ * Send this URL to the driver to complete KYC.
+ */
+async function createDriverAccountLink({ stripeAccountId, driverId }) {
+  const link = await stripe.accountLinks.create({
+    account:     stripeAccountId,
+    refresh_url: `${process.env.FRONTEND_URL}/drivers/onboarding/refresh?driverId=${driverId}`,
+    return_url:  `${process.env.FRONTEND_URL}/drivers/onboarding/complete?driverId=${driverId}`,
+    type:        'account_onboarding',
+  });
+  return link;
+}
+
+/**
  * Fetch account status for a boutique's Stripe account.
  */
 async function getAccountStatus(stripeAccountId) {
@@ -241,6 +255,7 @@ async function payoutDriver({ driverId, amount, stripeAccountId, orderIds }) {
 module.exports = {
   createConnectAccount,
   createAccountLink,
+  createDriverAccountLink,
   getAccountStatus,
   createDriverConnectAccount,
   createOrderPaymentIntent,

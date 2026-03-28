@@ -51,7 +51,7 @@ router.post(
     if (order.shopper_id !== req.userId) {
       throw Object.assign(new Error('Unauthorized'), { status: 403 });
     }
-    if (order.status !== 'delivered') {
+    if (order.status !== 'delivered' && order.status !== 'completed') {
       throw Object.assign(new Error('Can only review delivered orders'), { status: 400 });
     }
 

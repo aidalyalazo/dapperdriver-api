@@ -16,10 +16,10 @@ async function cashOut({ recipientId, recipientType }) {
   const paidCol = recipientType === 'boutique' ? 'boutique_paid' : 'driver_paid';
   const orderFilter = recipientType === 'boutique' ? 'boutique_id' : 'driver_id';
 
-  // Get Stripe account
+  // Get Stripe account and table row ID (recipientId is the auth user_id)
   const { data: recipient } = await supabaseAdmin
     .from(table)
-    .select('stripe_account_id')
+    .select('id, stripe_account_id')
     .eq('user_id', recipientId)
     .single()
     .catch(() => ({ data: null }));
@@ -28,11 +28,14 @@ async function cashOut({ recipientId, recipientType }) {
     throw Object.assign(new Error('No Stripe account connected'), { status: 400 });
   }
 
+  // Use the table row ID for order lookups (orders reference driver.id / boutique.id, not user_id)
+  const tableRowId = recipient.id;
+
   // Get unpaid orders
   const { data: orders } = await supabaseAdmin
     .from('orders')
     .select(`id, ${earningsCol}, tip`)
-    .eq(orderFilter, recipientId)
+    .eq(orderFilter, tableRowId)
     .eq('status', 'delivered')
     .eq(paidCol, false)
     .catch(() => ({ data: [] }));

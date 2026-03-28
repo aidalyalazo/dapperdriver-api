@@ -168,34 +168,58 @@ router.get(
   asyncHandler(async (req, res) => {
     const driverId = await getDriverId(req.userId);
 
-    const { data: payouts, error } = await supabaseAdmin
-      .from('payouts')
-      .select('amount, paid_at, stripe_transfer_id')
-      .eq('recipient_id', driverId || req.userId)
-      .eq('recipient_type', 'driver')
-      .order('paid_at', { ascending: false })
-      .limit(52);
+    const [payoutsRes, unpaidRes, deliveredCountRes, driverRes] = await Promise.all([
+      supabaseAdmin
+        .from('payouts')
+        .select('amount, paid_at, stripe_transfer_id')
+        .eq('recipient_id', driverId || req.userId)
+        .eq('recipient_type', 'driver')
+        .order('paid_at', { ascending: false })
+        .limit(52),
+      supabaseAdmin
+        .from('orders')
+        .select('delivery_fee, tip_amount')
+        .eq('driver_id', driverId || req.userId)
+        .eq('status', 'delivered'),
+      supabaseAdmin
+        .from('orders')
+        .select('id', { count: 'exact', head: true })
+        .eq('driver_id', driverId || req.userId)
+        .eq('status', 'delivered'),
+      supabaseAdmin
+        .from('drivers')
+        .select('rating, review_count')
+        .eq('user_id', req.userId)
+        .single(),
+    ]);
 
-    if (error) throw new Error(error.message);
+    if (payoutsRes.error) throw new Error(payoutsRes.error.message);
 
-    const totalPaid = (payouts || []).reduce((s, p) => s + parseFloat(p.amount || 0), 0);
+    const payouts = payoutsRes.data || [];
+    const unpaidOrders = unpaidRes.data || [];
 
-    // Unpaid deliveries
-    const { data: unpaidOrders } = await supabaseAdmin
-      .from('orders')
-      .select('delivery_fee, tip_amount')
-      .eq('driver_id', driverId || req.userId)
-      .eq('status', 'delivered');
+    const totalPaid = payouts.reduce((s, p) => s + parseFloat(p.amount || 0), 0);
 
-    const pendingAmount = (unpaidOrders || []).reduce(
+    const pendingAmount = unpaidOrders.reduce(
       (s, o) => s + parseFloat(o.delivery_fee || 0) + parseFloat(o.tip_amount || 0),
       0
     );
 
+    const totalTips = unpaidOrders.reduce(
+      (s, o) => s + parseFloat(o.tip_amount || 0),
+      0
+    );
+
+    const driver = driverRes.data || {};
+
     res.json({
-      total_paid:     totalPaid.toFixed(2),
-      pending_payout: pendingAmount.toFixed(2),
-      payout_history: payouts || [],
+      total_paid:       totalPaid.toFixed(2),
+      pending_payout:   pendingAmount.toFixed(2),
+      total_tips:       totalTips.toFixed(2),
+      total_deliveries: deliveredCountRes.count || 0,
+      avg_rating:       parseFloat(driver.rating || 0),
+      review_count:     parseInt(driver.review_count || 0, 10),
+      payout_history:   payouts,
     });
   })
 );

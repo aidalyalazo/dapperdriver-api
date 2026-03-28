@@ -72,22 +72,28 @@ async function sendOrderNotification({ tokens, title, body, orderId }) {
 }
 
 /**
- * Broadcast a new order alert to all available drivers in a geographic area.
- * You can extend this with PostGIS radius queries on the drivers table.
+ * Broadcast a new order alert to ALL approved drivers in a city (online + offline).
+ * Used as the fallback when no online driver accepts an order.
  *
- * @param {{ orderId: string, boutiqueCity: string }} params
+ * @param {{ orderId: string, cityId: string }} params
  */
-async function notifyAvailableDrivers({ orderId, boutiqueCity }) {
-  const { data: drivers } = await supabaseAdmin
+async function notifyAvailableDrivers({ orderId, cityId }) {
+  const query = supabaseAdmin
     .from('drivers')
-    .select('fcm_token')
-    .eq('status', 'available')
-    .eq('city', boutiqueCity)
-    .not('fcm_token', 'is', null);
+    .select('push_token')
+    .eq('is_approved', true)
+    .not('push_token', 'is', null);
+
+  // Filter by city_id if provided
+  if (cityId) {
+    query.eq('city_id', cityId);
+  }
+
+  const { data: drivers } = await query.catch(() => ({ data: [] }));
 
   if (!drivers || drivers.length === 0) return;
 
-  const tokens = drivers.map((d) => d.fcm_token).filter(Boolean);
+  const tokens = drivers.map((d) => d.push_token).filter(Boolean);
 
   return sendMulticast({
     tokens,

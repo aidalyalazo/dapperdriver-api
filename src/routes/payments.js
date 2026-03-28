@@ -19,7 +19,7 @@ router.post(
     const { data: boutique } = await supabaseAdmin
       .from('boutiques')
       .select('id, email, name, stripe_account_id')
-      .eq('id', req.userId)
+      .eq('user_id', req.userId)
       .single();
 
     if (boutique.stripe_account_id) {
@@ -56,7 +56,7 @@ router.get(
     const { data: boutique } = await supabaseAdmin
       .from('boutiques')
       .select('stripe_account_id')
-      .eq('id', req.userId)
+      .eq('user_id', req.userId)
       .single();
 
     if (!boutique?.stripe_account_id) {
@@ -77,16 +77,21 @@ router.post(
   '/driver/onboard',
   requireRole('driver'),
   asyncHandler(async (req, res) => {
+    // Look up driver by user_id (auth user), not by id
     const { data: driver } = await supabaseAdmin
       .from('drivers')
       .select('id, email, full_name, stripe_account_id')
-      .eq('id', req.userId)
+      .eq('user_id', req.userId)
       .single();
 
+    if (!driver) {
+      return res.status(404).json({ error: 'Driver not found' });
+    }
+
     if (driver.stripe_account_id) {
-      const link = await stripeService.createAccountLink({
+      const link = await stripeService.createDriverAccountLink({
         stripeAccountId: driver.stripe_account_id,
-        boutiqueId:      driver.id,
+        driverId:        driver.id,
       });
       return res.json({ onboarding_url: link.url, already_exists: true });
     }
@@ -97,9 +102,9 @@ router.post(
       fullName: driver.full_name,
     });
 
-    const link = await stripeService.createAccountLink({
+    const link = await stripeService.createDriverAccountLink({
       stripeAccountId: account.id,
-      boutiqueId:      driver.id,
+      driverId:        driver.id,
     });
 
     res.json({ onboarding_url: link.url, stripe_account_id: account.id });
@@ -116,7 +121,7 @@ router.get(
     const { data: driver } = await supabaseAdmin
       .from('drivers')
       .select('stripe_account_id')
-      .eq('id', req.userId)
+      .eq('user_id', req.userId)
       .single();
 
     if (!driver?.stripe_account_id) {

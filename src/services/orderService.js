@@ -215,6 +215,27 @@ async function createOrder({
     }
   }
 
+  // 14. Notify boutique about the new order
+  try {
+    const { data: boutiqueFcm } = await supabaseAdmin
+      .from('boutiques')
+      .select('fcm_token, push_token')
+      .eq('id', boutiqueId)
+      .single();
+
+    const boutiqueTokens = [boutiqueFcm?.fcm_token, boutiqueFcm?.push_token].filter(Boolean);
+    if (boutiqueTokens.length > 0) {
+      await sendOrderNotification({
+        tokens: boutiqueTokens,
+        title: '🛍️ New Order Received!',
+        body: `You have a new order (${orderItems.length} item${orderItems.length !== 1 ? 's' : ''}). Please confirm within 10 minutes.`,
+        orderId: order.id,
+      }).catch((e) => console.warn('[ORDER] Boutique notification failed:', e.message));
+    }
+  } catch (e) {
+    console.warn('[ORDER] Failed to notify boutique:', e.message);
+  }
+
   return order;
 }
 
