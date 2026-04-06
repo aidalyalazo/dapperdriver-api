@@ -97,7 +97,7 @@ router.post(
 
     const { data: order } = await supabaseAdmin
       .from('orders')
-      .select('stripe_payment_intent_id, shopper_id, tip')
+      .select('stripe_payment_intent_id, shopper_id, tip, fulfillment_type')
       .eq('id', orderId)
       .single();
 
@@ -105,6 +105,10 @@ router.post(
 
     if (order.shopper_id !== req.userId) {
       throw Object.assign(new Error('Unauthorized'), { status: 403 });
+    }
+
+    if (order.fulfillment_type === 'pickup') {
+      throw Object.assign(new Error('Tips are not applicable for pickup orders'), { status: 400 });
     }
 
     if (!order.stripe_payment_intent_id) {

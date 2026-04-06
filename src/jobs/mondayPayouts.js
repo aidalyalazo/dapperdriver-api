@@ -40,7 +40,7 @@ async function runMondayPayouts() {
         delivered_at,
         drivers (id, full_name, stripe_account_id, fcm_token)
       `)
-      .eq('status', 'delivered')
+      .in('status', ['delivered', 'completed'])
       .eq('driver_paid', false)
       .not('driver_id', 'is', null);
 

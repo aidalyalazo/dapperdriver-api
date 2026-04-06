@@ -1,4 +1,4 @@
-const { stripe, calculateSplit } = require('../config/stripe');
+const { stripe } = require('../config/stripe');
 const { supabaseAdmin } = require('../config/supabase');
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -169,11 +169,10 @@ async function transferToBoutique(order) {
     throw new Error(`Boutique ${order.boutique_id} has no Stripe account.`);
   }
 
-  const totalCents = Math.round(order.total_amount * 100);
-  const { boutiqueAmount } = calculateSplit(totalCents);
+  const boutiqueAmountCents = Math.round((order.boutique_earnings || 0) * 100);
 
   const transfer = await stripe.transfers.create({
-    amount:      boutiqueAmount,
+    amount:      boutiqueAmountCents,
     currency:    'usd',
     destination: boutique.stripe_account_id,
     metadata: {
@@ -188,7 +187,7 @@ async function transferToBoutique(order) {
     order_id:          order.id,
     recipient_id:      order.boutique_id,
     recipient_type:    'boutique',
-    amount:            boutiqueAmount / 100,
+    amount:            boutiqueAmountCents / 100,
     stripe_transfer_id: transfer.id,
     status:            'paid',
     paid_at:           new Date().toISOString(),

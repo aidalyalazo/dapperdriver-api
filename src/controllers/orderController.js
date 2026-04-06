@@ -12,10 +12,26 @@ const createOrderValidation = [
   body('items.*.product_id').isUUID().withMessage('Each item must have a valid product_id'),
   body('items.*.quantity').isInt({ min: 1 }).withMessage('quantity must be ≥ 1'),
   body('items.*.unit_price').isFloat({ min: 0.01 }).withMessage('unit_price must be > 0'),
-  body('delivery_address').isObject().withMessage('delivery_address must be an object'),
-  body('delivery_address.street').notEmpty().withMessage('delivery_address.street is required'),
-  body('delivery_address.city').notEmpty().withMessage('delivery_address.city is required'),
-  body('delivery_address.zip').notEmpty().withMessage('delivery_address.zip is required'),
+  body('fulfillment_type')
+    .optional()
+    .isIn(['delivery', 'pickup'])
+    .withMessage('fulfillment_type must be delivery or pickup'),
+  body('delivery_address')
+    .if((_value, { req }) => (req.body.fulfillment_type || 'delivery') === 'delivery')
+    .isObject()
+    .withMessage('delivery_address must be an object'),
+  body('delivery_address.street')
+    .if((_value, { req }) => (req.body.fulfillment_type || 'delivery') === 'delivery')
+    .notEmpty()
+    .withMessage('delivery_address.street is required'),
+  body('delivery_address.city')
+    .if((_value, { req }) => (req.body.fulfillment_type || 'delivery') === 'delivery')
+    .notEmpty()
+    .withMessage('delivery_address.city is required'),
+  body('delivery_address.zip')
+    .if((_value, { req }) => (req.body.fulfillment_type || 'delivery') === 'delivery')
+    .notEmpty()
+    .withMessage('delivery_address.zip is required'),
   body('payment_method_id').notEmpty().withMessage('payment_method_id is required'),
 ];
 
@@ -30,7 +46,7 @@ const createOrder = [
   validate,
   asyncHandler(async (req, res) => {
     const shopperId = req.userId;
-    const { boutique_id, items, delivery_address, notes, payment_method_id } = req.body;
+    const { boutique_id, items, delivery_address, notes, payment_method_id, fulfillment_type } = req.body;
 
     // 1. Create the order record
     const order = await orderService.createOrder({
@@ -39,6 +55,7 @@ const createOrder = [
       items,
       deliveryAddress: delivery_address,
       notes,
+      fulfillmentType: fulfillment_type || 'delivery',
     });
 
     // 2. Charge via Stripe (holds until order delivered)

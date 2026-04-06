@@ -21,6 +21,19 @@ const ORDER_TRANSITIONS = {
 };
 
 /**
+ * Valid order status transitions for PICKUP orders (no driver involved).
+ */
+const PICKUP_ORDER_TRANSITIONS = {
+  pending: ['confirmed', 'cancelled'],
+  confirmed: ['preparing', 'cancelled'],
+  preparing: ['ready_for_pickup'],
+  ready_for_pickup: ['picked_up'],
+  picked_up: ['completed'],
+  completed: [],
+  cancelled: [],
+};
+
+/**
  * Human-readable FCM notification copy per transition.
  */
 const STATUS_NOTIFICATIONS = {
@@ -31,6 +44,7 @@ const STATUS_NOTIFICATIONS = {
   picked_up: { title: '✅ Order Picked Up', body: 'Your driver has picked up your order.' },
   out_for_delivery: { title: '🚚 On the Way!', body: 'Your order is out for delivery.' },
   delivered: { title: '🎉 Delivered!', body: 'Your DapperDriver order has been delivered. Enjoy!' },
+  completed: { title: '🎉 Order Complete!', body: 'Your DapperDriver order is complete. Enjoy!' },
   cancelled: { title: '❌ Order Cancelled', body: 'Your order has been cancelled.' },
 };
 
@@ -49,13 +63,17 @@ async function createOrder({
   deliveryAddress,
   notes,
   promoCode,
+  fulfillmentType = 'delivery',
 }) {
   // 1. Calculate subtotal from items
   const subtotal = items.reduce((sum, i) => sum + i.unit_price * i.quantity, 0);
 
-  // 2. Read delivery fee from platform_settings
-  const deliveryFeeSetting = await getPlatformSettingJson('delivery_fee', { base: 4.99 });
-  const deliveryFee = parseFloat(deliveryFeeSetting.base || 4.99);
+  // 2. Read delivery fee from platform_settings (pickup orders have no delivery fee)
+  let deliveryFee = 0;
+  if (fulfillmentType !== 'pickup') {
+    const deliveryFeeSetting = await getPlatformSettingJson('delivery_fee', { base: 4.99 });
+    deliveryFee = parseFloat(deliveryFeeSetting.base || 4.99);
+  }
 
   // 3. Get city_id and tax rate
   let cityId = null;
@@ -110,25 +128,35 @@ async function createOrder({
     boutique = data;
   } catch (_) {}
 
-  let commissionRate = 0.25; // Default 25%
-  if (boutique?.commission_rate != null) {
-    commissionRate = parseFloat(boutique.commission_rate) / 100;
+  let commissionRate;
+  if (fulfillmentType === 'pickup') {
+    // Pickup orders use a lower commission rate (default 20%)
+    const pickupCommissionSetting = await getPlatformSettingJson('pickup_commission_rate', { default: 20 });
+    commissionRate = parseFloat(pickupCommissionSetting.default || 20) / 100;
   } else {
-    const commissionSetting = await getPlatformSettingJson('commission_rate', { default: 25 });
-    commissionRate = parseFloat(commissionSetting.default || 25) / 100;
+    commissionRate = 0.25; // Default 25% for delivery
+    if (boutique?.commission_rate != null) {
+      commissionRate = parseFloat(boutique.commission_rate) / 100;
+    } else {
+      const commissionSetting = await getPlatformSettingJson('commission_rate', { default: 25 });
+      commissionRate = parseFloat(commissionSetting.default || 25) / 100;
+    }
   }
 
   // 7. Calculate earnings splits
   const ddCommissionAmount = Math.round(subtotal * commissionRate * 100) / 100;
   const boutiqueEarnings = subtotal - ddCommissionAmount;
 
-  // 8. Calculate driver earnings
-  const driverPayoutSetting = await getPlatformSettingJson('driver_payout_rate', {
-    delivery_fee_cut: 80,
-    tip_cut: 100,
-  });
-  const deliveryFeeCut = parseFloat(driverPayoutSetting.delivery_fee_cut || 80) / 100;
-  const driverEarnings = Math.round(deliveryFee * deliveryFeeCut * 100) / 100;
+  // 8. Calculate driver earnings (pickup orders have no driver)
+  let driverEarnings = 0;
+  if (fulfillmentType !== 'pickup') {
+    const driverPayoutSetting = await getPlatformSettingJson('driver_payout_rate', {
+      delivery_fee_cut: 80,
+      tip_cut: 100,
+    });
+    const deliveryFeeCut = parseFloat(driverPayoutSetting.delivery_fee_cut || 80) / 100;
+    driverEarnings = Math.round(deliveryFee * deliveryFeeCut * 100) / 100;
+  }
 
   // 9. Calculate total
   const totalAmount = subtotal + deliveryFee + taxAmount - promoDiscount;
@@ -172,6 +200,7 @@ async function createOrder({
       delivery_address: deliveryAddressText,
       delivery_notes: notes || null,
       promo_id: promoId,
+      fulfillment_type: fulfillmentType,
     })
     .select()
     .single();
@@ -271,8 +300,10 @@ async function updateOrderStatus({ orderId, newStatus, actorId, driverId }) {
     throw Object.assign(new Error('Order not found'), { status: 404 });
   }
 
-  // Validate transition
-  const allowed = ORDER_TRANSITIONS[order.status] || [];
+  // Validate transition (use pickup transitions for pickup orders)
+  const isPickup = order.fulfillment_type === 'pickup';
+  const transitionMap = isPickup ? PICKUP_ORDER_TRANSITIONS : ORDER_TRANSITIONS;
+  const allowed = transitionMap[order.status] || [];
   if (!allowed.includes(newStatus)) {
     throw Object.assign(
       new Error(`Invalid status transition: ${order.status} → ${newStatus}`),
@@ -288,6 +319,7 @@ async function updateOrderStatus({ orderId, newStatus, actorId, driverId }) {
   }
   if (newStatus === 'picked_up') updatePayload.picked_up_at = new Date().toISOString();
   if (newStatus === 'delivered') updatePayload.delivered_at = new Date().toISOString();
+  if (newStatus === 'completed') updatePayload.completed_at = new Date().toISOString();
   if (newStatus === 'cancelled') updatePayload.cancelled_at = new Date().toISOString();
 
   const { data: updated, error: updateErr } = await supabaseAdmin
@@ -310,8 +342,8 @@ async function updateOrderStatus({ orderId, newStatus, actorId, driverId }) {
     })
     .catch(() => {});
 
-  // If delivered: capture payment and transfer to boutique
-  if (newStatus === 'delivered') {
+  // If delivered or completed (pickup): capture payment and transfer to boutique
+  if (newStatus === 'delivered' || newStatus === 'completed') {
     try {
       if (order.stripe_payment_intent_id) {
         await stripe.paymentIntents.capture(order.stripe_payment_intent_id);
@@ -320,12 +352,12 @@ async function updateOrderStatus({ orderId, newStatus, actorId, driverId }) {
       const { transferToBoutique } = require('./stripeService');
       await transferToBoutique(order).catch(() => {});
     } catch (e) {
-      console.warn('[ORDER] Payment capture on delivery failed:', e.message);
+      console.warn('[ORDER] Payment capture on delivery/completion failed:', e.message);
     }
   }
 
-  // If ready_for_pickup: trigger driver assignment
-  if (newStatus === 'ready_for_pickup') {
+  // If ready_for_pickup: trigger driver assignment (delivery orders only)
+  if (newStatus === 'ready_for_pickup' && !isPickup) {
     try {
       const { findAndAssignDriver } = require('./driverAssignmentService');
       findAndAssignDriver(orderId); // Fire and forget
@@ -335,7 +367,11 @@ async function updateOrderStatus({ orderId, newStatus, actorId, driverId }) {
   }
 
   // Push notifications
-  const notif = STATUS_NOTIFICATIONS[newStatus];
+  let notif = STATUS_NOTIFICATIONS[newStatus];
+  // Override picked_up message for pickup orders
+  if (newStatus === 'picked_up' && isPickup) {
+    notif = { title: '✅ Order Picked Up', body: 'Your order has been picked up' };
+  }
   if (notif) {
     const tokens = [
       order.shoppers?.push_token,

@@ -36,7 +36,7 @@ async function cashOut({ recipientId, recipientType }) {
     .from('orders')
     .select(`id, ${earningsCol}, tip`)
     .eq(orderFilter, tableRowId)
-    .eq('status', 'delivered')
+    .in('status', ['delivered', 'completed'])
     .eq(paidCol, false)
     .catch(() => ({ data: [] }));
 
