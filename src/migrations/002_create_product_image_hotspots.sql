@@ -6,11 +6,11 @@
 CREATE TABLE IF NOT EXISTS product_image_hotspots (
   id                 uuid DEFAULT gen_random_uuid() PRIMARY KEY,
   boutique_id        uuid NOT NULL REFERENCES boutiques(id) ON DELETE CASCADE,
-  image_url          text NOT NULL,
+  image_url          text NOT NULL CHECK (length(image_url) BETWEEN 10 AND 2048),
   tagged_product_id  uuid NOT NULL REFERENCES products(id) ON DELETE CASCADE,
   x_percent          float NOT NULL CHECK (x_percent >= 0 AND x_percent <= 100),
   y_percent          float NOT NULL CHECK (y_percent >= 0 AND y_percent <= 100),
-  label              text,
+  label              text CHECK (label IS NULL OR length(label) <= 100),
   created_at         timestamptz NOT NULL DEFAULT now()
 );
 

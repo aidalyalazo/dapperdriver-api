@@ -101,6 +101,14 @@ router.post(
       return res.status(400).json({ error: 'x_percent and y_percent must be between 0 and 100' });
     }
 
+    if (typeof image_url !== 'string' || image_url.length < 10 || image_url.length > 2048) {
+      return res.status(400).json({ error: 'image_url must be between 10 and 2048 characters' });
+    }
+
+    if (label !== undefined && label !== null && (typeof label !== 'string' || label.length > 100)) {
+      return res.status(400).json({ error: 'label must be a string of at most 100 characters' });
+    }
+
     // Verify boutique ownership
     const { data: boutique, error: boutErr } = await supabaseAdmin
       .from('boutiques')
@@ -111,6 +119,17 @@ router.post(
 
     if (boutErr || !boutique) {
       return res.status(403).json({ error: 'Not authorized for this boutique' });
+    }
+
+    // Enforce max 20 hotspots per image to prevent abuse
+    const { count: existingCount, error: countErr } = await supabaseAdmin
+      .from('product_image_hotspots')
+      .select('id', { count: 'exact', head: true })
+      .eq('boutique_id', boutique_id)
+      .eq('image_url', image_url);
+
+    if (!countErr && existingCount >= 20) {
+      return res.status(400).json({ error: 'Maximum of 20 hotspots per image reached' });
     }
 
     // Verify the product belongs to this boutique
