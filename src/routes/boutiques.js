@@ -39,14 +39,10 @@ router.get(
     if (status)   q = q.eq('status', status);
     if (search)   q = q.or(`name.ilike.%${search}%,description.ilike.%${search}%,primary_category.ilike.%${search}%`);
     if (city) {
-      // Match by city_id UUID, and also by city name in address for boutiques missing city_id
-      const { data: cityRow } = await supabaseAdmin.from('cities').select('name').eq('id', city).single();
-      const cityName = cityRow?.name;
-      if (cityName) {
-        q = q.or(`city_id.eq.${city},address.ilike.%${cityName}%`);
-      } else {
-        q = q.eq('city_id', city);
-      }
+      // Filter strictly by city_id — all boutiques have city_id set.
+      // The previous address-fallback approach broke when city names contained
+      // commas (e.g. "Chicago, IL") because PostgREST splits .or() on every comma.
+      q = q.eq('city_id', city);
     }
     if (category) q = q.or(`primary_category.ilike.%${category}%,category_tags.cs.{${category}}`);
 
