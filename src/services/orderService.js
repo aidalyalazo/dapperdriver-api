@@ -65,8 +65,30 @@ async function createOrder({
   promoCode,
   fulfillmentType = 'delivery',
 }) {
-  // 1. Calculate subtotal from items
-  const subtotal = items.reduce((sum, i) => sum + i.unit_price * i.quantity, 0);
+  // 1. Re-fetch product prices server-side — never trust client-submitted unit_price
+  //    for financial calculations. The client price is only used as a UI display hint.
+  const productIds = items.map((i) => i.product_id);
+  let trustedProductsMap = {};
+  try {
+    const { data: trustedProducts } = await supabaseAdmin
+      .from('products')
+      .select('id, name, price, image_url')
+      .in('id', productIds);
+    if (trustedProducts) {
+      trustedProductsMap = Object.fromEntries(trustedProducts.map((p) => [p.id, p]));
+    }
+  } catch (_) {}
+
+  // Replace client unit_price with server price for every item
+  const validatedItems = items.map((i) => {
+    const serverPrice = trustedProductsMap[i.product_id]?.price;
+    return {
+      ...i,
+      unit_price: serverPrice != null ? parseFloat(serverPrice) : i.unit_price,
+    };
+  });
+
+  const subtotal = validatedItems.reduce((sum, i) => sum + i.unit_price * i.quantity, 0);
 
   // 2. Read delivery fee from platform_settings (pickup orders have no delivery fee)
   let deliveryFee = 0;
@@ -161,18 +183,8 @@ async function createOrder({
   // 9. Calculate total
   const totalAmount = subtotal + deliveryFee + taxAmount - promoDiscount;
 
-  // 10. Fetch product details for order items (need name + price for order_items table)
-  const productIds = items.map((i) => i.product_id);
-  let productsMap = {};
-  try {
-    const { data: products } = await supabaseAdmin
-      .from('products')
-      .select('id, name, price, image_url')
-      .in('id', productIds);
-    if (products) {
-      productsMap = Object.fromEntries(products.map((p) => [p.id, p]));
-    }
-  } catch (_) {}
+  // 10. Product details already fetched above (trustedProductsMap). Alias for clarity.
+  const productsMap = trustedProductsMap;
 
   // 11. Format delivery address as TEXT (DB column is TEXT, not JSONB)
   const deliveryAddressText = typeof deliveryAddress === 'object'
@@ -210,7 +222,7 @@ async function createOrder({
   }
 
   // 13. Insert order items (DB requires name + price as NOT NULL)
-  const orderItems = items.map((i) => {
+  const orderItems = validatedItems.map((i) => {
     const product = productsMap[i.product_id] || {};
     return {
       order_id: order.id,

@@ -32,7 +32,10 @@ const createOrderValidation = [
     .if((_value, { req }) => (req.body.fulfillment_type || 'delivery') === 'delivery')
     .notEmpty()
     .withMessage('delivery_address.zip is required'),
-  body('payment_method_id').notEmpty().withMessage('payment_method_id is required'),
+  // payment_method_id is optional — Flutter's Stripe payment sheet collects
+  // the card client-side and confirms the PaymentIntent directly with Stripe.
+  // We only use this field if a caller pre-creates a payment method server-side.
+  body('payment_method_id').optional().isString(),
 ];
 
 // ── Controllers ───────────────────────────────────────────────────────────
@@ -46,9 +49,12 @@ const createOrder = [
   validate,
   asyncHandler(async (req, res) => {
     const shopperId = req.userId;
-    const { boutique_id, items, delivery_address, notes, payment_method_id, fulfillment_type } = req.body;
+    const { boutique_id, items, delivery_address, notes, fulfillment_type } = req.body;
 
-    // 1. Create the order record
+    // 1. Create the order record (DB write happens before payment by design —
+    //    the PI client_secret is returned to Flutter so the payment sheet can
+    //    confirm it. If the user abandons the payment sheet, the order is
+    //    cancelled by the Flutter client via POST /orders/:id/cancel.)
     const order = await orderService.createOrder({
       shopperId,
       boutiqueId: boutique_id,
@@ -58,13 +64,12 @@ const createOrder = [
       fulfillmentType: fulfillment_type || 'delivery',
     });
 
-    // 2. Charge via Stripe (holds until order delivered)
+    // 2. Create Stripe PaymentIntent (Flutter SDK confirms it via payment sheet)
     let paymentIntentId = null;
     let clientSecret = null;
     try {
       const paymentIntent = await stripeService.createOrderPaymentIntent({
         order,
-        paymentMethodId: payment_method_id,
         shopperId,
       });
       paymentIntentId = paymentIntent.id;
@@ -76,9 +81,23 @@ const createOrder = [
         .update({ stripe_payment_intent_id: paymentIntentId })
         .eq('id', order.id);
     } catch (stripeErr) {
-      // If Stripe is not configured or fails, continue without payment
-      // This allows MVP testing without Stripe keys
-      console.warn('Stripe payment skipped:', stripeErr.message);
+      // If Stripe is not configured (no STRIPE_SECRET_KEY), skip payment — MVP mode.
+      // If Stripe IS configured but failed, cancel the ghost order and surface the error.
+      const stripeConfigured = !!process.env.STRIPE_SECRET_KEY &&
+        !process.env.STRIPE_SECRET_KEY.startsWith('sk_test_REPLACE');
+      if (stripeConfigured) {
+        // Cancel the pending order so no ghost record lingers
+        await orderService.updateOrderStatus({
+          orderId: order.id,
+          newStatus: 'cancelled',
+          actorId: 'system-stripe-failure',
+        }).catch(() => {});
+        return res.status(402).json({
+          error: 'Payment setup failed. Please try again.',
+          details: stripeErr.message,
+        });
+      }
+      console.warn('[ORDER] Stripe payment skipped (not configured):', stripeErr.message);
     }
 
     res.status(201).json({

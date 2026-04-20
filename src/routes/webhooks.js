@@ -114,25 +114,13 @@ router.post(
         }
 
         // ── Transfer paid to boutique ─────────────────────────────────────
+        // NOTE: transferToBoutique() is already called inside updateOrderStatus()
+        // when the order reaches 'delivered' or 'completed'. We do NOT call it
+        // again here — doing so would double-transfer funds to the boutique.
+        // This handler exists only for logging / audit purposes.
         case 'transfer.created': {
           const transfer = event.data.object;
-          const orderId = transfer.metadata?.order_id;
-
-          if (orderId) {
-            // Auto-transfer to boutique when order is delivered
-            // (If not already done by transferToBoutique in orderService)
-            const { data: order } = await supabaseAdmin
-              .from('orders')
-              .select('status, boutique_id')
-              .eq('id', orderId)
-              .single();
-
-            if (order?.status === 'delivered') {
-              await stripeService.transferToBoutique(order).catch((e) =>
-                console.warn('[WEBHOOK] transferToBoutique already done or failed:', e.message)
-              );
-            }
-          }
+          console.log(`[WEBHOOK] Transfer created: ${transfer.id} → destination ${transfer.destination}, amount $${(transfer.amount / 100).toFixed(2)}`);
           break;
         }
 

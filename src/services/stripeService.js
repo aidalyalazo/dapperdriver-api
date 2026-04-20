@@ -109,13 +109,18 @@ async function createDriverConnectAccount({ driverId, email, fullName }) {
 
 /**
  * Create a PaymentIntent for a new order.
- * The charge is captured immediately. Commission is retained on the platform;
- * the boutique's share is transferred after delivery (see transferToBoutique).
  *
  * Flow:
- *   Shopper pays full amount → platform captures → on delivery → transfer 75% to boutique
+ *   1. Server creates PI in `requires_payment_method` state → returns client_secret
+ *   2. Flutter presents Stripe payment sheet (card collected client-side)
+ *   3. Stripe SDK confirms the PI → fires payment_intent.succeeded webhook
+ *   4. Webhook advances order to 'confirmed'
+ *   5. On delivery/completion → capture payment → transfer boutique share
+ *
+ * We intentionally do NOT pass payment_method or confirm:true here so that
+ * card details are never sent to our server (PCI compliance).
  */
-async function createOrderPaymentIntent({ order, paymentMethodId, shopperId }) {
+async function createOrderPaymentIntent({ order, shopperId }) {
   // Look up shopper's Stripe customer ID
   const { data: shopper } = await supabaseAdmin
     .from('shoppers')
@@ -125,29 +130,37 @@ async function createOrderPaymentIntent({ order, paymentMethodId, shopperId }) {
 
   let customerId = shopper?.stripe_customer_id;
 
-  // Create customer if not yet on Stripe
+  // Create Stripe customer if not yet on file
   if (!customerId) {
-    const customer = await stripe.customers.create({ email: shopper.email, metadata: { shopper_id: shopperId } });
+    const customer = await stripe.customers.create({
+      email: shopper?.email,
+      metadata: { shopper_id: shopperId },
+    });
     customerId = customer.id;
-    await supabaseAdmin.from('shoppers').update({ stripe_customer_id: customerId }).eq('id', shopperId);
+    await supabaseAdmin
+      .from('shoppers')
+      .update({ stripe_customer_id: customerId })
+      .eq('id', shopperId);
   }
 
   const totalCents = Math.round(order.total_amount * 100);
 
-  const paymentIntent = await stripe.paymentIntents.create({
-    amount:               totalCents,
-    currency:             'usd',
-    customer:             customerId,
-    payment_method:       paymentMethodId,
-    confirm:              true,
-    capture_method:       'manual',
-    automatic_payment_methods: { enabled: true, allow_redirects: 'never' },
-    metadata: {
-      order_id:    order.id,
-      boutique_id: order.boutique_id,
-      shopper_id:  shopperId,
+  const paymentIntent = await stripe.paymentIntents.create(
+    {
+      amount:         totalCents,
+      currency:       'usd',
+      customer:       customerId,
+      capture_method: 'manual',          // hold funds; capture on delivery
+      automatic_payment_methods: { enabled: true, allow_redirects: 'never' },
+      metadata: {
+        order_id:    order.id,
+        boutique_id: order.boutique_id,
+        shopper_id:  shopperId,
+      },
     },
-  });
+    // Idempotency key: safe to retry — will not create duplicate charges
+    { idempotencyKey: `order_${order.id}_pi` }
+  );
 
   return paymentIntent;
 }
