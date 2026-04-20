@@ -208,7 +208,7 @@ async function createOrder({
       boutique_earnings: boutiqueEarnings,
       driver_earnings: driverEarnings,
       city_id: cityId,
-      payment_status: 'authorized',
+      payment_status: 'pending',
       delivery_address: deliveryAddressText,
       delivery_notes: notes || null,
       promo_id: promoId,

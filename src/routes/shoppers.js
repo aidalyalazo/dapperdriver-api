@@ -43,7 +43,7 @@ router.patch(
     const allowed = [
       'display_name', 'phone', 'avatar_url', 'default_address',
       'size_tops', 'size_bottoms', 'size_shoes', 'size_dresses',
-      'body_measurements',
+      'body_measurements', 'style_preferences',
     ];
     const updates = Object.fromEntries(
       Object.entries(req.body).filter(([k]) => allowed.includes(k))
