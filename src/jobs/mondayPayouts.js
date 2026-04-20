@@ -38,7 +38,7 @@ async function runMondayPayouts() {
         tip,
         driver_earnings,
         delivered_at,
-        drivers (id, full_name, stripe_account_id, fcm_token)
+        drivers (id, full_name, stripe_account_id, push_token)
       `)
       .in('status', ['delivered', 'completed'])
       .eq('driver_paid', false)
@@ -91,7 +91,7 @@ async function runMondayPayouts() {
         });
 
         // Push notification
-        if (driver.fcm_token) {
+        if (driver.push_token) {
           sendPayoutNotification({
             recipientId:   driverId,
             recipientType: 'driver',
