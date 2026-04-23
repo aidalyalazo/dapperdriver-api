@@ -26,11 +26,9 @@ router.get(
     if (type === 'boutiques' || type === 'all') {
       let bQuery = supabaseAdmin
         .from('boutiques')
-        .select('id, name, logo_url, city_id, rating, follower_count', { count: 'exact' })
-        .eq('is_active', true);
-
-      // Search by name or tags
-      bQuery = bQuery.or(`name.ilike.${searchQuery},style_tags.ilike.${searchQuery}`);
+        .select('id, name, logo_url, logo_initials, city_id, rating, follower_count', { count: 'exact' })
+        .eq('status', 'active')
+        .ilike('name', searchQuery);
 
       if (city_id) {
         bQuery = bQuery.eq('city_id', city_id);
@@ -51,14 +49,12 @@ router.get(
       let pQuery = supabaseAdmin
         .from('products')
         .select(
-          `id, name, price, images, category, in_stock, boutique_id,
+          `id, name, price, images, category, boutique_id,
            boutiques(id, name, logo_url, city_id)`,
           { count: 'exact' }
         )
-        .eq('in_stock', true);
-
-      // Search by name or tags
-      pQuery = pQuery.or(`name.ilike.${searchQuery},tags.ilike.${searchQuery}`);
+        .eq('status', 'active')
+        .ilike('name', searchQuery);
 
       const { data: pData, error: pError, count: pCount } = await pQuery
         .order('created_at', { ascending: false })
