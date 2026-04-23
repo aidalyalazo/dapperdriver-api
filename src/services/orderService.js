@@ -418,13 +418,24 @@ async function updateOrderStatus({ orderId, newStatus, actorId, driverId }) {
 
 /**
  * Assign a driver to an order in ready_for_pickup state.
+ * driverId here is the auth user UUID (req.userId).
+ * We resolve the drivers table PK (drivers.id) since orders.driver_id FK → drivers(id).
  */
 async function assignDriver({ orderId, driverId }) {
+  // Resolve drivers.id from drivers.user_id (auth UUID)
+  const { data: driverRow } = await supabaseAdmin
+    .from('drivers')
+    .select('id')
+    .eq('user_id', driverId)
+    .single();
+
+  const driverTableId = driverRow?.id || driverId; // fallback keeps existing behaviour
+
   return updateOrderStatus({
     orderId,
     newStatus: 'driver_assigned',
     actorId: driverId,
-    driverId,
+    driverId: driverTableId,
   });
 }
 
