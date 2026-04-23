@@ -358,8 +358,8 @@ async function updateOrderStatus({ orderId, newStatus, actorId, driverId }) {
 
   if (updateErr) throw Object.assign(new Error(updateErr.message), { status: 400 });
 
-  // Log to order_timeline
-  await supabaseAdmin
+  // Log to order_timeline (fire-and-forget, non-critical)
+  supabaseAdmin
     .from('order_timeline')
     .insert({
       order_id: orderId,
@@ -367,7 +367,7 @@ async function updateOrderStatus({ orderId, newStatus, actorId, driverId }) {
       created_by: actorId,
       timestamp: new Date().toISOString(),
     })
-    .catch(() => {});
+    .then(() => {}, () => {});
 
   // If delivered or completed (pickup): capture payment and transfer to boutique
   if (newStatus === 'delivered' || newStatus === 'completed') {
