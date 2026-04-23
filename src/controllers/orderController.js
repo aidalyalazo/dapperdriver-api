@@ -144,6 +144,10 @@ const getOrder = asyncHandler(async (req, res) => {
 /**
  * PATCH /api/v1/orders/:id/status
  * Update order status. Role determines which transitions are allowed.
+ *
+ * Shopper restriction: shoppers may ONLY advance their OWN pickup orders
+ * from ready_for_pickup → picked_up (i.e. confirm they picked up the order).
+ * All other role/transition combos are unrestricted (service validates transitions).
  */
 const updateStatus = [
   param('id').isUUID().withMessage('id must be a UUID'),
@@ -152,6 +156,33 @@ const updateStatus = [
   asyncHandler(async (req, res) => {
     const { status } = req.body;
     const { id } = req.params;
+    const role = req.user?.user_metadata?.role;
+
+    // Shoppers may only confirm pickup — prevent them from touching delivery orders
+    if (role === 'shopper') {
+      const { supabaseAdmin } = require('../config/supabase');
+      const { data: order } = await supabaseAdmin
+        .from('orders')
+        .select('shopper_id, fulfillment_type, status')
+        .eq('id', id)
+        .single();
+
+      if (!order) {
+        return res.status(404).json({ error: 'Order not found' });
+      }
+      if (order.shopper_id !== req.userId) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+      if (order.fulfillment_type !== 'pickup') {
+        return res.status(403).json({ error: 'Shoppers can only update pickup orders' });
+      }
+      if (status !== 'picked_up') {
+        return res.status(403).json({ error: 'Shoppers may only confirm pickup (picked_up)' });
+      }
+      if (order.status !== 'ready_for_pickup') {
+        return res.status(422).json({ error: `Order must be ready_for_pickup to confirm pickup (current: ${order.status})` });
+      }
+    }
 
     const updated = await orderService.updateOrderStatus({
       orderId:  id,

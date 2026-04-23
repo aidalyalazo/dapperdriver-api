@@ -14,8 +14,8 @@ router.get('/', ctrl.listOrders);
 // GET    /api/v1/orders/:id                — Get single order (all roles)
 router.get('/:id', ctrl.getOrder);
 
-// PATCH  /api/v1/orders/:id/status         — Advance status (boutique / driver / admin)
-router.patch('/:id/status', requireRole('boutique', 'driver', 'admin'), ctrl.updateStatus);
+// PATCH  /api/v1/orders/:id/status         — Advance status (boutique / driver / admin / shopper for pickup)
+router.patch('/:id/status', requireRole('boutique', 'driver', 'admin', 'shopper'), ctrl.updateStatus);
 
 // POST   /api/v1/orders/:id/assign-driver  — Driver self-assigns
 router.post('/:id/assign-driver', requireRole('driver'), ctrl.assignDriver);
@@ -68,16 +68,17 @@ router.post(
       })
       .eq('id', orderId);
 
-    // Log to timeline
-    await supabaseAdmin
+    // Log to timeline (fire-and-forget)
+    supabaseAdmin
       .from('order_timeline')
       .insert({
         order_id: orderId,
         status: 'refunded',
         note: `Refund of $${actualAmount.toFixed(2)} processed`,
         created_by: req.userId,
+        timestamp: new Date().toISOString(),
       })
-      .catch(() => {});
+      .then(() => {}, () => {});
 
     res.json({ refund, amount: actualAmount });
   })

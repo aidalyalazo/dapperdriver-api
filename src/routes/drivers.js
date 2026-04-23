@@ -60,16 +60,16 @@ router.get(
         .from('orders')
         .select('id', { count: 'exact', head: true })
         .eq('driver_id', driverId)
-        .in('status', ['ready', 'picked_up', 'in_transit']),
+        .in('status', ['driver_assigned', 'picked_up', 'out_for_delivery']),
       supabaseAdmin
         .from('orders')
-        .select('delivery_fee, tip_amount')
+        .select('driver_earnings, tip')
         .eq('driver_id', driverId)
         .eq('status', 'delivered'),
     ]);
 
     const totalEarnings = (earningsRes.data || []).reduce(
-      (s, o) => s + parseFloat(o.delivery_fee || 0) + parseFloat(o.tip_amount || 0), 0
+      (s, o) => s + parseFloat(o.driver_earnings || 0) + parseFloat(o.tip || 0), 0
     );
 
     res.json({
@@ -178,7 +178,7 @@ router.get(
         .limit(52),
       supabaseAdmin
         .from('orders')
-        .select('delivery_fee, tip_amount')
+        .select('driver_earnings, tip')
         .eq('driver_id', driverId || req.userId)
         .eq('status', 'delivered'),
       supabaseAdmin
@@ -201,12 +201,12 @@ router.get(
     const totalPaid = payouts.reduce((s, p) => s + parseFloat(p.amount || 0), 0);
 
     const pendingAmount = unpaidOrders.reduce(
-      (s, o) => s + parseFloat(o.delivery_fee || 0) + parseFloat(o.tip_amount || 0),
+      (s, o) => s + parseFloat(o.driver_earnings || 0) + parseFloat(o.tip || 0),
       0
     );
 
     const totalTips = unpaidOrders.reduce(
-      (s, o) => s + parseFloat(o.tip_amount || 0),
+      (s, o) => s + parseFloat(o.tip || 0),
       0
     );
 

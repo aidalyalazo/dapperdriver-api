@@ -166,17 +166,20 @@ router.get(
     const boutiqueId = await getBoutiqueId(req.userId);
     if (!boutiqueId) return res.status(404).json({ error: 'Boutique not found' });
 
+    // Terminal statuses: delivery orders end as 'delivered', pickup orders as 'completed'
+    const TERMINAL = ['delivered', 'completed'];
+
     const [ordersRes, revenueRes, pendingRes] = await Promise.all([
       supabaseAdmin
         .from('orders')
         .select('id', { count: 'exact', head: true })
         .eq('boutique_id', boutiqueId)
-        .eq('status', 'delivered'),
+        .in('status', TERMINAL),
       supabaseAdmin
         .from('orders')
-        .select('total_amount')
+        .select('total_amount, boutique_earnings')
         .eq('boutique_id', boutiqueId)
-        .eq('status', 'delivered'),
+        .in('status', TERMINAL),
       supabaseAdmin
         .from('orders')
         .select('id', { count: 'exact', head: true })
@@ -184,8 +187,12 @@ router.get(
         .in('status', ['pending', 'confirmed', 'preparing']),
     ]);
 
-    const totalRevenue = (revenueRes.data || []).reduce((s, o) => s + o.total_amount, 0);
-    const boutiqueRevenue = totalRevenue * 0.75; // 75% after commission
+    const rows = revenueRes.data || [];
+    const totalRevenue = rows.reduce((s, o) => s + parseFloat(o.total_amount || 0), 0);
+    // Use pre-computed boutique_earnings if available, otherwise fall back to 75%
+    const boutiqueRevenue = rows.reduce(
+      (s, o) => s + parseFloat(o.boutique_earnings ?? o.total_amount * 0.75 ?? 0), 0
+    );
 
     res.json({
       completed_orders: ordersRes.count || 0,
