@@ -121,11 +121,11 @@ async function createDriverConnectAccount({ driverId, email, fullName }) {
  * card details are never sent to our server (PCI compliance).
  */
 async function createOrderPaymentIntent({ order, shopperId }) {
-  // Look up shopper's Stripe customer ID
+  // Look up shopper's Stripe customer ID (user_id is the auth UUID)
   const { data: shopper } = await supabaseAdmin
     .from('shoppers')
     .select('stripe_customer_id, email')
-    .eq('id', shopperId)
+    .eq('user_id', shopperId)
     .single();
 
   let customerId = shopper?.stripe_customer_id;
@@ -133,17 +133,29 @@ async function createOrderPaymentIntent({ order, shopperId }) {
   // Create Stripe customer if not yet on file
   if (!customerId) {
     const customer = await stripe.customers.create({
-      email: shopper?.email,
+      email: shopper?.email || undefined,
       metadata: { shopper_id: shopperId },
     });
     customerId = customer.id;
+    // Persist so future orders reuse the same customer (user_id is the FK)
     await supabaseAdmin
       .from('shoppers')
       .update({ stripe_customer_id: customerId })
-      .eq('id', shopperId);
+      .eq('user_id', shopperId);
   }
 
   const totalCents = Math.round(order.total_amount * 100);
+
+  // Create an ephemeral key so Flutter's payment sheet can load saved cards
+  let ephemeralKey = null;
+  try {
+    ephemeralKey = await stripe.ephemeralKeys.create(
+      { customer: customerId },
+      { apiVersion: '2024-06-20' }
+    );
+  } catch (e) {
+    console.warn('[Stripe] Ephemeral key creation failed:', e.message);
+  }
 
   const paymentIntent = await stripe.paymentIntents.create(
     {
@@ -161,6 +173,10 @@ async function createOrderPaymentIntent({ order, shopperId }) {
     // Idempotency key: safe to retry — will not create duplicate charges
     { idempotencyKey: `order_${order.id}_pi` }
   );
+
+  // Attach ephemeral key and customer so Flutter payment sheet can initialise
+  paymentIntent._ephemeralKeySecret = ephemeralKey?.secret || null;
+  paymentIntent._customerId = customerId;
 
   return paymentIntent;
 }

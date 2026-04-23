@@ -67,6 +67,8 @@ const createOrder = [
     // 2. Create Stripe PaymentIntent (Flutter SDK confirms it via payment sheet)
     let paymentIntentId = null;
     let clientSecret = null;
+    let ephemeralKeySecret = null;
+    let stripeCustomerId = null;
     try {
       const paymentIntent = await stripeService.createOrderPaymentIntent({
         order,
@@ -74,6 +76,8 @@ const createOrder = [
       });
       paymentIntentId = paymentIntent.id;
       clientSecret = paymentIntent.client_secret;
+      ephemeralKeySecret = paymentIntent._ephemeralKeySecret || null;
+      stripeCustomerId = paymentIntent._customerId || null;
 
       // 3. Persist payment intent id on order
       await require('../config/supabase').supabaseAdmin
@@ -103,6 +107,8 @@ const createOrder = [
     res.status(201).json({
       order: { ...order, stripe_payment_intent_id: paymentIntentId },
       client_secret: clientSecret,
+      ephemeral_key_secret: ephemeralKeySecret,
+      customer_id: stripeCustomerId,
     });
   }),
 ];
