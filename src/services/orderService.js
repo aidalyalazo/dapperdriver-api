@@ -304,16 +304,28 @@ async function createOrder({
  * Update order status with validation and side effects.
  */
 async function updateOrderStatus({ orderId, newStatus, actorId, driverId }) {
-  // Fetch current order
+  // Fetch current order (no joins — orders.shopper_id references auth.users, not shoppers)
   const { data: order, error: fetchErr } = await supabaseAdmin
     .from('orders')
-    .select('*, shoppers(push_token), boutiques(push_token, fcm_token), drivers(push_token)')
+    .select('*')
     .eq('id', orderId)
     .single();
 
   if (fetchErr || !order) {
     throw Object.assign(new Error('Order not found'), { status: 404 });
   }
+
+  // Fetch push tokens separately (each table has its own FK structure)
+  const [shopperRow, boutiqueRow, driverRow] = await Promise.all([
+    supabaseAdmin.from('shoppers').select('push_token').eq('user_id', order.shopper_id).single().then(r => r.data),
+    supabaseAdmin.from('boutiques').select('push_token, fcm_token').eq('id', order.boutique_id).single().then(r => r.data),
+    order.driver_id
+      ? supabaseAdmin.from('drivers').select('push_token').eq('user_id', order.driver_id).single().then(r => r.data)
+      : Promise.resolve(null),
+  ]);
+  order.shoppers  = shopperRow  || {};
+  order.boutiques = boutiqueRow || {};
+  order.drivers   = driverRow   || {};
 
   // Validate transition (use pickup transitions for pickup orders)
   const isPickup = order.fulfillment_type === 'pickup';
