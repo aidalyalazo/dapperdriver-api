@@ -187,10 +187,13 @@ async function createOrder({
   const productsMap = trustedProductsMap;
 
   // 11. Format delivery address as TEXT (DB column is TEXT, not JSONB)
-  const deliveryAddressText = typeof deliveryAddress === 'object'
-    ? [deliveryAddress.street, deliveryAddress.city, deliveryAddress.state, deliveryAddress.zip]
-        .filter(Boolean).join(', ')
-    : deliveryAddress;
+  // Pickup orders have no delivery address — use 'PICKUP' sentinel to satisfy NOT NULL.
+  const deliveryAddressText = fulfillmentType === 'pickup'
+    ? 'PICKUP'
+    : typeof deliveryAddress === 'object'
+      ? [deliveryAddress.street, deliveryAddress.city, deliveryAddress.state, deliveryAddress.zip]
+          .filter(Boolean).join(', ')
+      : (deliveryAddress || '');
 
   // 12. Create order
   const { data: order, error } = await supabaseAdmin
