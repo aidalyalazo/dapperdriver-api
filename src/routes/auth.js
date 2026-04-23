@@ -62,7 +62,7 @@ router.post(
     //    For non-shopper roles, delete it and create the correct profile.
     if (role !== 'shopper') {
       // Remove the auto-created shoppers row (if trigger created one)
-      await supabaseAdmin.from('shoppers').delete().eq('id', userId);
+      await supabaseAdmin.from('shoppers').delete().eq('user_id', userId);
 
       const profileTable = role === 'boutique' ? 'boutiques' : 'drivers';
       const profileData = {
@@ -87,10 +87,14 @@ router.post(
         return res.status(400).json({ error: profileError.message });
       }
     } else {
-      // Shopper: trigger already created the row, just update it
+      // Shopper: upsert the profile row.
+      // The DB trigger may have auto-created the row with user_id = userId.
+      // We upsert on user_id so this is idempotent whether or not the trigger fired.
       const { error: updateError } = await supabaseAdmin.from('shoppers')
-        .update({ display_name: full_name, email, phone: phone || null })
-        .eq('id', userId);
+        .upsert(
+          { user_id: userId, display_name: full_name, email, phone: phone || null },
+          { onConflict: 'user_id' }
+        );
 
       if (updateError) {
         await supabaseAdmin.auth.admin.deleteUser(userId);
