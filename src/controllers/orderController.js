@@ -164,18 +164,21 @@ const updateStatus = [
     const { id } = req.params;
     const role = req.user?.user_metadata?.role;
 
+    const { supabaseAdmin } = require('../config/supabase');
+
+    // Fetch order for all ownership / transition checks
+    const { data: order } = await supabaseAdmin
+      .from('orders')
+      .select('shopper_id, boutique_id, driver_id, fulfillment_type, status')
+      .eq('id', id)
+      .single();
+
+    if (!order) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+
     // Shoppers may only confirm pickup — prevent them from touching delivery orders
     if (role === 'shopper') {
-      const { supabaseAdmin } = require('../config/supabase');
-      const { data: order } = await supabaseAdmin
-        .from('orders')
-        .select('shopper_id, fulfillment_type, status')
-        .eq('id', id)
-        .single();
-
-      if (!order) {
-        return res.status(404).json({ error: 'Order not found' });
-      }
       if (order.shopper_id !== req.userId) {
         return res.status(403).json({ error: 'Forbidden' });
       }
@@ -187,6 +190,30 @@ const updateStatus = [
       }
       if (order.status !== 'ready_for_pickup') {
         return res.status(422).json({ error: `Order must be ready_for_pickup to confirm pickup (current: ${order.status})` });
+      }
+    }
+
+    // Boutiques may only update their OWN orders
+    if (role === 'boutique') {
+      const { data: boutique } = await supabaseAdmin
+        .from('boutiques')
+        .select('id')
+        .eq('user_id', req.userId)
+        .single();
+      if (!boutique || boutique.id !== order.boutique_id) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+    }
+
+    // Drivers may only update orders assigned to them
+    if (role === 'driver') {
+      const { data: driver } = await supabaseAdmin
+        .from('drivers')
+        .select('id')
+        .eq('user_id', req.userId)
+        .single();
+      if (!driver || driver.id !== order.driver_id) {
+        return res.status(403).json({ error: 'Forbidden' });
       }
     }
 
@@ -225,7 +252,33 @@ const cancelOrder = [
   body('reason').optional().isString(),
   validate,
   asyncHandler(async (req, res) => {
-    const order = await orderService.getOrder(req.params.id);
+    const { supabaseAdmin } = require('../config/supabase');
+    const role = req.user?.user_metadata?.role;
+    const orderId = req.params.id;
+
+    // Ownership check — shopper/boutique can only cancel their own orders
+    if (role !== 'admin') {
+      const { data: orderRow } = await supabaseAdmin
+        .from('orders')
+        .select('shopper_id, boutique_id')
+        .eq('id', orderId)
+        .single();
+
+      if (!orderRow) return res.status(404).json({ error: 'Order not found' });
+
+      if (role === 'shopper' && orderRow.shopper_id !== req.userId) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+      if (role === 'boutique') {
+        const { data: boutique } = await supabaseAdmin
+          .from('boutiques').select('id').eq('user_id', req.userId).single();
+        if (!boutique || boutique.id !== orderRow.boutique_id) {
+          return res.status(403).json({ error: 'Forbidden' });
+        }
+      }
+    }
+
+    const order = await orderService.getOrder(orderId);
 
     // Refund if already charged
     if (order.stripe_payment_intent_id) {
@@ -233,7 +286,7 @@ const cancelOrder = [
     }
 
     const updated = await orderService.updateOrderStatus({
-      orderId:   req.params.id,
+      orderId,
       newStatus: 'cancelled',
       actorId:   req.userId,
     });

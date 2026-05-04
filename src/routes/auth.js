@@ -1,10 +1,21 @@
 const router = require('express').Router();
+const rateLimit = require('express-rate-limit');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { authenticate } = require('../middleware/auth');
 const { body } = require('express-validator');
 const { validate } = require('../middleware/validate');
 const { supabaseAdmin } = require('../config/supabase');
 const { createClient } = require('@supabase/supabase-js');
+
+// Strict rate limiter for credential endpoints — 10 attempts per 15 minutes per IP
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many login attempts. Please try again in 15 minutes.' },
+  skipSuccessfulRequests: false,
+});
 
 /**
  * Public Supabase client — used for sign-up / sign-in.
@@ -24,6 +35,7 @@ const supabasePublic = createClient(
  */
 router.post(
   '/register',
+  authLimiter,
   [
     body('email').isEmail().normalizeEmail().withMessage('Valid email is required'),
     body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters'),
@@ -118,6 +130,7 @@ router.post(
  */
 router.post(
   '/login',
+  authLimiter,
   [
     body('email').isEmail().normalizeEmail(),
     body('password').notEmpty(),
@@ -184,6 +197,7 @@ router.post('/logout', authenticate, asyncHandler(async (req, res) => {
  */
 router.post(
   '/forgot-password',
+  authLimiter,
   [body('email').isEmail().normalizeEmail(), validate],
   asyncHandler(async (req, res) => {
     await supabasePublic.auth.resetPasswordForEmail(req.body.email, {
