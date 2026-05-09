@@ -379,4 +379,41 @@ router.delete(
   })
 );
 
+/**
+ * DELETE /api/v1/social/posts/:id
+ * Delete an outfit post. Only the post owner may delete it.
+ * Also cleans up post_product_tags and post_likes.
+ */
+router.delete(
+  '/posts/:id',
+  requireRole('shopper'),
+  asyncHandler(async (req, res) => {
+    const postId = req.params.id;
+    const shopperId = req.userId;
+
+    // Verify ownership
+    const { data: post } = await supabaseAdmin
+      .from('outfit_posts')
+      .select('shopper_id')
+      .eq('id', postId)
+      .single();
+
+    if (!post) return res.status(404).json({ error: 'Post not found' });
+    if (post.shopper_id !== shopperId) {
+      return res.status(403).json({ error: 'Forbidden — you can only delete your own posts' });
+    }
+
+    // Delete child rows first (FK constraints)
+    await supabaseAdmin.from('post_product_tags').delete().eq('post_id', postId);
+    await supabaseAdmin.from('post_likes').delete().eq('post_id', postId);
+    const { error: delErr } = await supabaseAdmin
+      .from('outfit_posts')
+      .delete()
+      .eq('id', postId);
+
+    if (delErr) throw new Error(delErr.message);
+    res.json({ deleted: true });
+  })
+);
+
 module.exports = router;
