@@ -380,6 +380,17 @@ router.post(
   asyncHandler(async (req, res) => {
     const { product_id } = req.body;
 
+    // Verify the collection belongs to the requesting shopper
+    const { data: collection } = await supabaseAdmin
+      .from('collections')
+      .select('id')
+      .eq('id', req.params.id)
+      .eq('shopper_id', req.userId)
+      .single();
+    if (!collection) {
+      throw Object.assign(new Error('Collection not found'), { status: 404 });
+    }
+
     const { error } = await supabaseAdmin.from('collection_items').insert({
       collection_id: req.params.id,
       product_id,
@@ -403,6 +414,17 @@ router.delete(
   '/me/collections/:id/items/:productId',
   requireRole('shopper'),
   asyncHandler(async (req, res) => {
+    // Verify the collection belongs to the requesting shopper
+    const { data: collection } = await supabaseAdmin
+      .from('collections')
+      .select('id')
+      .eq('id', req.params.id)
+      .eq('shopper_id', req.userId)
+      .single();
+    if (!collection) {
+      throw Object.assign(new Error('Collection not found'), { status: 404 });
+    }
+
     await supabaseAdmin
       .from('collection_items')
       .delete()

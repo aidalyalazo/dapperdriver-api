@@ -141,9 +141,34 @@ const listOrders = asyncHandler(async (req, res) => {
 
 /**
  * GET /api/v1/orders/:id
+ * Ownership enforced: shoppers see only their own orders, boutiques only theirs,
+ * drivers only orders assigned to them. Admins see all.
  */
 const getOrder = asyncHandler(async (req, res) => {
   const order = await orderService.getOrder(req.params.id);
+  if (!order) throw Object.assign(new Error('Order not found'), { status: 404 });
+
+  const role = req.user?.user_metadata?.role;
+  if (role !== 'admin') {
+    const { supabaseAdmin } = require('../config/supabase');
+    const userId = req.userId;
+    let authorized = false;
+
+    if (role === 'shopper') {
+      authorized = order.shopper_id === userId;
+    } else if (role === 'boutique') {
+      const { data: boutique } = await supabaseAdmin
+        .from('boutiques').select('id').eq('user_id', userId).single();
+      authorized = boutique && order.boutique_id === boutique.id;
+    } else if (role === 'driver') {
+      authorized = order.driver_id === userId;
+    }
+
+    if (!authorized) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+  }
+
   res.json(order);
 });
 

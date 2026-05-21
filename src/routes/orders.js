@@ -9,10 +9,10 @@ router.use(authenticate);
 router.post('/', requireRole('shopper'), ctrl.createOrder);
 
 // GET    /api/v1/orders                    — List orders (filtered by role)
-router.get('/', ctrl.listOrders);
+router.get('/', requireRole('shopper', 'boutique', 'driver', 'admin'), ctrl.listOrders);
 
-// GET    /api/v1/orders/:id                — Get single order (all roles)
-router.get('/:id', ctrl.getOrder);
+// GET    /api/v1/orders/:id                — Get single order (ownership enforced per role)
+router.get('/:id', requireRole('shopper', 'boutique', 'driver', 'admin'), ctrl.getOrder);
 
 // PATCH  /api/v1/orders/:id/status         — Advance status (boutique / driver / admin / shopper for pickup)
 router.patch('/:id/status', requireRole('boutique', 'driver', 'admin', 'shopper'), ctrl.updateStatus);
@@ -119,18 +119,36 @@ router.post(
     const oldTip = parseFloat(order.tip || 0);
     const newTip = oldTip + amount;
 
-    // Capture payment intent with updated amount (if not already captured)
+    // The original PaymentIntent is already captured at delivery.
+    // Tips are billed as a separate charge on the customer's saved payment method.
     try {
-      const newAmountCents = Math.round(newTip * 100);
-      await stripe.paymentIntents.capture(order.stripe_payment_intent_id, {
-        amount_to_capture: newAmountCents,
-      });
+      const tipCents = Math.round(amount * 100);
+
+      // Retrieve original PI to get the payment method used for this order.
+      const originalPi = await stripe.paymentIntents.retrieve(order.stripe_payment_intent_id);
+      const paymentMethod = originalPi.payment_method;
+      const customerId = originalPi.customer;
+
+      if (paymentMethod && customerId) {
+        await stripe.paymentIntents.create({
+          amount: tipCents,
+          currency: 'usd',
+          customer: customerId,
+          payment_method: paymentMethod,
+          confirm: true,
+          off_session: true,
+          description: `Tip for DapperDriver order ${orderId}`,
+          metadata: { order_id: orderId, type: 'tip' },
+        });
+      } else {
+        console.warn('[ORDER] Tip: no payment method on original PI, skipping Stripe charge');
+      }
     } catch (e) {
-      // Intent may already be captured; that's ok
-      console.warn('[ORDER] Tip capture warning:', e.message);
+      console.warn('[ORDER] Tip charge failed:', e.message);
+      // Record tip in DB regardless — reconcile in next payout cycle.
     }
 
-    // Update order
+    // Update order record with cumulative tip
     await supabaseAdmin
       .from('orders')
       .update({ tip: newTip })
