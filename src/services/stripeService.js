@@ -146,33 +146,35 @@ async function createOrderPaymentIntent({ order, shopperId }) {
 
   const totalCents = Math.round(order.total_amount * 100);
 
-  // Create an ephemeral key so Flutter's payment sheet can load saved cards
-  let ephemeralKey = null;
-  try {
-    ephemeralKey = await stripe.ephemeralKeys.create(
+  // Create ephemeral key and PaymentIntent in parallel — they're independent
+  const [ephemeralKey, paymentIntent] = await Promise.all([
+    // Ephemeral key (lets Flutter's payment sheet load saved cards)
+    stripe.ephemeralKeys.create(
       { customer: customerId },
       { apiVersion: '2024-06-20' }
-    );
-  } catch (e) {
-    console.warn('[Stripe] Ephemeral key creation failed:', e.message);
-  }
+    ).catch((e) => {
+      console.warn('[Stripe] Ephemeral key creation failed:', e.message);
+      return null;
+    }),
 
-  const paymentIntent = await stripe.paymentIntents.create(
-    {
-      amount:         totalCents,
-      currency:       'usd',
-      customer:       customerId,
-      capture_method: 'manual',          // hold funds; capture on delivery
-      automatic_payment_methods: { enabled: true, allow_redirects: 'never' },
-      metadata: {
-        order_id:    order.id,
-        boutique_id: order.boutique_id,
-        shopper_id:  shopperId,
+    // PaymentIntent (hold funds; capture on delivery)
+    stripe.paymentIntents.create(
+      {
+        amount:         totalCents,
+        currency:       'usd',
+        customer:       customerId,
+        capture_method: 'manual',
+        automatic_payment_methods: { enabled: true, allow_redirects: 'never' },
+        metadata: {
+          order_id:    order.id,
+          boutique_id: order.boutique_id,
+          shopper_id:  shopperId,
+        },
       },
-    },
-    // Idempotency key: safe to retry — will not create duplicate charges
-    { idempotencyKey: `order_${order.id}_pi` }
-  );
+      // Idempotency key: safe to retry — will not create duplicate charges
+      { idempotencyKey: `order_${order.id}_pi` }
+    ),
+  ]);
 
   // Attach ephemeral key and customer so Flutter payment sheet can initialise
   paymentIntent._ephemeralKeySecret = ephemeralKey?.secret || null;
