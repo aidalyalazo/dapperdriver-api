@@ -24,6 +24,7 @@ const promosRouter = require('./routes/promos');
 const supportRouter = require('./routes/support');
 const hotspotsRouter = require('./routes/hotspots');
 const socialRouter = require('./routes/social');
+const editorialsRouter = require('./routes/editorials');
 
 // Jobs
 require('./jobs/mondayPayouts');
@@ -39,6 +40,9 @@ app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 
 // ── CORS ───────────────────────────────────────────────────────────────────
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || '').split(',').filter(Boolean);
+if (!allowedOrigins.length) {
+  console.warn('[SECURITY] ALLOWED_ORIGINS env var is not set — CORS is open to all origins (*). Set ALLOWED_ORIGINS in Railway before production launch.');
+}
 app.use(cors({
   origin: allowedOrigins.length ? allowedOrigins : '*',
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
@@ -81,6 +85,7 @@ app.use('/api/v1/promos', promosRouter);
 app.use('/api/v1/support', supportRouter);
 app.use('/api/v1/hotspots', hotspotsRouter);
 app.use('/api/v1/social', socialRouter);
+app.use('/api/v1/editorials', editorialsRouter);
 
 // ── 404 ────────────────────────────────────────────────────────────────────
 app.use((_req, res) => res.status(404).json({ error: 'Route not found' }));

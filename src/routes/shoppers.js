@@ -640,6 +640,47 @@ router.get(
 );
 
 /**
+ * GET /api/v1/shoppers/me/following-feed
+ *
+ * Returns published editorials from all boutiques this shopper follows,
+ * sorted newest-first. Only surface-level metadata is returned here (no full
+ * content) — the Flutter client fetches full content from GET /editorials/:id
+ * when the reader is opened.
+ */
+router.get(
+  '/me/following-feed',
+  requireRole('shopper'),
+  asyncHandler(async (req, res) => {
+    // 1. Get the boutique IDs this shopper follows
+    const { data: follows, error: followError } = await supabaseAdmin
+      .from('boutique_follows')
+      .select('boutique_id')
+      .eq('shopper_id', req.userId);
+
+    if (followError) throw new Error(followError.message);
+
+    const boutiqueIds = (follows || []).map((f) => f.boutique_id).filter(Boolean);
+
+    if (boutiqueIds.length === 0) {
+      return res.json({ data: [] });
+    }
+
+    // 2. Fetch published editorials from those boutiques
+    const { data: editorials, error } = await supabaseAdmin
+      .from('editorials')
+      .select('id, title, subtitle, cover_image_url, published_at, boutique_id, boutiques(id, name, logo_url, logo_bg, logo_initials)')
+      .in('boutique_id', boutiqueIds)
+      .eq('published', true)
+      .order('published_at', { ascending: false })
+      .limit(30);
+
+    if (error) throw new Error(error.message);
+
+    res.json({ data: editorials || [] });
+  })
+);
+
+/**
  * GET /api/v1/shoppers/me/referral-code
  */
 router.get(
