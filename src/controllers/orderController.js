@@ -7,9 +7,15 @@ const stripeService = require('../services/stripeService');
 // ── Validation chains ─────────────────────────────────────────────────────
 
 const createOrderValidation = [
-  body('boutique_id').isUUID().withMessage('boutique_id must be a UUID'),
+  // Use format-only UUID regex so seed/test boutiques with non-RFC-4122 variant bits still pass.
+  // Real Supabase-generated UUIDs are always valid; strict isUUID() rejects seeded test IDs.
+  body('boutique_id')
+    .matches(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)
+    .withMessage('boutique_id must be a UUID'),
   body('items').isArray({ min: 1 }).withMessage('items must be a non-empty array'),
-  body('items.*.product_id').isUUID().withMessage('Each item must have a valid product_id'),
+  body('items.*.product_id')
+    .matches(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)
+    .withMessage('Each item must have a valid product_id'),
   body('items.*.quantity').isInt({ min: 1 }).withMessage('quantity must be ≥ 1'),
   body('items.*.unit_price').isFloat({ min: 0.01 }).withMessage('unit_price must be > 0'),
   body('fulfillment_type')
