@@ -22,6 +22,10 @@ router.post(
       .eq('user_id', req.userId)
       .single();
 
+    if (!boutique) {
+      return res.status(404).json({ error: 'Boutique not found' });
+    }
+
     if (boutique.stripe_account_id) {
       // Already has account — just return a fresh onboarding link
       const link = await stripeService.createAccountLink({

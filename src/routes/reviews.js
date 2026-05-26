@@ -134,16 +134,17 @@ router.get(
 
     if (error) throw new Error(error.message);
 
-    // Hydrate shopper info separately (since FK is to auth.users, not shoppers)
+    // Hydrate shopper info separately. reviews.shopper_id is the auth UUID,
+    // which maps to shoppers.user_id (not shoppers.id).
     const shopperIds = [...new Set((rawReviews || []).map(r => r.shopper_id))];
     let shoppersMap = {};
     if (shopperIds.length > 0) {
       const { data: shoppers } = await supabaseAdmin
         .from('shoppers')
-        .select('id, display_name, avatar_url')
-        .in('id', shopperIds);
+        .select('user_id, display_name, avatar_url')
+        .in('user_id', shopperIds);
       if (shoppers) {
-        shoppersMap = Object.fromEntries(shoppers.map(s => [s.id, s]));
+        shoppersMap = Object.fromEntries(shoppers.map(s => [s.user_id, s]));
       }
     }
 

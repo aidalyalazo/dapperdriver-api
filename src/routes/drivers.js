@@ -275,14 +275,14 @@ router.patch(
     const driverId = await getDriverId(req.userId);
     const { orderId } = req.params;
 
-    const isDecline = req.body.status === 'confirmed' || req.body.status === 'ready';
     const { data, error } = await supabaseAdmin
       .from('orders')
       .update({
         status: req.body.status,
         updated_at: new Date().toISOString(),
         ...(req.body.status === 'delivered' ? { delivered_at: new Date().toISOString() } : {}),
-        ...(isDecline ? { driver_id: null, driver_assigned_at: null } : {}),
+        // Note: do NOT clear driver_id on any forward-progress status transition.
+        // A separate decline endpoint would handle unassigning a driver if needed.
       })
       .eq('id', orderId)
       .eq('driver_id', driverId)

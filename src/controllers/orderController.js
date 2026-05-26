@@ -158,7 +158,7 @@ const getOrder = asyncHandler(async (req, res) => {
       authorized = order.shopper_id === userId;
     } else if (role === 'boutique') {
       const { data: boutique } = await supabaseAdmin
-        .from('boutiques').select('id').eq('user_id', userId).single();
+        .from('boutiques').select('id').eq('user_id', userId).maybeSingle();
       authorized = boutique && order.boutique_id === boutique.id;
     } else if (role === 'driver') {
       authorized = order.driver_id === userId;
@@ -224,7 +224,7 @@ const updateStatus = [
         .from('boutiques')
         .select('id')
         .eq('user_id', req.userId)
-        .single();
+        .maybeSingle();
       if (!boutique || boutique.id !== order.boutique_id) {
         return res.status(403).json({ error: 'Forbidden' });
       }
@@ -236,7 +236,7 @@ const updateStatus = [
         .from('drivers')
         .select('id')
         .eq('user_id', req.userId)
-        .single();
+        .maybeSingle();
       if (!driver || driver.id !== order.driver_id) {
         return res.status(403).json({ error: 'Forbidden' });
       }

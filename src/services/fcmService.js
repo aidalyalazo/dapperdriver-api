@@ -78,7 +78,8 @@ async function sendOrderNotification({ tokens, title, body, orderId }) {
  * @param {{ orderId: string, cityId: string }} params
  */
 async function notifyAvailableDrivers({ orderId, cityId }) {
-  const query = supabaseAdmin
+  // Supabase query builder is immutable — must reassign to chain conditionally.
+  let query = supabaseAdmin
     .from('drivers')
     .select('push_token')
     .eq('is_approved', true)
@@ -86,7 +87,7 @@ async function notifyAvailableDrivers({ orderId, cityId }) {
 
   // Filter by city_id if provided
   if (cityId) {
-    query.eq('city_id', cityId);
+    query = query.eq('city_id', cityId);
   }
 
   const { data: drivers } = await query.catch(() => ({ data: [] }));

@@ -369,11 +369,24 @@ async function updateOrderStatus({ orderId, newStatus, actorId, driverId }) {
   if (newStatus === 'delivered' || newStatus === 'completed') {
     try {
       if (order.stripe_payment_intent_id) {
-        await stripe.paymentIntents.capture(order.stripe_payment_intent_id);
+        // Only capture if PI is still in requires_capture state; skip if already captured.
+        const pi = await stripe.paymentIntents.retrieve(order.stripe_payment_intent_id);
+        if (pi.status === 'requires_capture') {
+          await stripe.paymentIntents.capture(order.stripe_payment_intent_id);
+        } else {
+          console.info(`[ORDER] PI ${pi.id} already in state '${pi.status}' — skipping capture`);
+        }
       }
 
       const { transferToBoutique } = require('./stripeService');
-      await transferToBoutique(order).catch(() => {});
+      await transferToBoutique(order).catch((err) => {
+        // Log failure so ops team can manually trigger the payout — never silently drop.
+        console.error('[ORDER] transferToBoutique failed — MANUAL PAYOUT REQUIRED', {
+          orderId:    order.id,
+          boutiqueId: order.boutique_id,
+          error:      err.message,
+        });
+      });
     } catch (e) {
       console.warn('[ORDER] Payment capture on delivery/completion failed:', e.message);
     }

@@ -19,12 +19,13 @@ router.post(
     const { supabaseAdmin } = require('../config/supabase');
     const { code, order_total } = req.body;
 
-    // Look up promo by code (case-insensitive)
+    // Look up promo by code (case-insensitive). Use maybeSingle so an
+    // unknown code returns null instead of a PostgrestError (PGRST116).
     const { data: promo } = await supabaseAdmin
       .from('promos')
       .select('*')
       .ilike('code', code)
-      .single();
+      .maybeSingle();
 
     if (!promo) {
       return res.status(404).json({ valid: false, error: 'Promo code not found' });

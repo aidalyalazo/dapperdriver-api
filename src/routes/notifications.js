@@ -14,13 +14,11 @@ router.use(authenticate);
 router.get(
   '/',
   asyncHandler(async (req, res) => {
-    const role = req.user?.user_metadata?.role;
-    const idField = role === 'shopper' ? 'user_id' : 'id';
-
+    // notifications.user_id is always the recipient's auth UUID for every role.
     const { data, error } = await supabaseAdmin
       .from('notifications')
       .select('*')
-      .eq(idField, req.userId)
+      .eq('user_id', req.userId)
       .order('created_at', { ascending: false })
       .limit(50);
 
@@ -36,14 +34,11 @@ router.get(
 router.patch(
   '/:id/read',
   asyncHandler(async (req, res) => {
-    const role = req.user?.user_metadata?.role;
-    const idField = role === 'shopper' ? 'user_id' : 'id';
-
     const { error } = await supabaseAdmin
       .from('notifications')
       .update({ is_read: true })
       .eq('id', req.params.id)
-      .eq(idField, req.userId); // ownership check
+      .eq('user_id', req.userId); // ownership check
 
     if (error) throw new Error(error.message);
     res.json({ message: 'Marked as read.' });
@@ -57,13 +52,10 @@ router.patch(
 router.post(
   '/mark-all-read',
   asyncHandler(async (req, res) => {
-    const role = req.user?.user_metadata?.role;
-    const idField = role === 'shopper' ? 'user_id' : 'id';
-
     await supabaseAdmin
       .from('notifications')
       .update({ is_read: true })
-      .eq(idField, req.userId)
+      .eq('user_id', req.userId)
       .eq('is_read', false);
 
     res.json({ message: 'All notifications marked as read.' });
