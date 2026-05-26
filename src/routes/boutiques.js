@@ -37,7 +37,18 @@ router.get(
       .range((page - 1) * limit, page * limit - 1);
 
     if (status)   q = q.eq('status', status);
-    if (search)   q = q.or(`name.ilike.%${search}%,description.ilike.%${search}%,primary_category.ilike.%${search}%`);
+    // Search boutique name, description, primary category, and category/style tag arrays.
+    // category_tags.cs.{X} = "array contains X" (exact match, case-sensitive).
+    // Works when tags are stored in consistent casing (e.g. "Dresses", "Tops").
+    if (search) {
+      const capitalized = search.charAt(0).toUpperCase() + search.slice(1).toLowerCase();
+      q = q.or(
+        `name.ilike.%${search}%,description.ilike.%${search}%,` +
+        `primary_category.ilike.%${search}%,` +
+        `category_tags.cs.{${capitalized}},` +
+        `style_tags.cs.{${capitalized}}`
+      );
+    }
     if (city) {
       // Filter strictly by city_id — all boutiques have city_id set.
       // The previous address-fallback approach broke when city names contained
