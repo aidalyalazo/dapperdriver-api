@@ -4,6 +4,28 @@ const { authenticate } = require('../middleware/auth');
 const { supabaseAdmin } = require('../config/supabase');
 
 /**
+ * GET /api/v1/editorials
+ * List recent published editorials — shown on the home dashboard for all shoppers.
+ */
+router.get(
+  '/',
+  authenticate,
+  asyncHandler(async (req, res) => {
+    const limit = Math.min(parseInt(req.query.limit) || 10, 20);
+
+    const { data, error } = await supabaseAdmin
+      .from('editorials')
+      .select('id, title, subtitle, cover_image_url, published_at, boutique_id, boutiques(id, name, logo_url, logo_bg, logo_initials)')
+      .eq('published', true)
+      .order('published_at', { ascending: false })
+      .limit(limit);
+
+    if (error) throw new Error(error.message);
+    res.json({ data: data ?? [] });
+  })
+);
+
+/**
  * GET /api/v1/editorials/:id
  *
  * Returns a single published editorial with its boutique info and all product
