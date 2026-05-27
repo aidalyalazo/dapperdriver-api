@@ -158,13 +158,18 @@ async function createOrderPaymentIntent({ order, shopperId }) {
     }),
 
     // PaymentIntent (hold funds; capture on delivery)
+    // payment_method_types: ['card'] explicitly restricts to card-only.
+    // This prevents Apple Pay / wallets from silently completing payments
+    // via Face ID/Touch ID without the shopper consciously entering card
+    // details. Wallets can be re-enabled post-launch once the explicit
+    // payment confirmation UX is designed.
     stripe.paymentIntents.create(
       {
-        amount:         totalCents,
-        currency:       'usd',
-        customer:       customerId,
-        capture_method: 'manual',
-        automatic_payment_methods: { enabled: true, allow_redirects: 'never' },
+        amount:               totalCents,
+        currency:             'usd',
+        customer:             customerId,
+        capture_method:       'manual',
+        payment_method_types: ['card'],
         metadata: {
           order_id:    order.id,
           boutique_id: order.boutique_id,
