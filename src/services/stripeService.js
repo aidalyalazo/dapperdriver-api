@@ -158,18 +158,16 @@ async function createOrderPaymentIntent({ order, shopperId }) {
     }),
 
     // PaymentIntent (hold funds; capture on delivery)
-    // automatic_payment_methods enables card + Apple Pay + Google Pay.
-    // allow_redirects: 'never' blocks bank-redirect methods (iDEAL etc.)
-    // that would take the user outside the app — not suitable for mobile.
-    // Apple Pay requires the user to explicitly tap the Apple Pay button
-    // then authenticate with Face ID/Touch ID — it never silently charges.
+    // Locked to 'card' until Apple Pay merchant ID is registered at
+    // developer.apple.com and added to Stripe + iOS entitlements.
+    // Switching to automatic_payment_methods later is a one-line change here.
     stripe.paymentIntents.create(
       {
-        amount:         totalCents,
-        currency:       'usd',
-        customer:       customerId,
-        capture_method: 'manual',
-        automatic_payment_methods: { enabled: true, allow_redirects: 'never' },
+        amount:               totalCents,
+        currency:             'usd',
+        customer:             customerId,
+        capture_method:       'manual',
+        payment_method_types: ['card'],
         metadata: {
           order_id:    order.id,
           boutique_id: order.boutique_id,

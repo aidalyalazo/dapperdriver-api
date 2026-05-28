@@ -85,12 +85,24 @@ const createOrder = [
       ephemeralKeySecret = paymentIntent._ephemeralKeySecret || null;
       stripeCustomerId = paymentIntent._customerId || null;
 
+      console.log('[ORDER] PI created:', paymentIntentId, '— clientSecret present:', !!clientSecret);
+
       // 3. Persist payment intent id on order
       await require('../config/supabase').supabaseAdmin
         .from('orders')
         .update({ stripe_payment_intent_id: paymentIntentId })
         .eq('id', order.id);
     } catch (stripeErr) {
+      // Always log the full Stripe error for Railway debugging
+      console.error('[ORDER] Stripe PaymentIntent creation failed:', {
+        orderId: order.id,
+        amount: order.total_amount,
+        error: stripeErr.message,
+        type: stripeErr.type,
+        code: stripeErr.code,
+        stripeErrRaw: stripeErr.raw?.message,
+      });
+
       // If Stripe is not configured (no STRIPE_SECRET_KEY), skip payment — MVP mode.
       // If Stripe IS configured but failed, cancel the ghost order and surface the error.
       const stripeConfigured = !!process.env.STRIPE_SECRET_KEY &&
@@ -103,8 +115,8 @@ const createOrder = [
           actorId: 'system-stripe-failure',
         }).catch(() => {});
         return res.status(402).json({
-          error: 'Payment setup failed. Please try again.',
-          details: stripeErr.message,
+          error: stripeErr.message || 'Payment setup failed. Please try again.',
+          details: stripeErr.code || stripeErr.type,
         });
       }
       console.warn('[ORDER] Stripe payment skipped (not configured):', stripeErr.message);
