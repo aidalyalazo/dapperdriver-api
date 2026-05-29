@@ -47,9 +47,10 @@ router.post(
           console.log(`[WEBHOOK] PI authorized — amount_capturable: $${(pi.amount_capturable / 100).toFixed(2)}, order: ${orderId}`);
 
           // Mark payment as authorized (pre-auth hold on card)
+          // NOTE: payment_confirmed_at column added in migration v2 — included once that runs.
           await supabaseAdmin
             .from('orders')
-            .update({ payment_status: 'authorized', payment_confirmed_at: new Date().toISOString() })
+            .update({ payment_status: 'authorized' })
             .eq('id', orderId);
 
           // Advance order from 'pending' → 'confirmed'
@@ -77,9 +78,10 @@ router.post(
           if (!orderId) break;
 
           // Mark order as fully paid
+          // NOTE: payment_confirmed_at column added in migration v2.
           await supabaseAdmin
             .from('orders')
-            .update({ payment_status: 'paid', payment_confirmed_at: new Date().toISOString() })
+            .update({ payment_status: 'paid' })
             .eq('id', orderId);
 
           // Advance order to 'confirmed' if it somehow never got confirmed
