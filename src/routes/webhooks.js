@@ -30,19 +30,60 @@ router.post(
     try {
       switch (event.type) {
 
-        // ── Payment succeeded ─────────────────────────────────────────────
+        // ── Payment authorized (manual-capture flow) ──────────────────────
+        // With capture_method:'manual', the PI enters 'requires_capture' after
+        // the shopper confirms their card. Stripe fires THIS event — not
+        // payment_intent.succeeded — at that point. The actual capture (and
+        // payment_intent.succeeded) happens later when the driver marks
+        // the order as delivered and the server calls capturePaymentIntent().
+        case 'payment_intent.amount_capturable_updated': {
+          const pi = event.data.object;
+          const orderId = pi.metadata?.order_id;
+          if (!orderId) break;
+
+          // Only act when the PI just became capturable (i.e. card authorised)
+          if (pi.status !== 'requires_capture') break;
+
+          console.log(`[WEBHOOK] PI authorized — amount_capturable: $${(pi.amount_capturable / 100).toFixed(2)}, order: ${orderId}`);
+
+          // Mark payment as authorized (pre-auth hold on card)
+          await supabaseAdmin
+            .from('orders')
+            .update({ payment_status: 'authorized', payment_confirmed_at: new Date().toISOString() })
+            .eq('id', orderId);
+
+          // Advance order from 'pending' → 'confirmed'
+          const { data: pendingOrder } = await supabaseAdmin
+            .from('orders')
+            .select('status')
+            .eq('id', orderId)
+            .single();
+
+          if (pendingOrder?.status === 'pending') {
+            await orderService.updateOrderStatus({
+              orderId,
+              newStatus: 'confirmed',
+              actorId:   'stripe-webhook',
+            });
+            console.log(`[WEBHOOK] Order ${orderId} advanced to confirmed`);
+          }
+          break;
+        }
+
+        // ── Payment fully captured (delivery completed) ───────────────────
         case 'payment_intent.succeeded': {
           const pi = event.data.object;
           const orderId = pi.metadata?.order_id;
           if (!orderId) break;
 
-          // Mark order as payment confirmed
+          // Mark order as fully paid
           await supabaseAdmin
             .from('orders')
             .update({ payment_status: 'paid', payment_confirmed_at: new Date().toISOString() })
             .eq('id', orderId);
 
-          // Advance order to 'confirmed' if still pending
+          // Advance order to 'confirmed' if it somehow never got confirmed
+          // (e.g. if amount_capturable_updated was missed)
           const { data: order } = await supabaseAdmin
             .from('orders')
             .select('status')
