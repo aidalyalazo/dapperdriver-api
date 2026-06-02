@@ -122,11 +122,20 @@ const createOrder = [
       console.warn('[ORDER] Stripe payment skipped (not configured):', stripeErr.message);
     }
 
+    // Pull delivery estimate metadata attached by orderService (not a DB column)
+    const estimate = order._deliveryEstimate || {};
+    delete order._deliveryEstimate;
+
     res.status(201).json({
       order: { ...order, stripe_payment_intent_id: paymentIntentId },
       client_secret: clientSecret,
       ephemeral_key_secret: ephemeralKeySecret,
       customer_id: stripeCustomerId,
+      // Delivery timing — used by Flutter to show estimated window + outside-hours warning
+      estimated_delivery_at: estimate.estimatedAt?.toISOString() || null,
+      is_outside_hours: estimate.isOutsideHours || false,
+      next_open_time: estimate.nextOpenTime || null,
+      queue_depth: estimate.queueDepth ?? 0,
     });
   }),
 ];

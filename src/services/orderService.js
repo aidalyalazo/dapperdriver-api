@@ -50,6 +50,117 @@ const STATUS_NOTIFICATIONS = {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
+ * Calculate estimated delivery time based on boutique hours + active queue depth.
+ *
+ * Rules:
+ *  - Base delivery window: 45 minutes from now (prep + drive time).
+ *  - Each extra order already in queue for this boutique adds 15 minutes.
+ *  - If the boutique is currently closed, the clock starts at next opening time.
+ *  - Returns { estimatedAt: Date, isOutsideHours: bool, nextOpenTime: string|null, queueDepth: number }
+ */
+async function calculateEstimatedDelivery(boutiqueId) {
+  const BASE_MINUTES   = 45;  // minimum delivery time in minutes
+  const PER_ORDER_MINS = 15;  // extra minutes per queued order
+
+  // Fetch today's hours + active queue in parallel
+  const now       = new Date();
+  const dayOfWeek = now.getDay(); // 0 = Sunday
+
+  const [{ data: hoursRows }, { count: queueDepth }] = await Promise.all([
+    supabaseAdmin
+      .from('boutique_hours')
+      .select('day_of_week, open_time, close_time, is_closed')
+      .eq('boutique_id', boutiqueId),
+    supabaseAdmin
+      .from('orders')
+      .select('id', { count: 'exact', head: true })
+      .eq('boutique_id', boutiqueId)
+      .in('status', ['pending', 'confirmed', 'preparing']),
+  ]);
+
+  const depth = queueDepth || 0;
+  const totalExtraMinutes = depth * PER_ORDER_MINS;
+
+  // Find today's hours row
+  const todayHours = (hoursRows || []).find((r) => r.day_of_week === dayOfWeek);
+  const isClosedToday = !todayHours || todayHours.is_closed || !todayHours.open_time || !todayHours.close_time;
+
+  // Parse "HH:MM:SS" time string to today's Date object
+  function todayAt(timeStr) {
+    const [h, m] = timeStr.split(':').map(Number);
+    const d = new Date(now);
+    d.setHours(h, m, 0, 0);
+    return d;
+  }
+
+  let isOutsideHours = false;
+  let nextOpenTime   = null;
+  let clockStart     = new Date(now); // when the delivery clock starts ticking
+
+  if (!isClosedToday) {
+    const openTime  = todayAt(todayHours.open_time);
+    const closeTime = todayAt(todayHours.close_time);
+
+    if (now < openTime) {
+      // Too early — order queues for opening time
+      isOutsideHours = true;
+      clockStart     = openTime;
+      nextOpenTime   = todayHours.open_time.slice(0, 5); // "HH:MM"
+    } else if (now >= closeTime) {
+      // After close — find next open day
+      isOutsideHours = true;
+      const sorted = (hoursRows || [])
+        .filter((r) => !r.is_closed && r.open_time)
+        .sort((a, b) => {
+          const da = (a.day_of_week - dayOfWeek + 7) % 7 || 7;
+          const db = (b.day_of_week - dayOfWeek + 7) % 7 || 7;
+          return da - db;
+        });
+      if (sorted.length > 0) {
+        const next       = sorted[0];
+        const daysAhead  = (next.day_of_week - dayOfWeek + 7) % 7 || 7;
+        clockStart       = new Date(now);
+        clockStart.setDate(clockStart.getDate() + daysAhead);
+        const [nh, nm]   = next.open_time.split(':').map(Number);
+        clockStart.setHours(nh, nm, 0, 0);
+        const dayNames   = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+        nextOpenTime     = `${dayNames[next.day_of_week]} at ${next.open_time.slice(0, 5)}`;
+      }
+    }
+    // else: currently open — clockStart stays as now
+  } else {
+    // Boutique closed all day today — find next open day
+    isOutsideHours = true;
+    const sorted = (hoursRows || [])
+      .filter((r) => !r.is_closed && r.open_time)
+      .sort((a, b) => {
+        const da = (a.day_of_week - dayOfWeek + 7) % 7 || 7;
+        const db = (b.day_of_week - dayOfWeek + 7) % 7 || 7;
+        return da - db;
+      });
+    if (sorted.length > 0) {
+      const next      = sorted[0];
+      const daysAhead = (next.day_of_week - dayOfWeek + 7) % 7 || 7;
+      clockStart      = new Date(now);
+      clockStart.setDate(clockStart.getDate() + daysAhead);
+      const [nh, nm]  = next.open_time.split(':').map(Number);
+      clockStart.setHours(nh, nm, 0, 0);
+      const dayNames  = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+      nextOpenTime    = `${dayNames[next.day_of_week]} at ${next.open_time.slice(0, 5)}`;
+    }
+  }
+
+  // Delivery = clock start + base + queue backlog, capped at 2h for after-hours queue
+  const deliveryOffsetMins = isOutsideHours
+    ? Math.min(BASE_MINUTES + totalExtraMinutes, 120)  // within 2h of opening
+    : BASE_MINUTES + totalExtraMinutes;
+
+  const estimatedAt = new Date(clockStart.getTime() + deliveryOffsetMins * 60 * 1000);
+
+  return { estimatedAt, isOutsideHours, nextOpenTime, queueDepth: depth };
+}
+
+/**
  * Create a new order with all required fields and calculations.
  *
  * Performance: all independent DB/settings lookups are parallelised with
@@ -83,12 +194,16 @@ async function createOrder({
     driverPayoutSetting,
     pickupCommissionSetting,
   ] = await Promise.all([
-    // Server-side prices — never trust client-submitted unit_price
+    // Server-side prices — never trust client-submitted unit_price.
+    // Products table stores images as an array column named 'images', not 'image_url'.
     supabaseAdmin.from('products')
-      .select('id, name, price, image_url')
+      .select('id, name, price, images')
       .in('id', productIds)
-      .then((r) => r.data || [])
-      .catch(() => []),
+      .then((r) => {
+        if (r.error) console.error('[ORDER] Products query failed:', r.error.message);
+        return r.data || [];
+      })
+      .catch((e) => { console.error('[ORDER] Products query exception:', e.message); return []; }),
 
     // City id + tax_rate in ONE query (replaces the separate city + getTaxRate calls)
     cityName
@@ -203,7 +318,10 @@ async function createOrder({
           .filter(Boolean).join(', ')
       : (deliveryAddress || '');
 
-  // ── Phase 3: DB inserts (must be sequential) ──────────────────────────────
+  // ── Phase 3: Estimated delivery + DB inserts ─────────────────────────────
+  // Calculate estimated delivery considering boutique hours + active queue.
+  const deliveryEstimate = await calculateEstimatedDelivery(boutiqueId);
+
   const { data: order, error } = await supabaseAdmin
     .from('orders')
     .insert({
@@ -224,6 +342,7 @@ async function createOrder({
       delivery_notes: notes || null,
       promo_id: promoId,
       fulfillment_type: fulfillmentType,
+      estimated_delivery_at: deliveryEstimate.estimatedAt.toISOString(),
     })
     .select()
     .single();
@@ -232,9 +351,16 @@ async function createOrder({
     throw Object.assign(new Error(error.message), { status: 400 });
   }
 
+  // Attach delivery estimate metadata to the order object for the controller
+  order._deliveryEstimate = deliveryEstimate;
+
   // Insert order items (DB requires name + price as NOT NULL)
   const orderItems = validatedItems.map((i) => {
     const product = trustedProductsMap[i.product_id] || {};
+    // products.images is an array — take first element as the display image
+    const imageUrl = Array.isArray(product.images) && product.images.length > 0
+      ? product.images[0]
+      : (typeof product.images === 'string' ? product.images : null);
     return {
       order_id: order.id,
       product_id: i.product_id,
@@ -243,7 +369,7 @@ async function createOrder({
       qty: i.quantity,
       quantity: i.quantity,
       unit_price: i.unit_price,
-      image_url: product.image_url || null,
+      image_url: imageUrl,
       selected_size: i.selected_size || null,
       selected_color: i.selected_color || null,
     };

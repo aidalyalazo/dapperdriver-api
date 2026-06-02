@@ -83,6 +83,40 @@ router.get(
 );
 
 /**
+ * GET /api/v1/boutiques/:id/hours  (public)
+ * Returns all 7-day hours for a boutique plus queue stats for today.
+ * Used by checkout to warn shoppers ordering outside business hours.
+ */
+router.get(
+  '/:id/hours',
+  asyncHandler(async (req, res, next) => {
+    if (req.params.id === 'me') return next('route');
+    const boutiqueId = req.params.id;
+
+    // Fetch the boutique's weekly schedule
+    const { data: hours, error } = await supabaseAdmin
+      .from('boutique_hours')
+      .select('day_of_week, open_time, close_time, is_closed')
+      .eq('boutique_id', boutiqueId)
+      .order('day_of_week');
+
+    if (error) throw new Error(error.message);
+
+    // Count active orders in queue right now (pending/confirmed/preparing)
+    const { count: queueDepth } = await supabaseAdmin
+      .from('orders')
+      .select('id', { count: 'exact', head: true })
+      .eq('boutique_id', boutiqueId)
+      .in('status', ['pending', 'confirmed', 'preparing']);
+
+    res.json({
+      hours: hours || [],
+      queue_depth: queueDepth || 0,
+    });
+  })
+);
+
+/**
  * GET /api/v1/boutiques/:id/products  (public)
  */
 router.get(

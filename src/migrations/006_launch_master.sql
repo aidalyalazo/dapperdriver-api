@@ -409,3 +409,8 @@ ALTER TABLE drivers
 --
 --   SELECT tablename FROM pg_tables
 --   WHERE schemaname = 'public' ORDER BY tablename;
+
+-- Add estimated delivery time + queue tracking to orders
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS estimated_delivery_at TIMESTAMPTZ;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_confirmed_at TIMESTAMPTZ;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS refunded_at TIMESTAMPTZ;
