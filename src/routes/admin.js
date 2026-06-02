@@ -443,4 +443,413 @@ router.post(
   })
 );
 
+// ── Social / User-Generated Content Moderation ───────────────────────────────
+
+/**
+ * GET /api/v1/admin/social/posts
+ * List all outfit posts for moderation, newest first.
+ * Optional query: ?flagged=true (future: posts with reports)
+ */
+router.get(
+  '/social/posts',
+  asyncHandler(async (req, res) => {
+    const { limit = 50, offset = 0 } = req.query;
+
+    const { data, error, count } = await supabaseAdmin
+      .from('outfit_posts')
+      .select(
+        `id, caption, image_url, created_at, is_flagged,
+         shopper:shopper_id (user_id, display_name, avatar_url),
+         post_likes (count)`,
+        { count: 'exact' }
+      )
+      .order('created_at', { ascending: false })
+      .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
+
+    if (error) throw new Error(error.message);
+    res.json({ posts: data || [], total: count });
+  })
+);
+
+/**
+ * DELETE /api/v1/admin/social/posts/:id
+ * Remove any user-posted outfit image / post (moderation action).
+ */
+router.delete(
+  '/social/posts/:id',
+  [param('id').isUUID()],
+  validate,
+  asyncHandler(async (req, res) => {
+    const postId = req.params.id;
+
+    // Delete related records first
+    await Promise.all([
+      supabaseAdmin.from('post_product_tags').delete().eq('post_id', postId),
+      supabaseAdmin.from('post_likes').delete().eq('post_id', postId),
+    ]);
+
+    const { error } = await supabaseAdmin
+      .from('outfit_posts')
+      .delete()
+      .eq('id', postId);
+
+    if (error) throw new Error(error.message);
+
+    console.log(`[ADMIN] Post ${postId} removed by admin ${req.userId}`);
+    res.json({ deleted: true, post_id: postId });
+  })
+);
+
+/**
+ * PATCH /api/v1/admin/social/posts/:id/flag
+ * Flag a post for review without immediately deleting it.
+ */
+router.patch(
+  '/social/posts/:id/flag',
+  [param('id').isUUID(), body('is_flagged').isBoolean()],
+  validate,
+  asyncHandler(async (req, res) => {
+    const { data, error } = await supabaseAdmin
+      .from('outfit_posts')
+      .update({ is_flagged: req.body.is_flagged })
+      .eq('id', req.params.id)
+      .select()
+      .single();
+
+    if (error) throw new Error(error.message);
+    res.json(data);
+  })
+);
+
+// ── Boutique Media Management (admin view of any boutique) ───────────────────
+
+/**
+ * GET /api/v1/admin/boutiques/:id/media
+ * Returns logo, campaign_images, and hotspot count for a boutique.
+ */
+router.get(
+  '/boutiques/:id/media',
+  [param('id').isUUID()],
+  validate,
+  asyncHandler(async (req, res) => {
+    const boutiqueId = req.params.id;
+
+    const [boutiqueRes, hotspotRes] = await Promise.all([
+      supabaseAdmin
+        .from('boutiques')
+        .select('id, name, logo_url, campaign_images')
+        .eq('id', boutiqueId)
+        .single(),
+      supabaseAdmin
+        .from('product_image_hotspots')
+        .select('id, image_url, label', { count: 'exact' })
+        .eq('boutique_id', boutiqueId),
+    ]);
+
+    if (boutiqueRes.error) throw new Error('Boutique not found');
+
+    res.json({
+      ...boutiqueRes.data,
+      hotspot_count: hotspotRes.count || 0,
+      hotspots: hotspotRes.data || [],
+    });
+  })
+);
+
+/**
+ * PATCH /api/v1/admin/boutiques/:id/media
+ * Admin override: update logo_url or campaign_images for any boutique.
+ * Body: { logo_url?, campaign_images? }
+ */
+router.patch(
+  '/boutiques/:id/media',
+  [param('id').isUUID()],
+  validate,
+  asyncHandler(async (req, res) => {
+    const allowed = ['logo_url', 'campaign_images'];
+    const updates = Object.fromEntries(
+      Object.entries(req.body).filter(([k]) => allowed.includes(k))
+    );
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ error: 'Nothing to update. Allowed: logo_url, campaign_images' });
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('boutiques')
+      .update({ ...updates, updated_at: new Date().toISOString() })
+      .eq('id', req.params.id)
+      .select('id, name, logo_url, campaign_images')
+      .single();
+
+    if (error) throw new Error(error.message);
+    res.json(data);
+  })
+);
+
+/**
+ * DELETE /api/v1/admin/boutiques/:id/hotspots
+ * Clear ALL hotspots for a boutique (nuclear reset option for admin).
+ */
+router.delete(
+  '/boutiques/:id/hotspots',
+  [param('id').isUUID()],
+  validate,
+  asyncHandler(async (req, res) => {
+    const { count } = await supabaseAdmin
+      .from('product_image_hotspots')
+      .delete()
+      .eq('boutique_id', req.params.id)
+      .select('id', { count: 'exact' });
+
+    res.json({ deleted: count || 0 });
+  })
+);
+
+// ── Editorial Content Management ─────────────────────────────────────────────
+
+/**
+ * GET /api/v1/admin/editorials
+ * List all editorial articles.
+ */
+router.get(
+  '/editorials',
+  asyncHandler(async (req, res) => {
+    const { data, error } = await supabaseAdmin
+      .from('editorials')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) throw new Error(error.message);
+    res.json(data || []);
+  })
+);
+
+/**
+ * POST /api/v1/admin/editorials
+ * Create a new editorial.
+ * Body: { title, subtitle?, body_md, cover_image_url, tag?, is_published? }
+ */
+router.post(
+  '/editorials',
+  [
+    body('title').notEmpty().withMessage('title is required'),
+    body('body_md').notEmpty().withMessage('body_md is required'),
+    body('cover_image_url').notEmpty().withMessage('cover_image_url is required'),
+  ],
+  validate,
+  asyncHandler(async (req, res) => {
+    const { title, subtitle, body_md, cover_image_url, tag, is_published } = req.body;
+
+    const { data, error } = await supabaseAdmin
+      .from('editorials')
+      .insert({
+        title,
+        subtitle: subtitle || null,
+        body_md,
+        cover_image_url,
+        tag: tag || null,
+        is_published: is_published !== false,
+        created_by: req.userId,
+      })
+      .select()
+      .single();
+
+    if (error) throw new Error(error.message);
+    res.status(201).json(data);
+  })
+);
+
+/**
+ * PATCH /api/v1/admin/editorials/:id
+ * Update an editorial.
+ */
+router.patch(
+  '/editorials/:id',
+  [param('id').isUUID()],
+  validate,
+  asyncHandler(async (req, res) => {
+    const allowed = ['title', 'subtitle', 'body_md', 'cover_image_url', 'tag', 'is_published'];
+    const updates = Object.fromEntries(
+      Object.entries(req.body).filter(([k]) => allowed.includes(k))
+    );
+
+    const { data, error } = await supabaseAdmin
+      .from('editorials')
+      .update({ ...updates, updated_at: new Date().toISOString() })
+      .eq('id', req.params.id)
+      .select()
+      .single();
+
+    if (error) throw new Error(error.message);
+    res.json(data);
+  })
+);
+
+/**
+ * DELETE /api/v1/admin/editorials/:id
+ */
+router.delete(
+  '/editorials/:id',
+  [param('id').isUUID()],
+  validate,
+  asyncHandler(async (req, res) => {
+    const { error } = await supabaseAdmin
+      .from('editorials')
+      .delete()
+      .eq('id', req.params.id);
+
+    if (error) throw new Error(error.message);
+    res.json({ deleted: true });
+  })
+);
+
+// ── Order Queue Monitoring ────────────────────────────────────────────────────
+
+/**
+ * GET /api/v1/admin/queue
+ * Real-time queue depth per boutique — shows active orders and estimated
+ * backlog so ops can monitor busy periods and intervene if needed.
+ */
+router.get(
+  '/queue',
+  asyncHandler(async (req, res) => {
+    const { data: orders, error } = await supabaseAdmin
+      .from('orders')
+      .select(`
+        id, status, boutique_id, estimated_delivery_at, created_at,
+        boutique:boutique_id (name)
+      `)
+      .in('status', ['pending', 'confirmed', 'preparing', 'ready_for_pickup'])
+      .order('created_at', { ascending: true });
+
+    if (error) throw new Error(error.message);
+
+    // Group by boutique
+    const queues = {};
+    for (const order of (orders || [])) {
+      const bid  = order.boutique_id;
+      const name = order.boutique?.name || bid;
+      if (!queues[bid]) queues[bid] = { boutique_id: bid, boutique_name: name, orders: [] };
+      queues[bid].orders.push({
+        id: order.id,
+        status: order.status,
+        estimated_delivery_at: order.estimated_delivery_at,
+        created_at: order.created_at,
+      });
+    }
+
+    res.json({
+      queues: Object.values(queues).sort((a, b) => b.orders.length - a.orders.length),
+      total_active_orders: orders?.length || 0,
+    });
+  })
+);
+
+// ── Push Notification Broadcast ───────────────────────────────────────────────
+
+/**
+ * POST /api/v1/admin/notifications/broadcast
+ * Send a push notification to all shoppers, all boutiques, all drivers, or all.
+ * Body: { title, body, target: 'shoppers'|'boutiques'|'drivers'|'all', data? }
+ */
+router.post(
+  '/notifications/broadcast',
+  [
+    body('title').notEmpty(),
+    body('body').notEmpty(),
+    body('target').isIn(['shoppers', 'boutiques', 'drivers', 'all']),
+  ],
+  validate,
+  asyncHandler(async (req, res) => {
+    const { title, body: msgBody, target, data: extraData } = req.body;
+    const { sendOrderNotification } = require('../services/fcmService');
+
+    // Collect push tokens by target role
+    const tokenQueries = [];
+    if (target === 'shoppers' || target === 'all') {
+      tokenQueries.push(supabaseAdmin.from('shoppers').select('user_id, push_token').not('push_token', 'is', null));
+    }
+    if (target === 'boutiques' || target === 'all') {
+      tokenQueries.push(supabaseAdmin.from('boutiques').select('user_id, push_token').not('push_token', 'is', null).not('push_token', 'eq', ''));
+    }
+    if (target === 'drivers' || target === 'all') {
+      tokenQueries.push(supabaseAdmin.from('drivers').select('user_id, push_token').not('push_token', 'is', null).not('push_token', 'eq', ''));
+    }
+
+    const results = await Promise.all(tokenQueries);
+    const tokens = results
+      .flatMap((r) => r.data || [])
+      .map((r) => r.push_token)
+      .filter(Boolean);
+
+    // Fan out via FCM (fire-and-forget, log errors)
+    let sent = 0;
+    for (const token of tokens) {
+      try {
+        await sendOrderNotification(token, title, msgBody, extraData || {});
+        sent++;
+      } catch (e) {
+        console.warn('[ADMIN BROADCAST] FCM send failed for token:', token.slice(0, 20), e.message);
+      }
+    }
+
+    console.log(`[ADMIN] Broadcast sent to ${sent}/${tokens.length} recipients (target: ${target})`);
+    res.json({ sent, total_tokens: tokens.length, target });
+  })
+);
+
+// ── Support Tickets ───────────────────────────────────────────────────────────
+
+/**
+ * GET /api/v1/admin/support/tickets
+ * List all support tickets, newest first.
+ * Optional: ?status=open|in_progress|resolved
+ */
+router.get(
+  '/support/tickets',
+  asyncHandler(async (req, res) => {
+    const { status, limit = 50, offset = 0 } = req.query;
+    let q = supabaseAdmin
+      .from('support_tickets')
+      .select('*', { count: 'exact' })
+      .order('created_at', { ascending: false })
+      .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
+
+    if (status) q = q.eq('status', status);
+
+    const { data, error, count } = await q;
+    if (error) throw new Error(error.message);
+    res.json({ tickets: data || [], total: count });
+  })
+);
+
+/**
+ * PATCH /api/v1/admin/support/tickets/:id
+ * Update ticket status or add admin reply.
+ * Body: { status?, admin_reply? }
+ */
+router.patch(
+  '/support/tickets/:id',
+  [param('id').isUUID()],
+  validate,
+  asyncHandler(async (req, res) => {
+    const allowed = ['status', 'admin_reply'];
+    const updates = Object.fromEntries(
+      Object.entries(req.body).filter(([k]) => allowed.includes(k))
+    );
+    updates.updated_at = new Date().toISOString();
+
+    const { data, error } = await supabaseAdmin
+      .from('support_tickets')
+      .update(updates)
+      .eq('id', req.params.id)
+      .select()
+      .single();
+
+    if (error) throw new Error(error.message);
+    res.json(data);
+  })
+);
+
 module.exports = router;
