@@ -135,6 +135,46 @@ router.get(
 );
 
 /**
+ * POST /api/v1/try-on/boutique/sessions/:id/photos
+ * Upload a photo for a checkpoint (boutique_prep | boutique_return).
+ */
+router.post(
+  '/boutique/sessions/:id/photos',
+  requireRole('boutique'),
+  [
+    param('id').isUUID(),
+    body('checkpoint').isIn(['boutique_prep', 'boutique_return']),
+    body('image_url').notEmpty(),
+    body('notes').optional().isString(),
+  ],
+  validate,
+  asyncHandler(async (req, res) => {
+    const boutiqueId = await getBoutiqueId(req.userId);
+    const session    = await tryOnService.getSession(req.params.id);
+
+    if (session.boutique_id !== boutiqueId) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('try_on_photos')
+      .insert({
+        session_id:          req.params.id,
+        uploaded_by_user_id: req.userId,
+        uploaded_by_role:    'boutique',
+        checkpoint:          req.body.checkpoint,
+        image_url:           req.body.image_url,
+        notes:               req.body.notes || null,
+      })
+      .select()
+      .single();
+
+    if (error) throw new Error(error.message);
+    res.status(201).json(data);
+  })
+);
+
+/**
  * GET /api/v1/try-on/sessions/:id
  * Get a single session with items + photos.
  */
