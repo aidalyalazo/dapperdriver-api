@@ -16,8 +16,9 @@ const { asyncHandler } = require('../middleware/errorHandler');
 const { body, param } = require('express-validator');
 const { validate } = require('../middleware/validate');
 const { supabaseAdmin } = require('../config/supabase');
-const shopify = require('../services/shopifyService');
-const square  = require('../services/squareService');
+const shopify    = require('../services/shopifyService');
+const square     = require('../services/squareService');
+const lightspeed = require('../services/lightspeedService');
 
 // Resolve boutique ID for current authenticated boutique owner
 async function getBoutiqueId(userId) {
@@ -189,6 +190,95 @@ async function squareGetHelper(path, accessToken) {
   });
 }
 
+// ── Lightspeed ─────────────────────────────────────────────────────────────────
+
+/**
+ * GET /api/v1/integrations/lightspeed/connect
+ * Returns: { install_url } — boutique opens this in browser
+ */
+router.get(
+  '/lightspeed/connect',
+  authenticate,
+  requireRole('boutique'),
+  asyncHandler(async (req, res) => {
+    const boutiqueId = await getBoutiqueId(req.userId);
+    if (!boutiqueId) return res.status(404).json({ error: 'Boutique not found' });
+
+    if (!process.env.LIGHTSPEED_CLIENT_ID) {
+      return res.status(503).json({ error: 'Lightspeed integration not configured yet' });
+    }
+
+    const installUrl = lightspeed.buildInstallUrl(boutiqueId);
+    res.json({ install_url: installUrl });
+  })
+);
+
+/**
+ * GET /api/v1/integrations/lightspeed/callback
+ * Lightspeed redirects here after boutique grants access.
+ */
+router.get(
+  '/lightspeed/callback',
+  asyncHandler(async (req, res) => {
+    const { code, state } = req.query;
+    if (!code) return res.status(400).send('Missing authorization code');
+
+    let boutiqueId;
+    try {
+      boutiqueId = JSON.parse(Buffer.from(state, 'base64').toString()).boutique_id;
+    } catch {
+      return res.status(400).send('Invalid state parameter');
+    }
+
+    // Exchange code for tokens
+    const tokenData = await lightspeed.exchangeToken(code);
+    if (!tokenData.access_token) {
+      return res.status(400).send('Failed to obtain access token from Lightspeed');
+    }
+
+    // Get account ID (needed for all subsequent API calls)
+    let accountId = null;
+    try {
+      accountId = await lightspeed.getAccountId(tokenData.access_token);
+    } catch (e) {
+      console.error('[Lightspeed] Could not get account ID:', e.message);
+    }
+
+    const expiresAt = tokenData.expires_in
+      ? new Date(Date.now() + tokenData.expires_in * 1000).toISOString()
+      : null;
+
+    const { data: integration } = await supabaseAdmin
+      .from('boutique_integrations')
+      .upsert({
+        boutique_id:     boutiqueId,
+        platform:        'lightspeed',
+        status:          'connected',
+        access_token:    tokenData.access_token,
+        refresh_token:   tokenData.refresh_token || null,
+        token_expires_at: expiresAt,
+        merchant_id:     accountId ? String(accountId) : null, // accountId stored in merchant_id
+        updated_at:      new Date().toISOString(),
+      }, { onConflict: 'boutique_id,platform' })
+      .select()
+      .single();
+
+    // Async initial product sync
+    lightspeed.syncProducts(integration.id)
+      .then(r => console.log('[Lightspeed] Initial sync:', r))
+      .catch(e => {
+        console.error('[Lightspeed] Initial sync error:', e.message);
+        supabaseAdmin.from('boutique_integrations')
+          .update({ status: 'error', sync_error: e.message })
+          .eq('id', integration.id).then(() => {});
+      });
+
+    res.redirect(
+      `${process.env.APP_DEEP_LINK || 'dapperdriver://'}boutique/integrations?platform=lightspeed&status=connected`
+    );
+  })
+);
+
 // ── Shared routes ──────────────────────────────────────────────────────────────
 
 /**
@@ -221,7 +311,7 @@ router.post(
   '/:platform/sync',
   authenticate,
   requireRole('boutique'),
-  [param('platform').isIn(['shopify', 'square'])],
+  [param('platform').isIn(['shopify', 'square', 'lightspeed'])],
   validate,
   asyncHandler(async (req, res) => {
     const boutiqueId = await getBoutiqueId(req.userId);
@@ -239,7 +329,8 @@ router.post(
     }
 
     // Kick off async sync
-    const syncFn = req.params.platform === 'shopify' ? shopify.syncProducts : square.syncProducts;
+    const syncFns = { shopify: shopify.syncProducts, square: square.syncProducts, lightspeed: lightspeed.syncProducts };
+    const syncFn = syncFns[req.params.platform];
     syncFn(integration.id)
       .then(r => console.log(`[${req.params.platform}] Manual sync:`, r))
       .catch(e => {
@@ -261,7 +352,7 @@ router.delete(
   '/:platform',
   authenticate,
   requireRole('boutique'),
-  [param('platform').isIn(['shopify', 'square', 'woocommerce', 'lightspeed'])],
+  [param('platform').isIn(['shopify', 'square', 'lightspeed', 'woocommerce', 'clover'])],
   validate,
   asyncHandler(async (req, res) => {
     const boutiqueId = await getBoutiqueId(req.userId);
