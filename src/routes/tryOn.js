@@ -346,6 +346,183 @@ router.post(
 );
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// DRIVER ROUTES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * GET /api/v1/try-on/driver/sessions
+ * Driver's assigned sessions.
+ */
+router.get(
+  '/driver/sessions',
+  requireRole('driver'),
+  asyncHandler(async (req, res) => {
+    const { status, page = 1, limit = 20 } = req.query;
+    const result = await tryOnService.listSessions({
+      driverId: req.userId,
+      status,
+      page:  parseInt(page),
+      limit: parseInt(limit),
+    });
+    res.json(result);
+  })
+);
+
+/**
+ * POST /api/v1/try-on/driver/sessions/:id/accept
+ * Driver self-assigns to a try-on session.
+ */
+router.post(
+  '/driver/sessions/:id/accept',
+  requireRole('driver'),
+  [param('id').isUUID()],
+  validate,
+  asyncHandler(async (req, res) => {
+    const session = await tryOnService.getSession(req.params.id);
+
+    if (!['booked', 'pickup_pending'].includes(session.status)) {
+      return res.status(422).json({ error: `Cannot accept session in status: ${session.status}` });
+    }
+    if (session.driver_id && session.driver_id !== req.userId) {
+      return res.status(409).json({ error: 'Session already assigned to another driver' });
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('try_on_sessions')
+      .update({ driver_id: req.userId, status: 'pickup_pending', updated_at: new Date().toISOString() })
+      .eq('id', req.params.id)
+      .select()
+      .single();
+
+    if (error) throw new Error(error.message);
+    res.json(data);
+  })
+);
+
+/**
+ * POST /api/v1/try-on/driver/sessions/:id/status
+ * Advance session status (driver flow).
+ * Valid transitions (driver): pickup_pending→en_route, en_route→arrived,
+ *   arrived→in_home, in_home→returning, returning→completed
+ * Body: { status, photo_url? (required at returning + completed) }
+ */
+router.post(
+  '/driver/sessions/:id/status',
+  requireRole('driver'),
+  [
+    param('id').isUUID(),
+    body('status').isIn(['en_route', 'arrived', 'in_home', 'returning', 'completed']),
+    body('photo_url').optional().isURL(),
+  ],
+  validate,
+  asyncHandler(async (req, res) => {
+    const { status, photo_url } = req.body;
+    const session = await tryOnService.getSession(req.params.id);
+
+    if (session.driver_id !== req.userId) {
+      return res.status(403).json({ error: 'You are not assigned to this session' });
+    }
+
+    const validTransitions = {
+      pickup_pending: ['en_route'],
+      en_route:       ['arrived'],
+      arrived:        ['in_home'],
+      in_home:        ['returning'],
+      returning:      ['completed'],
+    };
+
+    const allowed = validTransitions[session.status] || [];
+    if (!allowed.includes(status)) {
+      return res.status(422).json({
+        error: `Invalid transition: ${session.status} → ${status}`,
+        allowed,
+      });
+    }
+
+    // Photo is required at returning (driver_return checkpoint) and completed
+    const photoRequired = ['returning', 'completed'].includes(status);
+    if (photoRequired && !photo_url) {
+      return res.status(422).json({ error: `photo_url is required for status: ${status}` });
+    }
+
+    const now = new Date().toISOString();
+    const updates = { status, updated_at: now };
+
+    if (status === 'en_route')     updates.driver_pickup_at   = now;
+    if (status === 'arrived')      updates.driver_arrival_at  = now;
+    if (status === 'in_home')      updates.in_home_started_at = now;
+    if (status === 'returning') {
+      updates.in_home_ended_at = now;
+      const startedAt = session.in_home_started_at
+        ? Math.round((Date.now() - new Date(session.in_home_started_at).getTime()) / 1000)
+        : null;
+      if (startedAt) updates.total_elapsed_seconds = startedAt;
+    }
+    if (status === 'completed')    updates.driver_return_at = now;
+
+    const { data: updated, error } = await supabaseAdmin
+      .from('try_on_sessions')
+      .update(updates)
+      .eq('id', req.params.id)
+      .select()
+      .single();
+
+    if (error) throw new Error(error.message);
+
+    // Record photo if provided
+    if (photo_url) {
+      const checkpoint = status === 'returning' ? 'driver_return' : 'shopper_final';
+      await supabaseAdmin.from('try_on_photos').insert({
+        session_id:          req.params.id,
+        uploaded_by_user_id: req.userId,
+        uploaded_by_role:    'driver',
+        checkpoint,
+        image_url:           photo_url,
+      }).catch(() => {});
+    }
+
+    res.json(updated);
+  })
+);
+
+/**
+ * POST /api/v1/try-on/driver/sessions/:id/photos
+ * Driver uploads a photo for driver_return checkpoint.
+ */
+router.post(
+  '/driver/sessions/:id/photos',
+  requireRole('driver'),
+  [
+    param('id').isUUID(),
+    body('checkpoint').isIn(['driver_return', 'shopper_final']),
+    body('image_url').notEmpty(),
+    body('notes').optional().isString(),
+  ],
+  validate,
+  asyncHandler(async (req, res) => {
+    const session = await tryOnService.getSession(req.params.id);
+    if (session.driver_id !== req.userId) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('try_on_photos')
+      .insert({
+        session_id:          req.params.id,
+        uploaded_by_user_id: req.userId,
+        uploaded_by_role:    'driver',
+        checkpoint:          req.body.checkpoint,
+        image_url:           req.body.image_url,
+        notes:               req.body.notes || null,
+      })
+      .select().single();
+
+    if (error) throw new Error(error.message);
+    res.status(201).json(data);
+  })
+);
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // ADMIN ROUTES
 // ═══════════════════════════════════════════════════════════════════════════════
 
