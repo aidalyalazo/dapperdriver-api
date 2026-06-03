@@ -34,7 +34,7 @@ router.post(
       // The full try-on handler is added in Phase 1.
       const piMeta = event.data?.object?.metadata || {};
       if (piMeta.type && piMeta.type.startsWith('try_on_')) {
-        console.log(`[WEBHOOK] try-on event (Phase 1 handler pending): ${event.type} type=${piMeta.type} session=${piMeta.session_id}`);
+        await handleTryOnWebhook(event, piMeta);
         return res.json({ received: true });
       }
 
@@ -298,5 +298,86 @@ router.post(
     res.json({ received: true });
   }
 );
+
+// ── Try-on webhook handler (separate branch — never touches order branch) ──────
+
+async function handleTryOnWebhook(event, meta) {
+  const sessionId = meta.session_id;
+  if (!sessionId) return;
+
+  try {
+    switch (event.type) {
+
+      // Fee PI authorized → advance booked → pickup_pending
+      case 'payment_intent.amount_capturable_updated': {
+        if (meta.type !== 'try_on_session_fee') break;
+        const pi = event.data.object;
+        if (pi.status !== 'requires_capture') break;
+
+        await supabaseAdmin
+          .from('try_on_sessions')
+          .update({ status: 'pickup_pending', updated_at: new Date().toISOString() })
+          .eq('id', sessionId)
+          .eq('status', 'booked');  // idempotent — only advances from booked
+
+        console.log(`[WEBHOOK/TryOn] Fee authorized — session ${sessionId} → pickup_pending`);
+        break;
+      }
+
+      // Fee PI captured (on session completion)
+      case 'payment_intent.succeeded': {
+        if (!['try_on_session_fee', 'try_on_session_items'].includes(meta.type)) break;
+        await supabaseAdmin
+          .from('try_on_sessions')
+          .update({ updated_at: new Date().toISOString() })
+          .eq('id', sessionId);
+        console.log(`[WEBHOOK/TryOn] PI succeeded — session ${sessionId} type=${meta.type}`);
+        break;
+      }
+
+      // Any try-on PI cancelled → release holds + mark session cancelled
+      case 'payment_intent.canceled': {
+        const { releaseHoldsForSession } = require('../services/tryOnInventoryService');
+        await releaseHoldsForSession(sessionId);
+
+        await supabaseAdmin
+          .from('try_on_sessions')
+          .update({
+            status:       'cancelled',
+            cancelled_at: new Date().toISOString(),
+            cancelled_by: 'stripe-webhook',
+            updated_at:   new Date().toISOString(),
+          })
+          .eq('id', sessionId)
+          .not('status', 'in', '("completed","cancelled")');
+
+        console.log(`[WEBHOOK/TryOn] PI canceled — session ${sessionId} holds released`);
+        break;
+      }
+
+      // Dispute filed — flag the shopper silently for admin review
+      case 'charge.dispute.created': {
+        await supabaseAdmin
+          .from('try_on_shopper_flags')
+          .insert({
+            shopper_id:  meta.shopper_id,
+            session_id:  sessionId,
+            flag_type:   'dispute',
+            severity:    'critical',
+            notes:       `Stripe dispute on ${meta.type} PI — session ${sessionId}`,
+          })
+          .catch(() => {});
+        console.warn(`[WEBHOOK/TryOn] Dispute filed for session ${sessionId}`);
+        break;
+      }
+
+      default:
+        console.log(`[WEBHOOK/TryOn] Unhandled event: ${event.type} session=${sessionId}`);
+    }
+  } catch (err) {
+    console.error(`[WEBHOOK/TryOn] Handler error for ${event.type}:`, err.message);
+    // Return 200 to Stripe so it doesn't retry — log for manual review
+  }
+}
 
 module.exports = router;
