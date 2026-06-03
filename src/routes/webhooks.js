@@ -28,6 +28,16 @@ router.post(
     console.log(`[WEBHOOK] Received event: ${event.type}`);
 
     try {
+      // ── Try-on PI guard ────────────────────────────────────────────────────
+      // Try-on PaymentIntents carry metadata.type starting with 'try_on_'.
+      // Acknowledge and return early — do NOT fall through to the order branch.
+      // The full try-on handler is added in Phase 1.
+      const piMeta = event.data?.object?.metadata || {};
+      if (piMeta.type && piMeta.type.startsWith('try_on_')) {
+        console.log(`[WEBHOOK] try-on event (Phase 1 handler pending): ${event.type} type=${piMeta.type} session=${piMeta.session_id}`);
+        return res.json({ received: true });
+      }
+
       switch (event.type) {
 
         // ── Payment authorized (manual-capture flow) ──────────────────────
@@ -99,6 +109,25 @@ router.post(
               actorId:   'stripe-webhook',
             });
           }
+
+          // Decision A (additive): on full capture convert holds → call decrementStock
+          // This is idempotent — convertHolds is a no-op if holds are already converted.
+          try {
+            const { convertHolds } = require('../services/tryOnInventoryService');
+            const { data: heldItems } = await supabaseAdmin
+              .from('inventory_holds')
+              .select('product_id')
+              .eq('order_id', orderId)
+              .eq('status', 'active');
+            if (heldItems && heldItems.length > 0) {
+              const keptIds = heldItems.map((h) => h.product_id);
+              await convertHolds(orderId, 'order', keptIds);
+              console.log(`[WEBHOOK] Decision A: converted ${keptIds.length} holds for order ${orderId}`);
+            }
+          } catch (holdErr) {
+            // Non-fatal: hold conversion failure should not prevent order state advance
+            console.error('[WEBHOOK] Hold conversion error on capture:', holdErr.message);
+          }
           break;
         }
 
@@ -118,6 +147,17 @@ router.post(
             newStatus: 'cancelled',
             actorId:   'stripe-webhook',
           }).catch(() => {}); // order may already be cancelled
+          // Decision A (additive): release holds on payment failure
+          try {
+            const failedPi = event.data.object;
+            const failedOrderId = failedPi.metadata?.order_id;
+            if (failedOrderId) {
+              const { releaseHoldsForOrder } = require('../services/tryOnInventoryService');
+              await releaseHoldsForOrder(failedOrderId);
+            }
+          } catch (holdErr) {
+            console.error('[WEBHOOK] Hold release error on payment_failed:', holdErr.message);
+          }
           break;
         }
 
@@ -177,6 +217,13 @@ router.post(
             .update({ payment_status: 'cancelled' })
             .eq('id', orderId)
             .catch(() => {});
+          // Decision A (additive): release holds so stock returns to available pool
+          try {
+            const { releaseHoldsForOrder } = require('../services/tryOnInventoryService');
+            await releaseHoldsForOrder(orderId);
+          } catch (holdErr) {
+            console.error('[WEBHOOK] Hold release error on cancel:', holdErr.message);
+          }
           break;
         }
 

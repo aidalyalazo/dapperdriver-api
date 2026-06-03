@@ -1,3 +1,4 @@
+const { v4: uuidv4 } = require('uuid');
 const { supabaseAdmin } = require('../config/supabase');
 const { sendOrderNotification } = require('./fcmService');
 const { getPlatformSettingJson } = require('../utils/platformSettings');
@@ -322,9 +323,23 @@ async function createOrder({
   // Calculate estimated delivery considering boutique hours + active queue.
   const deliveryEstimate = await calculateEstimatedDelivery(boutiqueId);
 
+  // ── Decision A: inventory holds (behind orders_holds_enabled flag) ────────
+  // Pre-generate the order UUID so fn_reserve_for_order can reference it before
+  // the Stripe PI exists. The order row is inserted first; if reservation fails
+  // fn_reserve_for_order cancels the order in the same DB transaction — no PI
+  // is ever created for a failed reserve. When the flag is off this is a no-op
+  // and the path is byte-for-byte identical to the pre-Decision-A flow.
+  const orderId = uuidv4();
+  let holdsEnabled = false;
+  try {
+    const holdsSetting = await getPlatformSettingJson('orders_holds_enabled', { enabled: false });
+    holdsEnabled = holdsSetting.enabled === true;
+  } catch (_) { /* fail open — holds stay disabled */ }
+
   const { data: order, error } = await supabaseAdmin
     .from('orders')
     .insert({
+      id: orderId,           // ← pre-generated so fn_reserve_for_order can reference it
       shopper_id: shopperId,
       boutique_id: boutiqueId,
       status: 'pending',
@@ -349,6 +364,25 @@ async function createOrder({
 
   if (error) {
     throw Object.assign(new Error(error.message), { status: 400 });
+  }
+
+  // ── Decision A: place inventory holds (atomic, behind flag) ───────────────
+  // fn_reserve_for_order runs in one DB transaction:
+  //   success → holds inserted, order stays 'pending'
+  //   failure → order cancelled IN THE SAME TRANSACTION, no PI will be created
+  if (holdsEnabled) {
+    const { reserveItemsForOrder } = require('./tryOnInventoryService');
+    const { success, failures } = await reserveItemsForOrder(orderId, productIds);
+    if (!success) {
+      const unavailableIds = failures.map((f) => f.product_id);
+      console.warn('[ORDER] Hold reservation failed — order cancelled before PI:', unavailableIds);
+      // The DB function already set status='cancelled'. Propagate 409 to controller.
+      const err = Object.assign(
+        new Error('One or more items are no longer available'),
+        { status: 409, unavailableProductIds: unavailableIds }
+      );
+      throw err;
+    }
   }
 
   // Attach delivery estimate metadata to the order object for the controller

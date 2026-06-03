@@ -61,14 +61,30 @@ const createOrder = [
     //    the PI client_secret is returned to Flutter so the payment sheet can
     //    confirm it. If the user abandons the payment sheet, the order is
     //    cancelled by the Flutter client via POST /orders/:id/cancel.)
-    const order = await orderService.createOrder({
+    //
+    // Decision A: if orders_holds_enabled, createOrder also places inventory holds
+    // atomically before returning. A 409 means items were unavailable — the order
+    // was already cancelled by the DB; no PI exists.
+    let order;
+    try {
+      order = await orderService.createOrder({
       shopperId,
       boutiqueId: boutique_id,
       items,
       deliveryAddress: delivery_address,
       notes,
-      fulfillmentType: fulfillment_type || 'delivery',
-    });
+        fulfillmentType: fulfillment_type || 'delivery',
+      });
+    } catch (orderErr) {
+      // 409 = inventory hold failed (Decision A). Order already cancelled by DB.
+      if (orderErr.status === 409) {
+        return res.status(409).json({
+          error: 'One or more items are no longer available',
+          unavailable_product_ids: orderErr.unavailableProductIds || [],
+        });
+      }
+      throw orderErr; // re-throw everything else to the global handler
+    }
 
     // 2. Create Stripe PaymentIntent (Flutter SDK confirms it via payment sheet)
     let paymentIntentId = null;
