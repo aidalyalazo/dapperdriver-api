@@ -298,27 +298,28 @@ router.post(
     const boutiqueId = await getBoutiqueId(req.userId);
     if (!boutiqueId) return res.status(404).json({ error: 'Boutique not found' });
 
-    const { name, description, price, compare_price, category, images, image_urls, stock, stock_quantity, inventory_count, sizes, colors, tags, sku, source } = req.body;
+    const { name, description, price, compare_price, category, images, image_urls, stock, stock_quantity, inventory_count, sizes, colors, tags, sku, source, material_composition } = req.body;
 
     const stockVal = stock || stock_quantity || inventory_count || 0;
 
     const { data, error } = await supabaseAdmin
       .from('products')
       .insert({
-        boutique_id:     boutiqueId,
+        boutique_id:          boutiqueId,
         name,
-        description:     description || null,
+        description:          description || null,
         price,
-        compare_price:   compare_price || null,
+        compare_price:        compare_price || null,
         category,
-        images:          images || image_urls || [],
-        stock:           stockVal,
-        sizes:           sizes || [],
-        colors:          colors || [],
-        tags:            tags || [],
-        sku:             sku || null,
-        source:          source || 'manual',
-        status:          'active',
+        images:               images || image_urls || [],
+        stock:                stockVal,
+        sizes:                sizes || [],
+        colors:               colors || [],
+        tags:                 tags || [],
+        sku:                  sku || null,
+        source:               source || 'manual',
+        status:               'active',
+        material_composition: material_composition || null,
       })
       .select()
       .single();
@@ -344,7 +345,8 @@ router.patch(
     }
 
     const allowed = ['name', 'description', 'price', 'compare_price', 'category', 'images',
-                     'stock', 'sizes', 'colors', 'tags', 'sku', 'source', 'status'];
+                     'stock', 'sizes', 'colors', 'tags', 'sku', 'source', 'status',
+                     'material_composition'];
     const updates = Object.fromEntries(
       Object.entries(req.body).filter(([k]) => allowed.includes(k))
     );
