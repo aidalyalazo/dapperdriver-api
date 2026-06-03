@@ -29,14 +29,15 @@ router.get(
   '/',
   asyncHandler(async (req, res) => {
     const { search, city, page = 1, limit = 20 } = req.query;
-    const { status, category } = req.query;
+    const { status, category, try_on_enabled } = req.query;
     let q = supabaseAdmin
       .from('boutiques')
       .select('id, name, slug, description, logo_url, logo_initials, logo_bg, campaign_images, address, city_id, rating, review_count, follower_count, primary_category, category_tags, style_tags, price_tier, status', { count: 'exact' })
       .order('rating', { ascending: false })
       .range((page - 1) * limit, page * limit - 1);
 
-    if (status)   q = q.eq('status', status);
+    if (status)          q = q.eq('status', status);
+    if (try_on_enabled)  q = q.eq('try_on_enabled', try_on_enabled === 'true');
     // Search boutique name, description, primary category, and category/style tag arrays.
     // category_tags.cs.{X} = "array contains X" (exact match, case-sensitive).
     // Works when tags are stored in consistent casing (e.g. "Dresses", "Tops").
