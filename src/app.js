@@ -25,6 +25,7 @@ const supportRouter = require('./routes/support');
 const hotspotsRouter = require('./routes/hotspots');
 const socialRouter = require('./routes/social');
 const editorialsRouter = require('./routes/editorials');
+const integrationsRouter = require('./routes/integrations');
 
 // Jobs
 require('./jobs/mondayPayouts');
@@ -86,6 +87,7 @@ app.use('/api/v1/support', supportRouter);
 app.use('/api/v1/hotspots', hotspotsRouter);
 app.use('/api/v1/social', socialRouter);
 app.use('/api/v1/editorials', editorialsRouter);
+app.use('/api/v1/integrations', integrationsRouter);
 
 // ── 404 ────────────────────────────────────────────────────────────────────
 app.use((_req, res) => res.status(404).json({ error: 'Route not found' }));
