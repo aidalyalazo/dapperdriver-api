@@ -278,3 +278,7 @@ INSERT INTO platform_settings (key, value) VALUES
   ('try_on_sms_enabled',                     '{"enabled": false}')
 ON CONFLICT (key) DO NOTHING;
 
+
+-- ── 9. Add sent_reminders column (for reminder deduplication) ─────────────────
+ALTER TABLE try_on_sessions
+  ADD COLUMN IF NOT EXISTS sent_reminders JSONB DEFAULT '{}';

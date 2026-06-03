@@ -31,6 +31,12 @@ const tryOnRouter        = require('./routes/tryOn');
 // Jobs
 require('./jobs/mondayPayouts');
 require('./jobs/orderTimeoutProcessor');
+// Try-On jobs
+require('./jobs/tryOnHoldExpiryProcessor');
+require('./jobs/tryOnSessionTimeoutProcessor');
+require('./jobs/tryOnReminderProcessor');
+require('./jobs/tryOnQueueExpiryProcessor');
+require('./jobs/tryOnCircuitBreakerJob');
 
 const { errorHandler } = require('./middleware/errorHandler');
 
