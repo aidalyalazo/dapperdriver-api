@@ -1,25 +1,85 @@
 /**
- * Rewrites RUN_IN_SUPABASE.sql so every statement runs inside its own
- * DO block with exception handling. A statement that doesn't match the
- * live schema (missing table/column) or is already applied gets skipped
- * with a NOTICE instead of aborting the entire paste.
+ * Builds RUN_IN_SUPABASE.sql from the pending migration sources, wrapping
+ * every statement in its own DO block with exception handling so a schema
+ * mismatch (missing table/column) or an already-applied statement is
+ * SKIPPED with a NOTICE instead of aborting the entire paste.
+ *
+ * The splitter is dollar-quote aware: semicolons inside $$...$$ /
+ * $tag$...$tag$ bodies and inside '...' strings do NOT split statements
+ * (the RLS file contains a DO $$ ... END $$; block).
  */
 const fs = require('fs');
 const path = require('path');
 
-const file = path.join(__dirname, '..', 'RUN_IN_SUPABASE.sql');
-const raw = fs.readFileSync(file, 'utf8');
+const root = path.join(__dirname, '..');
 
-// Drop comment-only lines so splitting on ';' is safe
-const lines = raw.split('\n').filter((l) => !l.trim().startsWith('--'));
-const statements = lines
-  .join('\n')
-  .split(';')
-  .map((s) => s.trim())
-  .filter(Boolean);
+const SECTION_A = `
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS fulfillment_type TEXT NOT NULL DEFAULT 'delivery';
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_status TEXT DEFAULT 'pending';
+CREATE INDEX IF NOT EXISTS idx_orders_fulfillment_type ON orders (fulfillment_type);
+ALTER TABLE shoppers ADD COLUMN IF NOT EXISTS style_preferences TEXT[] DEFAULT '{}';
+ALTER TABLE shoppers ADD COLUMN IF NOT EXISTS size_dresses TEXT;
+ALTER TABLE shoppers ADD COLUMN IF NOT EXISTS body_measurements JSONB;
+`;
+
+const sources = [
+  ['A. Older pending columns (orders + shoppers)', SECTION_A],
+  ['B. Migration 010 — boutique state', fs.readFileSync(path.join(root, 'src/migrations/010_boutique_state.sql'), 'utf8')],
+  ['C. Migration 011 — UGC moderation + marketing_emails', fs.readFileSync(path.join(root, 'src/migrations/011_moderation_account.sql'), 'utf8')],
+  ['D. Migration 012 — service fee', fs.readFileSync(path.join(root, 'src/migrations/012_service_fee.sql'), 'utf8')],
+  ['E. RLS security hardening', fs.readFileSync(path.join(root, 'rls_security_fix.sql'), 'utf8')],
+];
+
+/** Split SQL on ';' respecting line comments, '...' strings, and $tag$ quotes. */
+function splitStatements(sql) {
+  const statements = [];
+  let current = '';
+  let i = 0;
+  let dollarTag = null;   // e.g. '$$' or '$stmt$'
+  let inSingle = false;
+  let inLineComment = false;
+
+  while (i < sql.length) {
+    const ch = sql[i];
+    const rest = sql.slice(i);
+
+    if (inLineComment) {
+      if (ch === '\n') inLineComment = false;
+      current += ch; i++; continue;
+    }
+    if (dollarTag) {
+      if (rest.startsWith(dollarTag)) {
+        current += dollarTag; i += dollarTag.length; dollarTag = null;
+      } else { current += ch; i++; }
+      continue;
+    }
+    if (inSingle) {
+      current += ch;
+      if (ch === "'" && sql[i + 1] === "'") { current += "'"; i += 2; continue; }
+      if (ch === "'") inSingle = false;
+      i++; continue;
+    }
+    if (rest.startsWith('--')) { inLineComment = true; current += ch; i++; continue; }
+    if (ch === "'") { inSingle = true; current += ch; i++; continue; }
+    const tagMatch = rest.match(/^\$[a-zA-Z_]*\$/);
+    if (tagMatch) { dollarTag = tagMatch[0]; current += dollarTag; i += dollarTag.length; continue; }
+    if (ch === ';') {
+      statements.push(current.trim());
+      current = ''; i++; continue;
+    }
+    current += ch; i++;
+  }
+  if (current.trim()) statements.push(current.trim());
+
+  // Drop comment-only fragments
+  return statements
+    .map((s) => s.split('\n').filter((l) => !l.trim().startsWith('--')).join('\n').trim())
+    .filter(Boolean);
+}
 
 const header = `-- ============================================================================
--- DapperDriver — ALL PENDING SQL (fault-tolerant edition)
+-- DapperDriver — ALL PENDING SQL (fault-tolerant edition v2)
 -- Paste the ENTIRE file into the Supabase SQL Editor and Run.
 --
 -- Every statement is wrapped so a schema mismatch (a table or column that
@@ -28,21 +88,31 @@ const header = `-- =============================================================
 -- way. After running, open the Messages panel to see what was skipped.
 -- Safe to re-run any number of times.
 -- ============================================================================
-
 `;
 
-const wrapped = statements.map((stmt) => {
-  const tag = stmt.includes('$stmt$') ? '$stmtx$' : '$stmt$';
-  return [
-    'DO $run$ BEGIN',
-    `  EXECUTE ${tag}${stmt}${tag};`,
-    'EXCEPTION',
-    '  WHEN undefined_column OR undefined_table OR undefined_object',
-    '    OR duplicate_object OR duplicate_table OR duplicate_column THEN',
-    "    RAISE NOTICE 'SKIPPED: %', SQLERRM;",
-    'END $run$;',
-  ].join('\n');
-}).join('\n\n');
+let out = header;
+let total = 0;
 
-fs.writeFileSync(file, header + wrapped + '\n');
-console.log('Wrapped statements:', statements.length);
+for (const [title, sql] of sources) {
+  out += `\n-- ── ${title} ${'─'.repeat(Math.max(2, 70 - title.length))}\n\n`;
+  for (const stmt of splitStatements(sql)) {
+    // Pick an EXECUTE quote tag that never appears inside the statement
+    let tag = '$stmt$';
+    let n = 1;
+    while (stmt.includes(tag)) { tag = `$stmt${n}$`; n++; }
+    out += [
+      'DO $run$ BEGIN',
+      `  EXECUTE ${tag}${stmt}${tag};`,
+      'EXCEPTION',
+      '  WHEN undefined_column OR undefined_table OR undefined_object',
+      '    OR duplicate_object OR duplicate_table OR duplicate_column THEN',
+      "    RAISE NOTICE 'SKIPPED: %', SQLERRM;",
+      'END $run$;',
+      '', '',
+    ].join('\n');
+    total++;
+  }
+}
+
+fs.writeFileSync(path.join(root, 'RUN_IN_SUPABASE.sql'), out);
+console.log('Wrapped statements:', total);

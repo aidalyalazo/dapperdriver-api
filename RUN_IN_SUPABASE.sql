@@ -1,5 +1,5 @@
 -- ============================================================================
--- DapperDriver — ALL PENDING SQL (fault-tolerant edition)
+-- DapperDriver — ALL PENDING SQL (fault-tolerant edition v2)
 -- Paste the ENTIRE file into the Supabase SQL Editor and Run.
 --
 -- Every statement is wrapped so a schema mismatch (a table or column that
@@ -8,6 +8,8 @@
 -- way. After running, open the Messages panel to see what was skipped.
 -- Safe to re-run any number of times.
 -- ============================================================================
+
+-- ── A. Older pending columns (orders + shoppers) ──────────────────────────
 
 DO $run$ BEGIN
   EXECUTE $stmt$ALTER TABLE orders ADD COLUMN IF NOT EXISTS fulfillment_type TEXT NOT NULL DEFAULT 'delivery'$stmt$;
@@ -65,6 +67,9 @@ EXCEPTION
     RAISE NOTICE 'SKIPPED: %', SQLERRM;
 END $run$;
 
+
+-- ── B. Migration 010 — boutique state ─────────────────────────────────────
+
 DO $run$ BEGIN
   EXECUTE $stmt$ALTER TABLE boutiques ADD COLUMN IF NOT EXISTS state TEXT$stmt$;
 EXCEPTION
@@ -97,6 +102,9 @@ EXCEPTION
     OR duplicate_object OR duplicate_table OR duplicate_column THEN
     RAISE NOTICE 'SKIPPED: %', SQLERRM;
 END $run$;
+
+
+-- ── C. Migration 011 — UGC moderation + marketing_emails ──────────────────
 
 DO $run$ BEGIN
   EXECUTE $stmt$ALTER TABLE shoppers ADD COLUMN IF NOT EXISTS marketing_emails BOOLEAN DEFAULT TRUE$stmt$;
@@ -186,6 +194,9 @@ EXCEPTION
     RAISE NOTICE 'SKIPPED: %', SQLERRM;
 END $run$;
 
+
+-- ── D. Migration 012 — service fee ────────────────────────────────────────
+
 DO $run$ BEGIN
   EXECUTE $stmt$ALTER TABLE orders ADD COLUMN IF NOT EXISTS service_fee NUMERIC(10,2) DEFAULT 0$stmt$;
 EXCEPTION
@@ -203,6 +214,9 @@ EXCEPTION
     OR duplicate_object OR duplicate_table OR duplicate_column THEN
     RAISE NOTICE 'SKIPPED: %', SQLERRM;
 END $run$;
+
+
+-- ── E. RLS security hardening ─────────────────────────────────────────────
 
 DO $run$ BEGIN
   EXECUTE $stmt$ALTER TABLE orders                ENABLE ROW LEVEL SECURITY$stmt$;
@@ -446,38 +460,17 @@ END $run$;
 
 DO $run$ BEGIN
   EXECUTE $stmt$DO $$ DECLARE
-  r RECORD$stmt$;
-EXCEPTION
-  WHEN undefined_column OR undefined_table OR undefined_object
-    OR duplicate_object OR duplicate_table OR duplicate_column THEN
-    RAISE NOTICE 'SKIPPED: %', SQLERRM;
-END $run$;
-
-DO $run$ BEGIN
-  EXECUTE $stmt$BEGIN
+  r RECORD;
+BEGIN
   FOR r IN
     SELECT schemaname, tablename, policyname
     FROM pg_policies
     WHERE schemaname = 'public'
   LOOP
     EXECUTE format('DROP POLICY IF EXISTS %I ON %I.%I',
-                   r.policyname, r.schemaname, r.tablename)$stmt$;
-EXCEPTION
-  WHEN undefined_column OR undefined_table OR undefined_object
-    OR duplicate_object OR duplicate_table OR duplicate_column THEN
-    RAISE NOTICE 'SKIPPED: %', SQLERRM;
-END $run$;
-
-DO $run$ BEGIN
-  EXECUTE $stmt$END LOOP$stmt$;
-EXCEPTION
-  WHEN undefined_column OR undefined_table OR undefined_object
-    OR duplicate_object OR duplicate_table OR duplicate_column THEN
-    RAISE NOTICE 'SKIPPED: %', SQLERRM;
-END $run$;
-
-DO $run$ BEGIN
-  EXECUTE $stmt$END $$$stmt$;
+                   r.policyname, r.schemaname, r.tablename);
+  END LOOP;
+END $$$stmt$;
 EXCEPTION
   WHEN undefined_column OR undefined_table OR undefined_object
     OR duplicate_object OR duplicate_table OR duplicate_column THEN
@@ -565,10 +558,7 @@ EXCEPTION
 END $run$;
 
 DO $run$ BEGIN
-  EXECUTE $stmt$-- needed for social features (see other shoppers' display names)
-
-
-CREATE POLICY "shopper_addresses_own"
+  EXECUTE $stmt$CREATE POLICY "shopper_addresses_own"
   ON shopper_addresses FOR ALL
   USING (shopper_id = auth.uid())$stmt$;
 EXCEPTION
@@ -894,3 +884,4 @@ EXCEPTION
     OR duplicate_object OR duplicate_table OR duplicate_column THEN
     RAISE NOTICE 'SKIPPED: %', SQLERRM;
 END $run$;
+
