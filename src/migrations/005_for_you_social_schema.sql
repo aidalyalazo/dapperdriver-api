@@ -3,6 +3,9 @@
 -- Run once in Supabase SQL Editor.
 -- Safe: uses IF NOT EXISTS / ADD COLUMN IF NOT EXISTS everywhere.
 -- Does NOT modify or drop anything that already exists.
+--
+-- NOTE: Postgres does NOT support CREATE POLICY IF NOT EXISTS.
+-- Pattern used: DROP POLICY IF EXISTS → CREATE POLICY (idempotent).
 -- ============================================================================
 
 -- ── 1. Products: add missing personalisation columns ─────────────────────────
@@ -24,7 +27,8 @@ CREATE INDEX IF NOT EXISTS idx_products_is_on_sale
   ON products (is_on_sale) WHERE is_on_sale = true;
 
 -- ── 2. shopper_profiles ──────────────────────────────────────────────────────
--- Extended public-facing profile used by the social layer.
+-- Extended profile. Contains sensitive body measurements — access restricted
+-- to authenticated users only (auth.uid() IS NOT NULL).
 
 CREATE TABLE IF NOT EXISTS shopper_profiles (
   id               UUID        PRIMARY KEY REFERENCES auth.users (id) ON DELETE CASCADE,
@@ -45,23 +49,27 @@ CREATE INDEX IF NOT EXISTS idx_shopper_profiles_id
 
 ALTER TABLE shopper_profiles ENABLE ROW LEVEL SECURITY;
 
--- Anyone can read public profiles (needed for social layer)
-CREATE POLICY IF NOT EXISTS "shopper_profiles_select_public"
+-- Authenticated users can read any profile (body measurements kept from public/anon)
+DROP POLICY IF EXISTS "shopper_profiles_select_public" ON shopper_profiles;
+CREATE POLICY "shopper_profiles_select_auth"
   ON shopper_profiles FOR SELECT
-  USING (true);
+  USING (auth.uid() IS NOT NULL);
 
 -- Only the owner can insert their own profile
-CREATE POLICY IF NOT EXISTS "shopper_profiles_insert_own"
+DROP POLICY IF EXISTS "shopper_profiles_insert_own" ON shopper_profiles;
+CREATE POLICY "shopper_profiles_insert_own"
   ON shopper_profiles FOR INSERT
   WITH CHECK (auth.uid() = id);
 
 -- Only the owner can update their own profile
-CREATE POLICY IF NOT EXISTS "shopper_profiles_update_own"
+DROP POLICY IF EXISTS "shopper_profiles_update_own" ON shopper_profiles;
+CREATE POLICY "shopper_profiles_update_own"
   ON shopper_profiles FOR UPDATE
   USING (auth.uid() = id);
 
 -- Only the owner can delete their own profile
-CREATE POLICY IF NOT EXISTS "shopper_profiles_delete_own"
+DROP POLICY IF EXISTS "shopper_profiles_delete_own" ON shopper_profiles;
+CREATE POLICY "shopper_profiles_delete_own"
   ON shopper_profiles FOR DELETE
   USING (auth.uid() = id);
 
@@ -87,12 +95,14 @@ CREATE INDEX IF NOT EXISTS idx_shopper_interactions_product
 ALTER TABLE shopper_interactions ENABLE ROW LEVEL SECURITY;
 
 -- Shoppers can only read their own interactions
-CREATE POLICY IF NOT EXISTS "shopper_interactions_select_own"
+DROP POLICY IF EXISTS "shopper_interactions_select_own" ON shopper_interactions;
+CREATE POLICY "shopper_interactions_select_own"
   ON shopper_interactions FOR SELECT
   USING (auth.uid() = shopper_id);
 
 -- Shoppers can only insert their own interactions
-CREATE POLICY IF NOT EXISTS "shopper_interactions_insert_own"
+DROP POLICY IF EXISTS "shopper_interactions_insert_own" ON shopper_interactions;
+CREATE POLICY "shopper_interactions_insert_own"
   ON shopper_interactions FOR INSERT
   WITH CHECK (auth.uid() = shopper_id);
 
@@ -110,16 +120,19 @@ CREATE TABLE IF NOT EXISTS shopper_taste_profile (
 ALTER TABLE shopper_taste_profile ENABLE ROW LEVEL SECURITY;
 
 -- Only the owner can read their taste profile
-CREATE POLICY IF NOT EXISTS "shopper_taste_profile_select_own"
+DROP POLICY IF EXISTS "shopper_taste_profile_select_own" ON shopper_taste_profile;
+CREATE POLICY "shopper_taste_profile_select_own"
   ON shopper_taste_profile FOR SELECT
   USING (auth.uid() = shopper_id);
 
 -- Only the owner can upsert their taste profile
-CREATE POLICY IF NOT EXISTS "shopper_taste_profile_insert_own"
+DROP POLICY IF EXISTS "shopper_taste_profile_insert_own" ON shopper_taste_profile;
+CREATE POLICY "shopper_taste_profile_insert_own"
   ON shopper_taste_profile FOR INSERT
   WITH CHECK (auth.uid() = shopper_id);
 
-CREATE POLICY IF NOT EXISTS "shopper_taste_profile_update_own"
+DROP POLICY IF EXISTS "shopper_taste_profile_update_own" ON shopper_taste_profile;
+CREATE POLICY "shopper_taste_profile_update_own"
   ON shopper_taste_profile FOR UPDATE
   USING (auth.uid() = shopper_id);
 
@@ -143,21 +156,26 @@ CREATE INDEX IF NOT EXISTS idx_outfit_posts_created
 ALTER TABLE outfit_posts ENABLE ROW LEVEL SECURITY;
 
 -- Anyone can browse the community feed
-CREATE POLICY IF NOT EXISTS "outfit_posts_select_public"
+DROP POLICY IF EXISTS "outfit_posts_select_public" ON outfit_posts;
+CREATE POLICY "outfit_posts_select_public"
   ON outfit_posts FOR SELECT
   USING (true);
 
 -- Only authenticated users can post
-CREATE POLICY IF NOT EXISTS "outfit_posts_insert_own"
+DROP POLICY IF EXISTS "outfit_posts_insert_own" ON outfit_posts;
+CREATE POLICY "outfit_posts_insert_own"
   ON outfit_posts FOR INSERT
   WITH CHECK (auth.uid() = shopper_id);
 
--- Only the author can edit or delete their post
-CREATE POLICY IF NOT EXISTS "outfit_posts_update_own"
+-- Only the author can edit their post
+DROP POLICY IF EXISTS "outfit_posts_update_own" ON outfit_posts;
+CREATE POLICY "outfit_posts_update_own"
   ON outfit_posts FOR UPDATE
   USING (auth.uid() = shopper_id);
 
-CREATE POLICY IF NOT EXISTS "outfit_posts_delete_own"
+-- Only the author can delete their post
+DROP POLICY IF EXISTS "outfit_posts_delete_own" ON outfit_posts;
+CREATE POLICY "outfit_posts_delete_own"
   ON outfit_posts FOR DELETE
   USING (auth.uid() = shopper_id);
 
@@ -178,12 +196,14 @@ CREATE INDEX IF NOT EXISTS idx_post_product_tags_post
 ALTER TABLE post_product_tags ENABLE ROW LEVEL SECURITY;
 
 -- Public read (viewers can tap pins to see products)
-CREATE POLICY IF NOT EXISTS "post_product_tags_select_public"
+DROP POLICY IF EXISTS "post_product_tags_select_public" ON post_product_tags;
+CREATE POLICY "post_product_tags_select_public"
   ON post_product_tags FOR SELECT
   USING (true);
 
 -- Only the post author can tag products in their posts
-CREATE POLICY IF NOT EXISTS "post_product_tags_insert_own"
+DROP POLICY IF EXISTS "post_product_tags_insert_own" ON post_product_tags;
+CREATE POLICY "post_product_tags_insert_own"
   ON post_product_tags FOR INSERT
   WITH CHECK (
     post_id IN (
@@ -191,7 +211,8 @@ CREATE POLICY IF NOT EXISTS "post_product_tags_insert_own"
     )
   );
 
-CREATE POLICY IF NOT EXISTS "post_product_tags_delete_own"
+DROP POLICY IF EXISTS "post_product_tags_delete_own" ON post_product_tags;
+CREATE POLICY "post_product_tags_delete_own"
   ON post_product_tags FOR DELETE
   USING (
     post_id IN (
@@ -214,17 +235,20 @@ CREATE INDEX IF NOT EXISTS idx_post_likes_post
 ALTER TABLE post_likes ENABLE ROW LEVEL SECURITY;
 
 -- Anyone can see like counts / who liked
-CREATE POLICY IF NOT EXISTS "post_likes_select_public"
+DROP POLICY IF EXISTS "post_likes_select_public" ON post_likes;
+CREATE POLICY "post_likes_select_public"
   ON post_likes FOR SELECT
   USING (true);
 
 -- Users can only insert their own like
-CREATE POLICY IF NOT EXISTS "post_likes_insert_own"
+DROP POLICY IF EXISTS "post_likes_insert_own" ON post_likes;
+CREATE POLICY "post_likes_insert_own"
   ON post_likes FOR INSERT
   WITH CHECK (auth.uid() = shopper_id);
 
 -- Users can only delete their own like
-CREATE POLICY IF NOT EXISTS "post_likes_delete_own"
+DROP POLICY IF EXISTS "post_likes_delete_own" ON post_likes;
+CREATE POLICY "post_likes_delete_own"
   ON post_likes FOR DELETE
   USING (auth.uid() = shopper_id);
 
@@ -244,17 +268,20 @@ CREATE INDEX IF NOT EXISTS idx_shopper_follows_following
 ALTER TABLE shopper_follows ENABLE ROW LEVEL SECURITY;
 
 -- Anyone can see follow graph (needed to show follower counts)
-CREATE POLICY IF NOT EXISTS "shopper_follows_select_public"
+DROP POLICY IF EXISTS "shopper_follows_select_public" ON shopper_follows;
+CREATE POLICY "shopper_follows_select_public"
   ON shopper_follows FOR SELECT
   USING (true);
 
 -- Only the follower can create the relationship
-CREATE POLICY IF NOT EXISTS "shopper_follows_insert_own"
+DROP POLICY IF EXISTS "shopper_follows_insert_own" ON shopper_follows;
+CREATE POLICY "shopper_follows_insert_own"
   ON shopper_follows FOR INSERT
   WITH CHECK (auth.uid() = follower_id);
 
 -- Only the follower can unfollow
-CREATE POLICY IF NOT EXISTS "shopper_follows_delete_own"
+DROP POLICY IF EXISTS "shopper_follows_delete_own" ON shopper_follows;
+CREATE POLICY "shopper_follows_delete_own"
   ON shopper_follows FOR DELETE
   USING (auth.uid() = follower_id);
 

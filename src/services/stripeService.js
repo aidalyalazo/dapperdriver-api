@@ -120,8 +120,12 @@ async function createDriverConnectAccount({ driverId, email, fullName }) {
  * We intentionally do NOT pass payment_method or confirm:true here so that
  * card details are never sent to our server (PCI compliance).
  */
-async function createOrderPaymentIntent({ order, shopperId }) {
-  // Look up shopper's Stripe customer ID (user_id is the auth UUID)
+/**
+ * Resolve (or lazily create) the shopper's Stripe customer.
+ * Card data never touches our server — customers exist so the payment
+ * sheet and saved payment methods have somewhere to live.
+ */
+async function getOrCreateCustomer(shopperId) {
   const { data: shopper } = await supabaseAdmin
     .from('shoppers')
     .select('stripe_customer_id, email')
@@ -130,7 +134,6 @@ async function createOrderPaymentIntent({ order, shopperId }) {
 
   let customerId = shopper?.stripe_customer_id;
 
-  // Create Stripe customer if not yet on file
   if (!customerId) {
     const customer = await stripe.customers.create({
       email: shopper?.email || undefined,
@@ -143,6 +146,12 @@ async function createOrderPaymentIntent({ order, shopperId }) {
       .update({ stripe_customer_id: customerId })
       .eq('user_id', shopperId);
   }
+
+  return customerId;
+}
+
+async function createOrderPaymentIntent({ order, shopperId }) {
+  const customerId = await getOrCreateCustomer(shopperId);
 
   const totalCents = Math.round(order.total_amount * 100);
 
@@ -257,14 +266,45 @@ async function capturePaymentIntent(paymentIntentId) {
  * @param {{ driverId: string, amount: number, stripeAccountId: string, orderIds: string[] }} params
  */
 async function payoutDriver({ driverId, amount, stripeAccountId, orderIds }) {
+  // Claim the orders FIRST (driver_paid false → true). If a previous run
+  // already claimed them — e.g. the job crashed after transferring but the
+  // cron fired again — this returns no rows and we skip, preventing a
+  // double transfer for the same deliveries.
+  const { data: claimed, error: claimErr } = await supabaseAdmin
+    .from('orders')
+    .update({ driver_paid: true })
+    .in('id', orderIds)
+    .eq('driver_paid', false)
+    .select('id');
+
+  if (claimErr) throw new Error(claimErr.message);
+  if (!claimed || claimed.length === 0) {
+    console.warn(`[Stripe] Driver ${driverId} payout skipped — orders already claimed by a previous run.`);
+    return null;
+  }
+
   const amountCents = Math.round(amount * 100);
 
-  const transfer = await stripe.transfers.create({
-    amount:      amountCents,
-    currency:    'usd',
-    destination: stripeAccountId,
-    metadata:    { driver_id: driverId, order_count: orderIds.length },
-  });
+  let transfer;
+  try {
+    transfer = await stripe.transfers.create(
+      {
+        amount:      amountCents,
+        currency:    'usd',
+        destination: stripeAccountId,
+        metadata:    { driver_id: driverId, order_count: claimed.length },
+      },
+      // Idempotent per driver + order set: a retried call cannot double-transfer
+      { idempotencyKey: `driver_payout_${driverId}_${claimed.map((c) => c.id).sort().join('_').slice(0, 180)}` }
+    );
+  } catch (transferErr) {
+    // Transfer failed — release the claim so the next run retries these orders
+    await supabaseAdmin
+      .from('orders')
+      .update({ driver_paid: false })
+      .in('id', claimed.map((c) => c.id));
+    throw transferErr;
+  }
 
   // Record payout
   await supabaseAdmin.from('payouts').insert({
@@ -276,12 +316,6 @@ async function payoutDriver({ driverId, amount, stripeAccountId, orderIds }) {
     paid_at:           new Date().toISOString(),
   });
 
-  // Mark orders as driver-paid
-  await supabaseAdmin
-    .from('orders')
-    .update({ driver_paid: true })
-    .in('id', orderIds);
-
   return transfer;
 }
 
@@ -291,6 +325,7 @@ module.exports = {
   createDriverAccountLink,
   getAccountStatus,
   createDriverConnectAccount,
+  getOrCreateCustomer,
   createOrderPaymentIntent,
   transferToBoutique,
   refundPaymentIntent,

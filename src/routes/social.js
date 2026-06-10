@@ -22,13 +22,22 @@ router.get(
   asyncHandler(async (req, res) => {
     const userId = req.userId;
 
-    // Who does this user follow?
-    const { data: follows } = await supabaseAdmin
-      .from('shopper_follows')
-      .select('following_id')
-      .eq('follower_id', userId);
+    // Who does this user follow / block?
+    const [{ data: follows }, { data: blocks }] = await Promise.all([
+      supabaseAdmin
+        .from('shopper_follows')
+        .select('following_id')
+        .eq('follower_id', userId),
+      supabaseAdmin
+        .from('user_blocks')
+        .select('blocked_id')
+        .eq('blocker_id', userId),
+    ]);
 
-    const followingIds = (follows || []).map((f) => f.following_id);
+    const blockedIds = (blocks || []).map((b) => b.blocked_id);
+    const followingIds = (follows || [])
+      .map((f) => f.following_id)
+      .filter((id) => !blockedIds.includes(id));
 
     const selectFields = `
       id, image_url, caption, like_count, created_at, shopper_id,
@@ -41,20 +50,27 @@ router.get(
     let rawPosts;
 
     if (followingIds.length > 0) {
-      const { data, error } = await supabaseAdmin
+      let q = supabaseAdmin
         .from('outfit_posts')
         .select(selectFields)
         .in('shopper_id', followingIds)
+        .eq('hidden', false)
         .order('created_at', { ascending: false })
         .limit(30);
+      const { data, error } = await q;
       if (error) throw new Error(error.message);
       rawPosts = data;
     } else {
-      const { data, error } = await supabaseAdmin
+      let q = supabaseAdmin
         .from('outfit_posts')
         .select(selectFields)
+        .eq('hidden', false)
         .order('like_count', { ascending: false })
         .limit(30);
+      if (blockedIds.length > 0) {
+        q = q.not('shopper_id', 'in', `(${blockedIds.join(',')})`);
+      }
+      const { data, error } = await q;
       if (error) throw new Error(error.message);
       rawPosts = data;
     }
@@ -413,6 +429,108 @@ router.delete(
 
     if (delErr) throw new Error(delErr.message);
     res.json({ deleted: true });
+  })
+);
+
+// ── Moderation (App Store UGC requirements) ─────────────────────────────────
+
+/**
+ * POST /api/v1/social/posts/:id/report
+ * Report a post. Idempotent per reporter. After 3 distinct reports the
+ * post is auto-hidden pending admin review.
+ * Body: { reason: inappropriate|spam|offensive|stolen_content|other, notes? }
+ */
+router.post(
+  '/posts/:id/report',
+  requireRole('shopper'),
+  [
+    body('reason').isIn(['inappropriate', 'spam', 'offensive', 'stolen_content', 'other']),
+    body('notes').optional().isString().isLength({ max: 500 }),
+    validate,
+  ],
+  asyncHandler(async (req, res) => {
+    const postId = req.params.id;
+
+    const { data: post } = await supabaseAdmin
+      .from('outfit_posts')
+      .select('id')
+      .eq('id', postId)
+      .single();
+    if (!post) return res.status(404).json({ error: 'Post not found' });
+
+    const { error } = await supabaseAdmin
+      .from('post_reports')
+      .upsert({
+        post_id:     postId,
+        reporter_id: req.userId,
+        reason:      req.body.reason,
+        notes:       req.body.notes || null,
+      }, { onConflict: 'post_id,reporter_id' });
+
+    if (error) throw new Error(error.message);
+
+    // Auto-hide after 3 distinct reporters — fail-safe for live UGC
+    const { count } = await supabaseAdmin
+      .from('post_reports')
+      .select('id', { count: 'exact', head: true })
+      .eq('post_id', postId);
+
+    if ((count || 0) >= 3) {
+      await supabaseAdmin
+        .from('outfit_posts')
+        .update({ hidden: true })
+        .eq('id', postId);
+    }
+
+    res.json({ reported: true });
+  })
+);
+
+/**
+ * POST /api/v1/social/users/:id/block
+ * Block a user — their posts disappear from your feeds.
+ */
+router.post(
+  '/users/:id/block',
+  requireRole('shopper'),
+  asyncHandler(async (req, res) => {
+    const blockedId = req.params.id;
+    if (blockedId === req.userId) {
+      return res.status(400).json({ error: 'Cannot block yourself' });
+    }
+
+    const { error } = await supabaseAdmin
+      .from('user_blocks')
+      .upsert({ blocker_id: req.userId, blocked_id: blockedId });
+
+    if (error) throw new Error(error.message);
+
+    // Blocking also severs the follow relationship both ways
+    await supabaseAdmin
+      .from('shopper_follows')
+      .delete()
+      .or(`and(follower_id.eq.${req.userId},following_id.eq.${blockedId}),and(follower_id.eq.${blockedId},following_id.eq.${req.userId})`);
+
+    res.json({ blocked: true });
+  })
+);
+
+/**
+ * DELETE /api/v1/social/users/:id/block
+ * Unblock a user.
+ */
+router.delete(
+  '/users/:id/block',
+  requireRole('shopper'),
+  asyncHandler(async (req, res) => {
+    const { error } = await supabaseAdmin
+      .from('user_blocks')
+      .delete()
+      .eq('blocker_id', req.userId)
+      .eq('blocked_id', req.params.id);
+
+    if (error) throw new Error(error.message);
+    res.json({ blocked: false });
   })
 );
 

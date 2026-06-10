@@ -167,24 +167,27 @@ router.get(
   requireRole('driver'),
   asyncHandler(async (req, res) => {
     const driverId = await getDriverId(req.userId);
+    // No fallback to the auth user id — orders.driver_id stores drivers.id,
+    // so a fallback query silently returns $0 instead of surfacing the problem.
+    if (!driverId) return res.status(404).json({ error: 'Driver profile not found' });
 
     const [payoutsRes, unpaidRes, deliveredCountRes, driverRes] = await Promise.all([
       supabaseAdmin
         .from('payouts')
         .select('amount, paid_at, stripe_transfer_id')
-        .eq('recipient_id', driverId || req.userId)
+        .eq('recipient_id', driverId)
         .eq('recipient_type', 'driver')
         .order('paid_at', { ascending: false })
         .limit(52),
       supabaseAdmin
         .from('orders')
         .select('driver_earnings, tip')
-        .eq('driver_id', driverId || req.userId)
+        .eq('driver_id', driverId)
         .eq('status', 'delivered'),
       supabaseAdmin
         .from('orders')
         .select('id', { count: 'exact', head: true })
-        .eq('driver_id', driverId || req.userId)
+        .eq('driver_id', driverId)
         .eq('status', 'delivered'),
       supabaseAdmin
         .from('drivers')
@@ -243,7 +246,12 @@ router.get(
       .order('created_at', { ascending: false })
       .limit(50);
 
-    if (status) q = q.eq('status', status);
+    // Status filter accepts a comma-separated list, e.g.
+    // ?status=driver_assigned,picked_up,out_for_delivery
+    if (status) {
+      const list = String(status).split(',').map((s) => s.trim()).filter(Boolean);
+      q = list.length > 1 ? q.in('status', list) : q.eq('status', list[0]);
+    }
 
     const { data, error } = await q;
     if (error) throw new Error(error.message);
@@ -261,36 +269,119 @@ router.get(
 );
 
 /**
+ * GET /api/v1/drivers/me/deliveries/available
+ * Unassigned delivery orders waiting for a driver (ready_for_pickup).
+ */
+router.get(
+  '/me/deliveries/available',
+  requireRole('driver'),
+  asyncHandler(async (req, res) => {
+    const { data, error } = await supabaseAdmin
+      .from('orders')
+      .select('*, order_items(*), boutiques!orders_boutique_id_fkey(name, logo_url, address)')
+      .eq('status', 'ready_for_pickup')
+      .eq('fulfillment_type', 'delivery')
+      .is('driver_id', null)
+      .order('created_at', { ascending: true })
+      .limit(50);
+
+    if (error) throw new Error(error.message);
+
+    const deliveries = (data || []).map(d => ({
+      ...d,
+      boutique_name: d.boutiques?.name || 'Store',
+      boutique_logo: d.boutiques?.logo_url || null,
+      boutique_address: d.boutiques?.address || null,
+    }));
+
+    res.json({ deliveries });
+  })
+);
+
+/**
+ * POST /api/v1/drivers/me/deliveries/:orderId/accept
+ * Driver claims an unassigned ready_for_pickup order
+ * (ready_for_pickup → driver_assigned).
+ */
+router.post(
+  '/me/deliveries/:orderId/accept',
+  requireRole('driver'),
+  asyncHandler(async (req, res) => {
+    const orderService = require('../services/orderService');
+    const updated = await orderService.assignDriver({
+      orderId:  req.params.orderId,
+      driverId: req.userId,
+    });
+    res.json(updated);
+  })
+);
+
+/**
+ * POST /api/v1/drivers/me/deliveries/:orderId/decline
+ * Driver releases an order they accepted but haven't picked up
+ * (driver_assigned → ready_for_pickup, driver unassigned).
+ */
+router.post(
+  '/me/deliveries/:orderId/decline',
+  requireRole('driver'),
+  asyncHandler(async (req, res) => {
+    const driverId = await getDriverId(req.userId);
+    if (!driverId) return res.status(404).json({ error: 'Driver not found' });
+
+    const { data, error } = await supabaseAdmin
+      .from('orders')
+      .update({ status: 'ready_for_pickup', driver_id: null, updated_at: new Date().toISOString() })
+      .eq('id', req.params.orderId)
+      .eq('driver_id', driverId)
+      .eq('status', 'driver_assigned') // can't abandon after pickup
+      .select()
+      .single();
+
+    if (error || !data) {
+      return res.status(422).json({
+        error: 'Order cannot be declined — it may already be picked up or assigned to someone else.',
+      });
+    }
+    res.json(data);
+  })
+);
+
+/**
  * PATCH /api/v1/drivers/me/deliveries/:orderId/status
- * Update delivery status (picked_up, in_transit, delivered).
+ * Advance a delivery through the canonical order state machine:
+ *   driver_assigned → picked_up → out_for_delivery → delivered
+ * Routed through orderService.updateOrderStatus so transition validation,
+ * notifications, and the boutique transfer on delivery all run.
  */
 router.patch(
   '/me/deliveries/:orderId/status',
   requireRole('driver'),
   [
-    body('status').isIn(['confirmed', 'ready', 'picked_up', 'in_transit', 'delivered']).withMessage('Invalid status'),
+    body('status').isIn(['picked_up', 'out_for_delivery', 'delivered']).withMessage('Invalid status'),
     validate,
   ],
   asyncHandler(async (req, res) => {
     const driverId = await getDriverId(req.userId);
     const { orderId } = req.params;
 
-    const { data, error } = await supabaseAdmin
+    // Ownership check
+    const { data: order } = await supabaseAdmin
       .from('orders')
-      .update({
-        status: req.body.status,
-        updated_at: new Date().toISOString(),
-        ...(req.body.status === 'delivered' ? { delivered_at: new Date().toISOString() } : {}),
-        // Note: do NOT clear driver_id on any forward-progress status transition.
-        // A separate decline endpoint would handle unassigning a driver if needed.
-      })
+      .select('id, driver_id')
       .eq('id', orderId)
-      .eq('driver_id', driverId)
-      .select()
       .single();
 
-    if (error) throw Object.assign(new Error('Order not found or not assigned to you'), { status: 404 });
-    res.json(data);
+    if (!order || order.driver_id !== driverId) {
+      return res.status(404).json({ error: 'Order not found or not assigned to you' });
+    }
+
+    const orderService = require('../services/orderService');
+    const updated = await orderService.updateOrderStatus({
+      orderId,
+      newStatus: req.body.status,
+      actorId:   req.userId,
+    });
+    res.json(updated);
   })
 );
 

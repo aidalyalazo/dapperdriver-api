@@ -105,6 +105,21 @@ router.post(
       return res.status(400).json({ error: 'image_url must be between 10 and 2048 characters' });
     }
 
+    // Must be a public http(s) URL — block internal hosts and metadata
+    // endpoints so stored URLs can't be abused for SSRF by any fetcher.
+    try {
+      const parsed = new URL(image_url);
+      const blockedHosts = ['localhost', '127.0.0.1', '0.0.0.0', '169.254.169.254', '[::1]'];
+      if (!['http:', 'https:'].includes(parsed.protocol) ||
+          blockedHosts.includes(parsed.hostname) ||
+          parsed.hostname.endsWith('.internal') ||
+          /^10\.|^192\.168\.|^172\.(1[6-9]|2\d|3[01])\./.test(parsed.hostname)) {
+        return res.status(400).json({ error: 'image_url must be a public http(s) URL' });
+      }
+    } catch (_) {
+      return res.status(400).json({ error: 'image_url is not a valid URL' });
+    }
+
     if (label !== undefined && label !== null && (typeof label !== 'string' || label.length > 100)) {
       return res.status(400).json({ error: 'label must be a string of at most 100 characters' });
     }

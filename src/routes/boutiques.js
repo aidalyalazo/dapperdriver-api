@@ -56,7 +56,12 @@ router.get(
       // commas (e.g. "Chicago, IL") because PostgREST splits .or() on every comma.
       q = q.eq('city_id', city);
     }
-    if (category) q = q.or(`primary_category.ilike.%${category}%,category_tags.cs.{${category}}`);
+    if (category) {
+      // Strip PostgREST filter metacharacters — raw interpolation lets a
+      // crafted category value inject additional .or() filter clauses.
+      const safe = String(category).replace(/[^a-zA-Z0-9 &'\-]/g, '').trim();
+      if (safe) q = q.or(`primary_category.ilike.%${safe}%,category_tags.cs.{${safe}}`);
+    }
 
     const { data, error, count } = await q;
     if (error) throw new Error(error.message);

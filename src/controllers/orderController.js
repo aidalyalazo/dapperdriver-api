@@ -42,6 +42,8 @@ const createOrderValidation = [
   // the card client-side and confirms the PaymentIntent directly with Stripe.
   // We only use this field if a caller pre-creates a payment method server-side.
   body('payment_method_id').optional().isString(),
+  body('notes').optional().isString().isLength({ max: 1000 })
+    .withMessage('notes must be at most 1000 characters'),
 ];
 
 // ── Controllers ───────────────────────────────────────────────────────────

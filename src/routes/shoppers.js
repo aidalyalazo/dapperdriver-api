@@ -17,7 +17,7 @@ router.get(
   asyncHandler(async (req, res) => {
     const { data, error } = await supabaseAdmin
       .from('shoppers')
-      .select('id, user_id, display_name, full_name, email, phone, avatar_url, default_address, created_at, style_preferences, size_tops, size_bottoms, size_shoes, size_dresses, body_measurements')
+      .select('id, user_id, display_name, full_name, email, phone, avatar_url, default_address, created_at, style_preferences, size_tops, size_bottoms, size_shoes, size_dresses, body_measurements, marketing_emails')
       .eq('user_id', req.userId)
       .single();
 
@@ -43,7 +43,7 @@ router.patch(
     const allowed = [
       'display_name', 'phone', 'avatar_url', 'default_address',
       'size_tops', 'size_bottoms', 'size_shoes', 'size_dresses',
-      'body_measurements', 'style_preferences',
+      'body_measurements', 'style_preferences', 'marketing_emails',
     ];
     const updates = Object.fromEntries(
       Object.entries(req.body).filter(([k]) => allowed.includes(k))
@@ -695,6 +695,219 @@ router.get(
 
     if (error) throw new Error(error.message);
     res.json({ referral_code: data?.referral_code || null });
+  })
+);
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PAYMENT METHODS (Stripe customer cards — card data never touches this server)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * GET /api/v1/shoppers/me/payment-methods
+ * List the shopper's saved cards from their Stripe customer.
+ */
+router.get(
+  '/me/payment-methods',
+  requireRole('shopper'),
+  asyncHandler(async (req, res) => {
+    const stripeService = require('../services/stripeService');
+    const { stripe } = require('../config/stripe');
+
+    const customerId = await stripeService.getOrCreateCustomer(req.userId);
+
+    const [methods, customer] = await Promise.all([
+      stripe.paymentMethods.list({ customer: customerId, type: 'card' }),
+      stripe.customers.retrieve(customerId),
+    ]);
+
+    const defaultPm = customer.invoice_settings?.default_payment_method || null;
+
+    res.json({
+      data: (methods.data || []).map((pm) => ({
+        id:         pm.id,
+        brand:      pm.card?.brand || 'card',
+        last4:      pm.card?.last4 || '',
+        exp_month:  pm.card?.exp_month,
+        exp_year:   pm.card?.exp_year,
+        is_default: pm.id === defaultPm,
+      })),
+    });
+  })
+);
+
+/**
+ * POST /api/v1/shoppers/me/payment-methods
+ * Attach a tokenized payment method (pm_xxx created client-side by the
+ * Stripe SDK) to the shopper's customer. Raw card data is rejected —
+ * accepting PANs server-side would violate PCI-DSS.
+ */
+router.post(
+  '/me/payment-methods',
+  requireRole('shopper'),
+  asyncHandler(async (req, res) => {
+    if (req.body.card_number || req.body.cvc) {
+      return res.status(400).json({
+        error: 'Raw card data is not accepted. Tokenize the card with the Stripe SDK and send payment_method_id.',
+      });
+    }
+    const pmId = req.body.payment_method_id;
+    if (!pmId || typeof pmId !== 'string' || !pmId.startsWith('pm_')) {
+      return res.status(422).json({ error: 'payment_method_id (pm_...) is required' });
+    }
+
+    const stripeService = require('../services/stripeService');
+    const { stripe } = require('../config/stripe');
+    const customerId = await stripeService.getOrCreateCustomer(req.userId);
+
+    const pm = await stripe.paymentMethods.attach(pmId, { customer: customerId });
+
+    // First saved card becomes the default automatically
+    const existing = await stripe.paymentMethods.list({ customer: customerId, type: 'card' });
+    if ((existing.data || []).length === 1) {
+      await stripe.customers.update(customerId, {
+        invoice_settings: { default_payment_method: pm.id },
+      });
+    }
+
+    res.status(201).json({
+      id:        pm.id,
+      brand:     pm.card?.brand,
+      last4:     pm.card?.last4,
+      exp_month: pm.card?.exp_month,
+      exp_year:  pm.card?.exp_year,
+    });
+  })
+);
+
+/** Resolve a payment method and verify it belongs to this shopper's customer. */
+async function getOwnedPaymentMethod(userId, pmId) {
+  const stripeService = require('../services/stripeService');
+  const { stripe } = require('../config/stripe');
+  const customerId = await stripeService.getOrCreateCustomer(userId);
+  const pm = await stripe.paymentMethods.retrieve(pmId);
+  if (pm.customer !== customerId) return { customerId, pm: null };
+  return { customerId, pm };
+}
+
+/**
+ * DELETE /api/v1/shoppers/me/payment-methods/:id
+ */
+router.delete(
+  '/me/payment-methods/:id',
+  requireRole('shopper'),
+  asyncHandler(async (req, res) => {
+    const { stripe } = require('../config/stripe');
+    const { pm } = await getOwnedPaymentMethod(req.userId, req.params.id);
+    if (!pm) return res.status(404).json({ error: 'Payment method not found' });
+
+    await stripe.paymentMethods.detach(pm.id);
+    res.json({ deleted: true });
+  })
+);
+
+/**
+ * PATCH /api/v1/shoppers/me/payment-methods/:id/set-default
+ */
+router.patch(
+  '/me/payment-methods/:id/set-default',
+  requireRole('shopper'),
+  asyncHandler(async (req, res) => {
+    const { stripe } = require('../config/stripe');
+    const { customerId, pm } = await getOwnedPaymentMethod(req.userId, req.params.id);
+    if (!pm) return res.status(404).json({ error: 'Payment method not found' });
+
+    await stripe.customers.update(customerId, {
+      invoice_settings: { default_payment_method: pm.id },
+    });
+    res.json({ default: pm.id });
+  })
+);
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ACCOUNT DELETION (App Store guideline 5.1.1(v))
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * DELETE /api/v1/shoppers/me
+ * Permanently delete the shopper's account.
+ * Personal data is removed; orders are kept (anonymized) for financial records.
+ */
+router.delete(
+  '/me',
+  requireRole('shopper'),
+  asyncHandler(async (req, res) => {
+    const userId = req.userId;
+
+    // Block deletion while an order or try-on session is in flight — funds
+    // and physical goods are still moving.
+    const [activeOrders, activeSessions] = await Promise.all([
+      supabaseAdmin.from('orders')
+        .select('id', { count: 'exact', head: true })
+        .eq('shopper_id', userId)
+        .in('status', ['pending', 'confirmed', 'preparing', 'ready_for_pickup',
+                       'driver_assigned', 'picked_up', 'out_for_delivery']),
+      supabaseAdmin.from('try_on_sessions')
+        .select('id', { count: 'exact', head: true })
+        .eq('shopper_id', userId)
+        .in('status', ['booked', 'pickup_pending', 'en_route', 'arrived', 'in_home', 'returning']),
+    ]);
+
+    if ((activeOrders.count || 0) > 0 || (activeSessions.count || 0) > 0) {
+      return res.status(422).json({
+        error: 'You have an active order or try-on session. Wait for it to complete or cancel it, then try again.',
+      });
+    }
+
+    // Remove personal data the account owns outright. Each delete is
+    // best-effort — a missing table must not strand the deletion.
+    const cleanup = [
+      supabaseAdmin.from('shopper_addresses').delete().eq('shopper_id', userId),
+      supabaseAdmin.from('cart_items').delete().eq('shopper_id', userId),
+      supabaseAdmin.from('saved_items').delete().eq('shopper_id', userId),
+      supabaseAdmin.from('outfit_posts').delete().eq('shopper_id', userId),
+      supabaseAdmin.from('shopper_follows').delete().or(`follower_id.eq.${userId},followed_id.eq.${userId}`),
+      supabaseAdmin.from('try_on_queue').update({ status: 'cancelled' })
+        .eq('shopper_id', userId).eq('status', 'waiting'),
+    ];
+    await Promise.allSettled(cleanup);
+
+    // Anonymize the profile row (kept so order financial records stay consistent)
+    const scrambledEmail = `deleted-${userId.slice(0, 8)}@deleted.dapperdriver.com`;
+    await supabaseAdmin
+      .from('shoppers')
+      .update({
+        display_name:      'Deleted User',
+        email:             scrambledEmail,
+        phone:             null,
+        avatar_url:        null,
+        default_address:   null,
+        body_measurements: null,
+        style_preferences: null,
+      })
+      .eq('user_id', userId);
+
+    // Remove the auth user — invalidates all sessions. Historical rows
+    // without ON DELETE CASCADE (e.g. past try-on sessions) can block the
+    // hard delete; in that case fall back to scrambling credentials and
+    // permanently banning the account, which keeps legally required
+    // financial records while making the account unrecoverable.
+    const { error: authErr } = await supabaseAdmin.auth.admin.deleteUser(userId);
+    if (authErr) {
+      console.warn('[ACCOUNT] Hard delete blocked, anonymizing instead:', userId, authErr.message);
+      const { error: banErr } = await supabaseAdmin.auth.admin.updateUserById(userId, {
+        email:         scrambledEmail,
+        password:      require('crypto').randomUUID(),
+        ban_duration:  '876000h', // ~100 years
+        user_metadata: { deleted: true },
+      });
+      if (banErr) {
+        console.error('[ACCOUNT] Account deletion failed entirely:', userId, banErr.message);
+        return res.status(500).json({ error: 'Account deletion failed. Please contact support.' });
+      }
+    }
+
+    console.log(`[ACCOUNT] Shopper account deleted: ${userId}`);
+    res.json({ deleted: true });
   })
 );
 

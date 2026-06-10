@@ -371,6 +371,35 @@ router.post(
   })
 );
 
+/**
+ * POST /api/v1/try-on/sessions/:id/items-decision
+ * Shopper declares keep/return for every item during the in-home window.
+ * Body: { kept_item_ids: [], returned_item_ids: [] }
+ * Captures the session fee (kept ≥ 1) or voids it (kept 0), converts
+ * inventory holds, and charges kept items minus the shopping credit.
+ */
+router.post(
+  '/sessions/:id/items-decision',
+  requireRole('shopper'),
+  [
+    param('id').isUUID(),
+    body('kept_item_ids').isArray(),
+    body('kept_item_ids.*').isUUID(),
+    body('returned_item_ids').isArray(),
+    body('returned_item_ids.*').isUUID(),
+  ],
+  validate,
+  asyncHandler(async (req, res) => {
+    const updated = await tryOnService.recordItemsDecision({
+      sessionId:       req.params.id,
+      shopperId:       req.userId,
+      keptItemIds:     req.body.kept_item_ids,
+      returnedItemIds: req.body.returned_item_ids,
+    });
+    res.json(updated);
+  })
+);
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // BOUTIQUE ROUTES
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -516,6 +545,29 @@ router.get(
 );
 
 /**
+ * GET /api/v1/try-on/driver/sessions/available
+ * Unassigned sessions a driver can accept. Sessions are created in 'booked'
+ * status — listing only the driver's own sessions (above) can never surface
+ * them, so this is the discovery feed for the driver app.
+ */
+router.get(
+  '/driver/sessions/available',
+  requireRole('driver'),
+  asyncHandler(async (req, res) => {
+    const { data, error } = await supabaseAdmin
+      .from('try_on_sessions')
+      .select('*, try_on_session_items(id, name, price_cents, status, image_url, selected_size), boutiques(name, address, logo_url)')
+      .in('status', ['booked', 'pickup_pending'])
+      .is('driver_id', null)
+      .order('scheduled_at', { ascending: true })
+      .limit(50);
+
+    if (error) throw new Error(error.message);
+    res.json({ sessions: data || [] });
+  })
+);
+
+/**
  * POST /api/v1/try-on/driver/sessions/:id/accept
  * Driver self-assigns to a try-on session.
  */
@@ -534,14 +586,20 @@ router.post(
       return res.status(409).json({ error: 'Session already assigned to another driver' });
     }
 
+    // Compare-and-swap on driver_id so two drivers accepting concurrently
+    // can't both win — only the update that finds driver_id still NULL
+    // (or already theirs) matches a row.
     const { data, error } = await supabaseAdmin
       .from('try_on_sessions')
       .update({ driver_id: req.userId, status: 'pickup_pending', updated_at: new Date().toISOString() })
       .eq('id', req.params.id)
+      .or(`driver_id.is.null,driver_id.eq.${req.userId}`)
       .select()
       .single();
 
-    if (error) throw new Error(error.message);
+    if (error || !data) {
+      return res.status(409).json({ error: 'Session already assigned to another driver' });
+    }
     res.json(data);
   })
 );

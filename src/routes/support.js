@@ -45,15 +45,30 @@ router.post(
     const userEmail = req.user.email;
     const userRole = req.user.user_metadata?.role || 'shopper';
 
-    // If an order_id was provided, verify it exists and belongs to the user
+    // If an order_id was provided, verify it exists AND belongs to the caller —
+    // otherwise tickets can be used to probe other users' order ids.
     if (order_id) {
       const { data: order } = await supabaseAdmin
         .from('orders')
-        .select('id')
+        .select('id, shopper_id, boutique_id, driver_id')
         .eq('id', order_id)
         .single();
 
-      if (!order) {
+      let ownsOrder = false;
+      if (order) {
+        if (userRole === 'shopper') ownsOrder = order.shopper_id === userId;
+        else if (userRole === 'boutique') {
+          const { data: boutique } = await supabaseAdmin
+            .from('boutiques').select('id').eq('user_id', userId).maybeSingle();
+          ownsOrder = !!boutique && order.boutique_id === boutique.id;
+        } else if (userRole === 'driver') {
+          const { data: driver } = await supabaseAdmin
+            .from('drivers').select('id').eq('user_id', userId).maybeSingle();
+          ownsOrder = !!driver && order.driver_id === driver.id;
+        } else if (userRole === 'admin') ownsOrder = true;
+      }
+
+      if (!order || !ownsOrder) {
         return res.status(404).json({ error: 'Referenced order not found.' });
       }
     }

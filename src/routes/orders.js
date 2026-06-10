@@ -51,6 +51,13 @@ router.post(
       throw Object.assign(new Error('No payment to refund'), { status: 400 });
     }
 
+    if (amount && amount > parseFloat(order.total_amount)) {
+      throw Object.assign(
+        new Error(`Refund amount $${amount} exceeds order total $${order.total_amount}`),
+        { status: 400 }
+      );
+    }
+
     const refundAmount = amount ? Math.round(amount * 100) : undefined;
     const refund = await stripe.refunds.create({
       payment_intent: order.stripe_payment_intent_id,
@@ -88,7 +95,9 @@ router.post(
 router.post(
   '/:id/tip',
   requireRole('shopper'),
-  [body('amount').isFloat({ min: 0.01 }).withMessage('amount must be > 0')],
+  // $200 hard cap — tips have no business reason to exceed it, and an
+  // unbounded value lets a typo'd or malicious amount charge the card.
+  [body('amount').isFloat({ min: 0.01, max: 200 }).withMessage('amount must be between $0.01 and $200')],
   validate,
   asyncHandler(async (req, res) => {
     const { stripe } = require('../config/stripe');

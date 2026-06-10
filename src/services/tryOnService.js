@@ -177,11 +177,26 @@ async function bookSession({
 
   if (itemsErr) console.error('[TryOn] Session items insert error:', itemsErr.message);
 
-  // ── 8. Mark slot reserved ─────────────────────────────────────────────────
-  await supabaseAdmin
+  // ── 8. Mark slot reserved (compare-and-swap) ─────────────────────────────
+  // The .eq('status','available') guard makes this atomic: two concurrent
+  // bookings of the same slot can both pass the earlier read check, but only
+  // one update matches the still-available row. The loser rolls back.
+  const { data: reservedSlot } = await supabaseAdmin
     .from('try_on_boutique_slots')
     .update({ status: 'reserved', reserved_for_session: sessionId })
-    .eq('id', slotId);
+    .eq('id', slotId)
+    .eq('status', 'available')
+    .select('id');
+
+  if (!reservedSlot || reservedSlot.length === 0) {
+    await releaseHoldsForSession(sessionId).catch(() => {});
+    await supabaseAdmin.from('try_on_session_items').delete().eq('session_id', sessionId);
+    await supabaseAdmin.from('try_on_sessions').delete().eq('id', sessionId);
+    throw Object.assign(
+      new Error('That time slot was just taken by another shopper. Please pick a different slot.'),
+      { status: 409 }
+    );
+  }
 
   // ── 9. Create Stripe fee PI (manual capture) ──────────────────────────────
   let clientSecret = null;
@@ -275,14 +290,28 @@ async function cancelSession({ sessionId, cancelledBy, reason }) {
   // Release holds
   await releaseHoldsForSession(sessionId);
 
-  // Void Stripe PI (if exists and not yet captured)
+  // Settle the fee PI. A shopper cancelling inside the cutoff owes the
+  // cancellation fee — partially capture it from the authorized fee PI
+  // (the only way the recorded fee actually gets charged). Otherwise void.
   if (session.stripe_payment_intent_id) {
     try {
-      await stripe.paymentIntents.cancel(session.stripe_payment_intent_id);
+      const pi = await stripe.paymentIntents.retrieve(session.stripe_payment_intent_id);
+      if (pi.status === 'requires_capture') {
+        const chargeFee = cancellationFeeCents > 0 && cancelledBy === 'shopper';
+        if (chargeFee) {
+          await stripe.paymentIntents.capture(pi.id, {
+            amount_to_capture: Math.min(cancellationFeeCents, pi.amount_capturable),
+          });
+        } else {
+          await stripe.paymentIntents.cancel(pi.id);
+        }
+      } else if (!['canceled', 'succeeded'].includes(pi.status)) {
+        await stripe.paymentIntents.cancel(pi.id);
+      }
     } catch (e) {
       if (!e.message?.includes('already canceled') &&
           !e.message?.includes('status is succeeded')) {
-        console.error('[TryOn] PI cancel error:', e.message);
+        console.error('[TryOn] PI settle error on cancel:', e.message);
       }
     }
   }
@@ -309,6 +338,159 @@ async function cancelSession({ sessionId, cancelledBy, reason }) {
     .single();
 
   console.log(`[TryOn] Session ${sessionId} cancelled by ${cancelledBy} — fee: $${cancellationFeeCents / 100}`);
+  return updated;
+}
+
+// ── recordItemsDecision ───────────────────────────────────────────────────────
+
+/**
+ * Shopper declares which items they're keeping vs returning (during in_home).
+ * Side effects, per the fee policy shown at booking ("fee captured only if
+ * you keep ≥1 item"):
+ *   - item rows updated (kept/returned + decided_at)
+ *   - session counts + product_revenue_cents + commission_cents set
+ *   - inventory holds converted (kept) / released (returned)
+ *   - kept ≥ 1 → session fee PI captured; kept = 0 → fee PI voided
+ *   - kept items charged off-session against the shopper's default card,
+ *     minus the shopping credit; charge failure flags the shopper for
+ *     admin follow-up (driver flow continues regardless)
+ */
+async function recordItemsDecision({ sessionId, shopperId, keptItemIds = [], returnedItemIds = [] }) {
+  const session = await getSession(sessionId);
+  if (session.shopper_id !== shopperId) {
+    throw Object.assign(new Error('Forbidden'), { status: 403 });
+  }
+  if (!['in_home', 'returning'].includes(session.status)) {
+    throw Object.assign(
+      new Error(`Decisions can only be made during the in-home window (status: ${session.status})`),
+      { status: 422 }
+    );
+  }
+
+  const items = session.try_on_session_items || [];
+  const itemMap = Object.fromEntries(items.map((i) => [i.id, i]));
+  const decided = new Set([...keptItemIds, ...returnedItemIds]);
+
+  const unknown = [...decided].filter((id) => !itemMap[id]);
+  if (unknown.length) {
+    throw Object.assign(new Error('Unknown item ids in decision'), { status: 422 });
+  }
+  const undecidedItems = items.filter((i) => !decided.has(i.id));
+  if (undecidedItems.length) {
+    throw Object.assign(
+      new Error(`Decide keep or return for every item (${undecidedItems.length} undecided)`),
+      { status: 422 }
+    );
+  }
+
+  const now = new Date().toISOString();
+  await Promise.all([
+    keptItemIds.length
+      ? supabaseAdmin.from('try_on_session_items')
+          .update({ status: 'kept', decided_at: now })
+          .in('id', keptItemIds).eq('session_id', sessionId)
+      : Promise.resolve(),
+    returnedItemIds.length
+      ? supabaseAdmin.from('try_on_session_items')
+          .update({ status: 'returned', decided_at: now })
+          .in('id', returnedItemIds).eq('session_id', sessionId)
+      : Promise.resolve(),
+  ]);
+
+  const keptItems = keptItemIds.map((id) => itemMap[id]);
+  const revenueCents = keptItems.reduce((s, i) => s + (i.price_cents || 0), 0);
+
+  // Commission on kept items (boutique-specific rate, platform default 25%)
+  const { data: boutique } = await supabaseAdmin
+    .from('boutiques')
+    .select('commission_rate')
+    .eq('id', session.boutique_id)
+    .single();
+  const commissionRate = boutique?.commission_rate != null
+    ? parseFloat(boutique.commission_rate) / 100
+    : 0.25;
+  const commissionCents = Math.round(revenueCents * commissionRate);
+
+  // Inventory: convert kept holds (decrements stock), release returned ones
+  const keptProductIds = keptItems.map((i) => i.product_id);
+  await convertHolds(sessionId, 'try_on', keptProductIds);
+
+  // Fee PI: capture when ≥1 item kept, void when nothing kept
+  if (session.stripe_payment_intent_id) {
+    try {
+      const pi = await stripe.paymentIntents.retrieve(session.stripe_payment_intent_id);
+      if (pi.status === 'requires_capture') {
+        if (keptItemIds.length > 0) await stripe.paymentIntents.capture(pi.id);
+        else await stripe.paymentIntents.cancel(pi.id);
+      }
+    } catch (e) {
+      console.error('[TryOn] Fee PI settle error:', sessionId, e.message);
+    }
+  }
+
+  // Charge kept items off-session (revenue minus shopping credit)
+  let itemsPiId = null;
+  const chargeCents = keptItemIds.length > 0
+    ? Math.max(0, revenueCents - (session.credit_amount_cents || 0))
+    : 0;
+  if (chargeCents > 0) {
+    try {
+      const { getOrCreateCustomer } = require('./stripeService');
+      const customerId = await getOrCreateCustomer(shopperId);
+      const customer = await stripe.customers.retrieve(customerId);
+      const defaultPm = customer.invoice_settings?.default_payment_method;
+      const pmList = defaultPm ? null
+        : await stripe.paymentMethods.list({ customer: customerId, type: 'card', limit: 1 });
+      const pm = defaultPm || pmList?.data?.[0]?.id;
+
+      if (!pm) throw new Error('No saved payment method on file');
+
+      const itemsPi = await stripe.paymentIntents.create(
+        {
+          amount:         chargeCents,
+          currency:       'usd',
+          customer:       customerId,
+          payment_method: pm,
+          off_session:    true,
+          confirm:        true,
+          metadata: {
+            type:        'try_on_session_items',
+            session_id:  sessionId,
+            shopper_id:  shopperId,
+            boutique_id: session.boutique_id,
+          },
+          description: `DapperDriver Try-On — ${keptItemIds.length} item(s) kept`,
+        },
+        { idempotencyKey: `try_on_items_${sessionId}` }
+      );
+      itemsPiId = itemsPi.id;
+    } catch (chargeErr) {
+      console.error('[TryOn] Items charge failed:', sessionId, chargeErr.message);
+      await supabaseAdmin.from('try_on_shopper_flags').insert({
+        shopper_id: shopperId,
+        session_id: sessionId,
+        flag_type:  'items_charge_failed',
+        severity:   'watch',
+        notes:      `Off-session charge of $${(chargeCents / 100).toFixed(2)} failed: ${chargeErr.message}`,
+      }).then(() => {}, () => {});
+    }
+  }
+
+  const { data: updated } = await supabaseAdmin
+    .from('try_on_sessions')
+    .update({
+      items_kept_count:      keptItemIds.length,
+      items_returned_count:  returnedItemIds.length,
+      product_revenue_cents: revenueCents,
+      commission_cents:      commissionCents,
+      ...(itemsPiId ? { stripe_items_payment_intent_id: itemsPiId } : {}),
+      updated_at:            now,
+    })
+    .eq('id', sessionId)
+    .select()
+    .single();
+
+  console.log(`[TryOn] Decisions recorded — session ${sessionId}: kept ${keptItemIds.length}, returned ${returnedItemIds.length}, revenue $${(revenueCents / 100).toFixed(2)}`);
   return updated;
 }
 
@@ -344,4 +526,4 @@ async function listSessions({ shopperId, boutiqueId, driverId, status, page = 1,
   return { sessions: data || [], total: count, page, limit };
 }
 
-module.exports = { bookSession, cancelSession, getSession, listSessions };
+module.exports = { bookSession, cancelSession, getSession, listSessions, recordItemsDecision };
