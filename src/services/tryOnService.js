@@ -40,6 +40,7 @@ async function bookSession({
   productIds,
   deliveryAddress,    // { street, city, state, zip, lat?, lng? }
   cityId,
+  sizes = {},         // { [product_id]: 'M' } — selected size per item
 }) {
   // ── 1. Settings ───────────────────────────────────────────────────────────
   const [feeCents, creditCents, driverPayCents, maxItems, minCartCents] = await Promise.all([
@@ -71,6 +72,24 @@ async function bookSession({
   const cartValueCents = productIds.reduce((sum, id) => {
     return sum + Math.round((productMap[id].price || 0) * 100);
   }, 0);
+
+  // ── 2b. Same-state rule: try-on deliveries must stay in the boutique's state
+  const { data: boutiqueRow } = await supabaseAdmin
+    .from('boutiques')
+    .select('state, name')
+    .eq('id', boutiqueId)
+    .single();
+
+  const { sameState } = require('../utils/usStates');
+  if (sameState(boutiqueRow?.state, deliveryAddress?.state) === false) {
+    throw Object.assign(
+      new Error(
+        `${boutiqueRow?.name || 'This boutique'} only offers try-on within ` +
+        `${boutiqueRow.state}. Your delivery address must be in ${boutiqueRow.state}.`
+      ),
+      { status: 422, code: 'OUT_OF_STATE_DELIVERY' }
+    );
+  }
 
   // ── 3. Eligibility ────────────────────────────────────────────────────────
   const { eligible, reasons } = await canShopperBook({
@@ -147,6 +166,7 @@ async function bookSession({
       name:          p.name,
       price_cents:   Math.round((p.price || 0) * 100),
       image_url:     (p.images && p.images[0]) || null,
+      selected_size: sizes[id] || null,
       status:        'pending',
     };
   });
@@ -310,7 +330,7 @@ async function getSession(sessionId) {
 async function listSessions({ shopperId, boutiqueId, driverId, status, page = 1, limit = 20 }) {
   let q = supabaseAdmin
     .from('try_on_sessions')
-    .select('*, try_on_session_items(id, name, price_cents, status, image_url)', { count: 'exact' })
+    .select('*, try_on_session_items(id, name, price_cents, status, image_url, selected_size)', { count: 'exact' })
     .order('scheduled_at', { ascending: false })
     .range((page - 1) * limit, page * limit - 1);
 

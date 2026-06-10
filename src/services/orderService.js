@@ -11,7 +11,9 @@ const { stripe } = require('../config/stripe');
 const ORDER_TRANSITIONS = {
   pending: ['confirmed', 'cancelled'],
   confirmed: ['preparing', 'cancelled'],
-  preparing: ['ready_for_pickup'],
+  // preparing → cancelled is reserved for boutique/admin (gated in the
+  // cancel controller); shoppers may only cancel pending/confirmed orders.
+  preparing: ['ready_for_pickup', 'cancelled'],
   ready_for_pickup: ['driver_assigned'],
   driver_assigned: ['picked_up'],
   picked_up: ['out_for_delivery'],
@@ -26,7 +28,7 @@ const ORDER_TRANSITIONS = {
 const PICKUP_ORDER_TRANSITIONS = {
   pending: ['confirmed', 'cancelled'],
   confirmed: ['preparing', 'cancelled'],
-  preparing: ['ready_for_pickup'],
+  preparing: ['ready_for_pickup', 'cancelled'],
   ready_for_pickup: ['picked_up'],
   picked_up: ['completed'],
   completed: [],
@@ -218,7 +220,7 @@ async function createOrder({
 
     // Boutique-specific commission rate
     supabaseAdmin.from('boutiques')
-      .select('commission_rate')
+      .select('commission_rate, state, name')
       .eq('id', boutiqueId)
       .single()
       .then((r) => r.data)
@@ -246,6 +248,24 @@ async function createOrder({
   ]);
 
   // ── Process Phase 1 results ───────────────────────────────────────────────
+
+  // Same-state delivery rule: delivery orders must ship to an address in the
+  // boutique's state. Pickup orders are exempt. Skipped when either state is
+  // unknown (e.g. international boutiques with state = NULL).
+  if (!isPickup) {
+    const { sameState } = require('../utils/usStates');
+    const match = sameState(boutiqueData?.state, deliveryAddress?.state);
+    if (match === false) {
+      throw Object.assign(
+        new Error(
+          `${boutiqueData?.name || 'This boutique'} only delivers within ` +
+          `${boutiqueData.state}. Choose a delivery address in ${boutiqueData.state} ` +
+          `or switch to pickup.`
+        ),
+        { status: 422, code: 'OUT_OF_STATE_DELIVERY' }
+      );
+    }
+  }
 
   const trustedProductsMap = Object.fromEntries((productsData || []).map((p) => [p.id, p]));
 

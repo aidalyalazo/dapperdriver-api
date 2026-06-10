@@ -32,7 +32,7 @@ router.get(
     const { status, category, try_on_enabled } = req.query;
     let q = supabaseAdmin
       .from('boutiques')
-      .select('id, name, slug, description, logo_url, logo_initials, logo_bg, campaign_images, address, city_id, rating, review_count, follower_count, primary_category, category_tags, style_tags, price_tier, status', { count: 'exact' })
+      .select('id, name, slug, description, logo_url, logo_initials, logo_bg, campaign_images, address, state, city_id, rating, review_count, follower_count, primary_category, category_tags, style_tags, price_tier, status, try_on_enabled', { count: 'exact' })
       .order('rating', { ascending: false })
       .range((page - 1) * limit, page * limit - 1);
 

@@ -94,10 +94,11 @@ router.post(
     body('delivery_address.street').notEmpty(),
     body('delivery_address.city').notEmpty(),
     body('delivery_address.zip').notEmpty(),
+    body('sizes').optional().isObject(), // { [product_id]: 'M' }
   ],
   validate,
   asyncHandler(async (req, res) => {
-    const { boutique_id, slot_id, product_ids, city_id, delivery_address } = req.body;
+    const { boutique_id, slot_id, product_ids, city_id, delivery_address, sizes } = req.body;
 
     const { session, clientSecret } = await tryOnService.bookSession({
       shopperId:       req.userId,
@@ -106,12 +107,158 @@ router.post(
       productIds:      product_ids,
       cityId:          city_id,
       deliveryAddress: delivery_address,
+      sizes:           sizes || {},
     });
 
     res.status(201).json({
       session,
       client_secret: clientSecret,
     });
+  })
+);
+
+/**
+ * POST /api/v1/try-on/queue
+ * Join the try-on queue for a boutique (no slots open right now).
+ * Body: { boutique_id, product_ids[], sizes?: { [product_id]: size } }
+ */
+router.post(
+  '/queue',
+  requireRole('shopper'),
+  [
+    body('boutique_id').isUUID(),
+    body('product_ids').isArray({ min: 1, max: 3 }),
+    body('product_ids.*').isUUID(),
+    body('sizes').optional().isObject(),
+  ],
+  validate,
+  asyncHandler(async (req, res) => {
+    const { boutique_id, product_ids } = req.body;
+
+    const { data: boutique } = await supabaseAdmin
+      .from('boutiques')
+      .select('id, name, try_on_enabled')
+      .eq('id', boutique_id)
+      .single();
+
+    if (!boutique) return res.status(404).json({ error: 'Boutique not found' });
+    if (!boutique.try_on_enabled) {
+      return res.status(422).json({ error: 'This boutique does not offer try-on yet' });
+    }
+
+    // Next position = current number of waiting entries + 1
+    const { count } = await supabaseAdmin
+      .from('try_on_queue')
+      .select('id', { count: 'exact', head: true })
+      .eq('boutique_id', boutique_id)
+      .eq('status', 'waiting');
+
+    const { data: entry, error } = await supabaseAdmin
+      .from('try_on_queue')
+      .insert({
+        shopper_id:  req.userId,
+        boutique_id,
+        product_ids,
+        status:      'waiting',
+        position:    (count || 0) + 1,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      // 23505 = unique violation on uq_try_on_queue_one_active
+      if (error.code === '23505') {
+        return res.status(409).json({
+          error: `You're already in the queue for ${boutique.name}. We'll notify you when a slot opens.`,
+        });
+      }
+      throw new Error(error.message);
+    }
+
+    res.status(201).json({ ...entry, boutique_name: boutique.name });
+  })
+);
+
+/**
+ * GET /api/v1/try-on/queue
+ * List the queues this shopper is currently on (waiting or offered),
+ * with live position and boutique info.
+ */
+router.get(
+  '/queue',
+  requireRole('shopper'),
+  asyncHandler(async (req, res) => {
+    const { data: entries, error } = await supabaseAdmin
+      .from('try_on_queue')
+      .select('id, boutique_id, product_ids, status, position, offered_at, claim_deadline, created_at')
+      .eq('shopper_id', req.userId)
+      .in('status', ['waiting', 'offered'])
+      .order('created_at', { ascending: false });
+
+    if (error) throw new Error(error.message);
+    if (!entries?.length) return res.json({ queues: [] });
+
+    const boutiqueIds = [...new Set(entries.map((e) => e.boutique_id))];
+    const { data: boutiques } = await supabaseAdmin
+      .from('boutiques')
+      .select('id, name, logo_url, logo_initials, logo_bg')
+      .in('id', boutiqueIds);
+    const boutiqueMap = Object.fromEntries((boutiques || []).map((b) => [b.id, b]));
+
+    // Live position = how many waiting entries joined the same boutique before me
+    const queues = await Promise.all(entries.map(async (e) => {
+      let livePosition = null;
+      if (e.status === 'waiting') {
+        const { count } = await supabaseAdmin
+          .from('try_on_queue')
+          .select('id', { count: 'exact', head: true })
+          .eq('boutique_id', e.boutique_id)
+          .eq('status', 'waiting')
+          .lte('created_at', e.created_at);
+        livePosition = count || 1;
+      }
+      return {
+        ...e,
+        live_position: livePosition,
+        item_count:    (e.product_ids || []).length,
+        boutique:      boutiqueMap[e.boutique_id] || null,
+      };
+    }));
+
+    res.json({ queues });
+  })
+);
+
+/**
+ * DELETE /api/v1/try-on/queue/:id
+ * Leave a queue (own entry only).
+ */
+router.delete(
+  '/queue/:id',
+  requireRole('shopper'),
+  [param('id').isUUID()],
+  validate,
+  asyncHandler(async (req, res) => {
+    const { data: entry } = await supabaseAdmin
+      .from('try_on_queue')
+      .select('id, shopper_id, status')
+      .eq('id', req.params.id)
+      .single();
+
+    if (!entry || entry.shopper_id !== req.userId) {
+      return res.status(404).json({ error: 'Queue entry not found' });
+    }
+    if (!['waiting', 'offered'].includes(entry.status)) {
+      return res.status(422).json({ error: `Cannot leave queue — entry is ${entry.status}` });
+    }
+
+    const { error } = await supabaseAdmin
+      .from('try_on_queue')
+      .update({ status: 'cancelled' })
+      .eq('id', req.params.id);
+
+    if (error) throw new Error(error.message);
+    res.json({ left: true });
   })
 );
 

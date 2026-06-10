@@ -313,8 +313,21 @@ const assignDriver = [
 
 /**
  * POST /api/v1/orders/:id/cancel
- * Cancel an order (shopper or boutique, pre-pickup only).
+ * Cancel an order.
+ *
+ * Cancellation policy:
+ *   - shopper:         pending, confirmed
+ *   - boutique/admin:  pending, confirmed, preparing
+ *   - nobody once a driver is involved (ready_for_pickup and beyond)
+ * Any captured payment is refunded in full; an uncaptured/unconfirmed
+ * PaymentIntent is voided instead (refunding it would throw).
  */
+const CANCELLABLE_BY_ROLE = {
+  shopper:  ['pending', 'confirmed'],
+  boutique: ['pending', 'confirmed', 'preparing'],
+  admin:    ['pending', 'confirmed', 'preparing'],
+};
+
 const cancelOrder = [
   param('id').isUUID().withMessage('id must be a UUID'),
   body('reason').optional().isString(),
@@ -324,33 +337,65 @@ const cancelOrder = [
     const role = req.user?.user_metadata?.role;
     const orderId = req.params.id;
 
+    const { data: orderRow } = await supabaseAdmin
+      .from('orders')
+      .select('shopper_id, boutique_id, status, stripe_payment_intent_id')
+      .eq('id', orderId)
+      .single();
+
+    if (!orderRow) return res.status(404).json({ error: 'Order not found' });
+
     // Ownership check — shopper/boutique can only cancel their own orders
-    if (role !== 'admin') {
-      const { data: orderRow } = await supabaseAdmin
-        .from('orders')
-        .select('shopper_id, boutique_id')
-        .eq('id', orderId)
-        .single();
-
-      if (!orderRow) return res.status(404).json({ error: 'Order not found' });
-
-      if (role === 'shopper' && orderRow.shopper_id !== req.userId) {
+    if (role === 'shopper' && orderRow.shopper_id !== req.userId) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+    if (role === 'boutique') {
+      const { data: boutique } = await supabaseAdmin
+        .from('boutiques').select('id').eq('user_id', req.userId).single();
+      if (!boutique || boutique.id !== orderRow.boutique_id) {
         return res.status(403).json({ error: 'Forbidden' });
-      }
-      if (role === 'boutique') {
-        const { data: boutique } = await supabaseAdmin
-          .from('boutiques').select('id').eq('user_id', req.userId).single();
-        if (!boutique || boutique.id !== orderRow.boutique_id) {
-          return res.status(403).json({ error: 'Forbidden' });
-        }
       }
     }
 
-    const order = await orderService.getOrder(orderId);
+    // Status gate BEFORE touching Stripe
+    const allowed = CANCELLABLE_BY_ROLE[role] || [];
+    if (!allowed.includes(orderRow.status)) {
+      const friendly = {
+        preparing:        'the boutique has already started preparing it. Contact the boutique or support to cancel.',
+        ready_for_pickup: 'it is already packed and waiting for a driver. Contact support for help.',
+        driver_assigned:  'a driver is already on the way. Contact support for help.',
+        picked_up:        'the driver has already picked it up.',
+        out_for_delivery: 'it is already out for delivery.',
+        delivered:        'it has already been delivered.',
+        completed:        'it is already complete.',
+        cancelled:        'it is already cancelled.',
+      };
+      return res.status(422).json({
+        error: `This order can no longer be cancelled — ${friendly[orderRow.status] || `its status is ${orderRow.status}.`}`,
+        status: orderRow.status,
+      });
+    }
 
-    // Refund if already charged
-    if (order.stripe_payment_intent_id) {
-      await stripeService.refundPaymentIntent(order.stripe_payment_intent_id);
+    // Refund a captured payment; void an uncaptured one. A pending order whose
+    // payment sheet was abandoned has a PI with no charge — refunds.create
+    // throws on those, so inspect the PI state first.
+    if (orderRow.stripe_payment_intent_id) {
+      try {
+        const { stripe } = require('../config/stripe');
+        const pi = await stripe.paymentIntents.retrieve(orderRow.stripe_payment_intent_id);
+        if (pi.status === 'succeeded') {
+          await stripeService.refundPaymentIntent(pi.id);
+        } else if (!['canceled'].includes(pi.status)) {
+          await stripe.paymentIntents.cancel(pi.id).catch(() => {});
+        }
+      } catch (stripeErr) {
+        // Refund failures must surface — never cancel an order silently
+        // while keeping the customer's money.
+        console.error('[ORDER] Cancel refund failed:', orderId, stripeErr.message);
+        return res.status(502).json({
+          error: 'Could not refund the payment. Please try again or contact support.',
+        });
+      }
     }
 
     const updated = await orderService.updateOrderStatus({
