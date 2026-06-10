@@ -44,6 +44,9 @@ const createOrderValidation = [
   body('payment_method_id').optional().isString(),
   body('notes').optional().isString().isLength({ max: 1000 })
     .withMessage('notes must be at most 1000 characters'),
+  body('tip').optional().isFloat({ min: 0, max: 200 })
+    .withMessage('tip must be between 0 and 200'),
+  body('promo_code').optional().isString().isLength({ max: 50 }),
 ];
 
 // ── Controllers ───────────────────────────────────────────────────────────
@@ -57,7 +60,7 @@ const createOrder = [
   validate,
   asyncHandler(async (req, res) => {
     const shopperId = req.userId;
-    const { boutique_id, items, delivery_address, notes, fulfillment_type } = req.body;
+    const { boutique_id, items, delivery_address, notes, fulfillment_type, tip, promo_code } = req.body;
 
     // 1. Create the order record (DB write happens before payment by design —
     //    the PI client_secret is returned to Flutter so the payment sheet can
@@ -70,12 +73,16 @@ const createOrder = [
     let order;
     try {
       order = await orderService.createOrder({
-      shopperId,
-      boutiqueId: boutique_id,
-      items,
-      deliveryAddress: delivery_address,
-      notes,
+        shopperId,
+        boutiqueId: boutique_id,
+        items,
+        deliveryAddress: delivery_address,
+        notes,
         fulfillmentType: fulfillment_type || 'delivery',
+        // tip + promo_code were sent by checkout but silently dropped here —
+        // the shopper's displayed total never matched the charged amount.
+        tip: tip,
+        promoCode: promo_code,
       });
     } catch (orderErr) {
       // 409 = inventory hold failed (Decision A). Order already cancelled by DB.

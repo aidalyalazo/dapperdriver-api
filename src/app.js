@@ -96,6 +96,7 @@ app.use('/api/v1/social', socialRouter);
 app.use('/api/v1/editorials', editorialsRouter);
 app.use('/api/v1/integrations', integrationsRouter);
 app.use('/api/v1/try-on',      tryOnRouter);
+app.use('/api/v1/config',      require('./routes/config'));
 
 // ── 404 ────────────────────────────────────────────────────────────────────
 app.use((_req, res) => res.status(404).json({ error: 'Route not found' }));

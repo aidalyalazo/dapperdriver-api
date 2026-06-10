@@ -180,6 +180,7 @@ async function createOrder({
   notes,
   promoCode,
   fulfillmentType = 'delivery',
+  tip = 0,
 }) {
   const productIds = items.map((i) => i.product_id);
   const cityName = deliveryAddress?.city;
@@ -196,6 +197,7 @@ async function createOrder({
     commissionSetting,
     driverPayoutSetting,
     pickupCommissionSetting,
+    serviceFeeSetting,
   ] = await Promise.all([
     // Server-side prices — never trust client-submitted unit_price.
     // Products table stores images as an array column named 'images', not 'image_url'.
@@ -245,6 +247,11 @@ async function createOrder({
     isPickup
       ? getPlatformSettingJson('pickup_commission_rate', { default: 20 })
       : Promise.resolve(null),
+
+    // Platform service fee (delivery only — admin-configurable)
+    isPickup
+      ? Promise.resolve({ base: 0 })
+      : getPlatformSettingJson('service_fee', { base: 3.99 }),
   ]);
 
   // ── Process Phase 1 results ───────────────────────────────────────────────
@@ -318,6 +325,9 @@ async function createOrder({
   }
 
   // ── Calculate final amounts ───────────────────────────────────────────────
+  const serviceFee = parseFloat(serviceFeeSetting?.base || 0);
+  const tipAmount = Math.max(0, Math.min(parseFloat(tip) || 0, 200));
+
   const taxableAmount = subtotal + deliveryFee - promoDiscount;
   const taxAmount = Math.round(taxableAmount * taxRate * 100) / 100;
   const ddCommissionAmount = Math.round(subtotal * commissionRate * 100) / 100;
@@ -329,7 +339,11 @@ async function createOrder({
     driverEarnings = Math.round(deliveryFee * deliveryFeeCut * 100) / 100;
   }
 
-  const totalAmount = subtotal + deliveryFee + taxAmount - promoDiscount;
+  // Service fee + tip were previously shown at checkout but silently
+  // dropped here — the shopper saw one total and was charged another.
+  const totalAmount = Math.round(
+    (subtotal + deliveryFee + serviceFee + taxAmount + tipAmount - promoDiscount) * 100
+  ) / 100;
 
   // Format delivery address (TEXT column — 'PICKUP' sentinel for pickup orders)
   const deliveryAddressText = isPickup
@@ -365,6 +379,8 @@ async function createOrder({
       status: 'pending',
       subtotal,
       delivery_fee: deliveryFee,
+      service_fee: serviceFee,
+      tip: tipAmount,
       tax: taxAmount,
       promo_discount: promoDiscount,
       total_amount: totalAmount,
@@ -666,7 +682,7 @@ async function getOrder(orderId) {
     try {
       const { data: driver } = await supabaseAdmin
         .from('drivers')
-        .select('id, user_id, full_name, phone, vehicle_make, vehicle_model, vehicle_color, license_plate, rating')
+        .select('id, user_id, full_name, phone, vehicle_make, vehicle_model, vehicle_color, license_plate, rating, current_lat, current_lng, last_location_at')
         .eq('id', order.driver_id)
         .single();
       order.drivers = driver;
