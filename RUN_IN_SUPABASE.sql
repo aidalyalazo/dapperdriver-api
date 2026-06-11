@@ -216,7 +216,42 @@ EXCEPTION
 END $run$;
 
 
--- ── E. RLS security hardening ─────────────────────────────────────────────
+-- ── E. Migration 013 — material composition ───────────────────────────────
+
+DO $run$ BEGIN
+  EXECUTE $stmt$ALTER TABLE products ADD COLUMN IF NOT EXISTS material_composition JSONB$stmt$;
+EXCEPTION
+  WHEN undefined_column OR undefined_table OR undefined_object
+    OR duplicate_object OR duplicate_table OR duplicate_column THEN
+    RAISE NOTICE 'SKIPPED: %', SQLERRM;
+END $run$;
+
+
+-- ── F. Migration 014 — variant stock ──────────────────────────────────────
+
+DO $run$ BEGIN
+  EXECUTE $stmt$ALTER TABLE products ADD COLUMN IF NOT EXISTS variant_stock JSONB$stmt$;
+EXCEPTION
+  WHEN undefined_column OR undefined_table OR undefined_object
+    OR duplicate_object OR duplicate_table OR duplicate_column THEN
+    RAISE NOTICE 'SKIPPED: %', SQLERRM;
+END $run$;
+
+DO $run$ BEGIN
+  EXECUTE $stmt$UPDATE products
+SET variant_stock = (tags[1])::jsonb -> 'variant_stock',
+    tags = '{}'
+WHERE array_length(tags, 1) = 1
+  AND tags[1] LIKE '{%variant_stock%'
+  AND variant_stock IS NULL$stmt$;
+EXCEPTION
+  WHEN undefined_column OR undefined_table OR undefined_object
+    OR duplicate_object OR duplicate_table OR duplicate_column THEN
+    RAISE NOTICE 'SKIPPED: %', SQLERRM;
+END $run$;
+
+
+-- ── G. RLS security hardening ─────────────────────────────────────────────
 
 DO $run$ BEGIN
   EXECUTE $stmt$ALTER TABLE orders                ENABLE ROW LEVEL SECURITY$stmt$;

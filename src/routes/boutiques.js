@@ -304,7 +304,7 @@ router.post(
     const boutiqueId = await getBoutiqueId(req.userId);
     if (!boutiqueId) return res.status(404).json({ error: 'Boutique not found' });
 
-    const { name, description, price, compare_price, category, images, image_urls, stock, stock_quantity, inventory_count, sizes, colors, tags, sku, source, material_composition } = req.body;
+    const { name, description, price, compare_price, category, images, image_urls, stock, stock_quantity, inventory_count, sizes, colors, tags, sku, source, material_composition, variant_stock } = req.body;
 
     const stockVal = stock || stock_quantity || inventory_count || 0;
 
@@ -326,6 +326,7 @@ router.post(
         source:               source || 'manual',
         status:               'active',
         material_composition: material_composition || null,
+        variant_stock:        variant_stock || null,
       })
       .select()
       .single();
@@ -352,7 +353,7 @@ router.patch(
 
     const allowed = ['name', 'description', 'price', 'compare_price', 'category', 'images',
                      'stock', 'sizes', 'colors', 'tags', 'sku', 'source', 'status',
-                     'material_composition'];
+                     'material_composition', 'variant_stock'];
     const updates = Object.fromEntries(
       Object.entries(req.body).filter(([k]) => allowed.includes(k))
     );

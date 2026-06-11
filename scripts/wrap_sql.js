@@ -28,7 +28,9 @@ const sources = [
   ['B. Migration 010 — boutique state', fs.readFileSync(path.join(root, 'src/migrations/010_boutique_state.sql'), 'utf8')],
   ['C. Migration 011 — UGC moderation + marketing_emails', fs.readFileSync(path.join(root, 'src/migrations/011_moderation_account.sql'), 'utf8')],
   ['D. Migration 012 — service fee', fs.readFileSync(path.join(root, 'src/migrations/012_service_fee.sql'), 'utf8')],
-  ['E. RLS security hardening', fs.readFileSync(path.join(root, 'rls_security_fix.sql'), 'utf8')],
+  ['E. Migration 013 — material composition', fs.readFileSync(path.join(root, 'src/migrations/013_material_composition.sql'), 'utf8')],
+  ['F. Migration 014 — variant stock', fs.readFileSync(path.join(root, 'src/migrations/014_variant_stock.sql'), 'utf8')],
+  ['G. RLS security hardening', fs.readFileSync(path.join(root, 'rls_security_fix.sql'), 'utf8')],
 ];
 
 /** Split SQL on ';' respecting line comments, '...' strings, and $tag$ quotes. */
