@@ -107,15 +107,24 @@ async function findAndAssignDriver(orderId, retryCount = 0) {
       console.error(
         `[DRIVER ASSIGN] No drivers found after max retries for order ${orderId}`
       );
+      // Column is `notes` — the old insert used `note`/`created_by` and
+      // silently failed, leaving no trace of dead-ended orders.
       await supabaseAdmin
         .from('order_timeline')
         .insert({
           order_id: orderId,
           status: 'no_driver_found',
-          note: 'No available drivers after 10 minutes of broadcasting',
-          created_by: 'system',
+          notes: 'No available drivers after 10 minutes of broadcasting',
         })
         .catch(() => {});
+
+      const { notifyAdmins } = require('../utils/adminAlerts');
+      await notifyAdmins({
+        type:  'no_driver_found',
+        title: '⚠️ No driver found for order',
+        body:  `Order ${orderId.slice(0, 8)} found no driver after 10 minutes. The stalled-order sweep will retry and auto-cancel if needed.`,
+        data:  { order_id: orderId },
+      });
     }
   } catch (e) {
     console.error('[DRIVER ASSIGN] Error:', e.message);

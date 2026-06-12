@@ -921,4 +921,165 @@ router.patch(
   })
 );
 
+// ── Data Intelligence ─────────────────────────────────────────────────────────
+
+/**
+ * GET /api/v1/admin/analytics/intelligence?days=30
+ * One analyzed, readable snapshot of the data asset:
+ *  fit (try-on keep/return + reasons), sell-through by size, demand gaps
+ *  (zero-result searches), engagement funnel, and data-coverage health.
+ */
+router.get(
+  '/analytics/intelligence',
+  asyncHandler(async (req, res) => {
+    const days = Math.min(parseInt(req.query.days) || 30, 365);
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+
+    const [
+      tryOnItemsRes, ordersRes, orderItemsRes, searchRes,
+      interactionsRes, shoppersRes, productsRes, citiesRes,
+    ] = await Promise.all([
+      supabaseAdmin.from('try_on_session_items')
+        .select('status, selected_size, return_reason, return_fit_detail, product_id'),
+      supabaseAdmin.from('orders')
+        .select('id, status, total_amount, city_id, created_at')
+        .gte('created_at', since),
+      supabaseAdmin.from('order_items')
+        .select('order_id, product_id, name, quantity, unit_price, selected_size'),
+      supabaseAdmin.from('search_logs')
+        .select('query, result_count, created_at')
+        .gte('created_at', since),
+      supabaseAdmin.from('shopper_interactions')
+        .select('action, duration_seconds, product_id, created_at')
+        .gte('created_at', since),
+      supabaseAdmin.from('shoppers')
+        .select('id, body_measurements, style_preferences'),
+      supabaseAdmin.from('products')
+        .select('id, name, variant_stock, sizes'),
+      supabaseAdmin.from('cities').select('id, name'),
+    ]);
+
+    const cityName = Object.fromEntries((citiesRes.data || []).map((c) => [c.id, c.name]));
+    const productName = Object.fromEntries((productsRes.data || []).map((p) => [p.id, p.name]));
+
+    // ── Fit (try-on outcomes) ────────────────────────────────────────────────
+    const tItems = tryOnItemsRes.data || [];
+    const decided = tItems.filter((i) => ['kept', 'returned'].includes(i.status));
+    const kept = decided.filter((i) => i.status === 'kept');
+    const reasonCounts = {};
+    const fitDetailCounts = {};
+    for (const i of decided) {
+      if (i.return_reason) reasonCounts[i.return_reason] = (reasonCounts[i.return_reason] || 0) + 1;
+      if (i.return_fit_detail) fitDetailCounts[i.return_fit_detail] = (fitDetailCounts[i.return_fit_detail] || 0) + 1;
+    }
+    const fit = {
+      items_decided: decided.length,
+      items_kept: kept.length,
+      keep_rate: decided.length ? +(kept.length / decided.length * 100).toFixed(1) : null,
+      return_reasons: Object.entries(reasonCounts).sort((a, b) => b[1] - a[1])
+        .map(([reason, count]) => ({ reason, count })),
+      fit_problem_areas: Object.entries(fitDetailCounts).sort((a, b) => b[1] - a[1])
+        .map(([area, count]) => ({ area, count })),
+    };
+
+    // ── Sell-through by size + top products (completed orders, window) ──────
+    const orders = ordersRes.data || [];
+    const doneOrderIds = new Set(orders.filter((o) => ['delivered', 'completed'].includes(o.status)).map((o) => o.id));
+    const windowItems = (orderItemsRes.data || []).filter((i) => doneOrderIds.has(i.order_id));
+    const sizeCounts = {};
+    const productUnits = {};
+    let sizedItems = 0;
+    for (const i of windowItems) {
+      const qty = i.quantity || 1;
+      if (i.selected_size) {
+        sizedItems += 1;
+        sizeCounts[i.selected_size] = (sizeCounts[i.selected_size] || 0) + qty;
+      }
+      const key = i.product_id;
+      if (!productUnits[key]) productUnits[key] = { product_id: key, name: i.name || productName[key] || 'Unknown', units: 0, revenue: 0 };
+      productUnits[key].units += qty;
+      productUnits[key].revenue += qty * parseFloat(i.unit_price || 0);
+    }
+    const sellThrough = {
+      units_by_size: Object.entries(sizeCounts).sort((a, b) => b[1] - a[1])
+        .map(([size, units]) => ({ size, units })),
+      top_products: Object.values(productUnits).sort((a, b) => b.units - a.units).slice(0, 10)
+        .map((p) => ({ ...p, revenue: +p.revenue.toFixed(2) })),
+      size_capture_rate: windowItems.length ? +(sizedItems / windowItems.length * 100).toFixed(1) : null,
+    };
+
+    // ── Demand gaps (search) ─────────────────────────────────────────────────
+    const searches = searchRes.data || [];
+    const queryAgg = {};
+    for (const s of searches) {
+      const q = (s.query || '').toLowerCase().trim();
+      if (!q) continue;
+      if (!queryAgg[q]) queryAgg[q] = { query: q, count: 0, zero_results: 0 };
+      queryAgg[q].count += 1;
+      if (!s.result_count) queryAgg[q].zero_results += 1;
+    }
+    const allQ = Object.values(queryAgg);
+    const demand = {
+      total_searches: searches.length,
+      zero_result_rate: searches.length
+        ? +(searches.filter((s) => !s.result_count).length / searches.length * 100).toFixed(1) : null,
+      top_queries: allQ.sort((a, b) => b.count - a.count).slice(0, 10),
+      demand_gaps: allQ.filter((q) => q.zero_results > 0)
+        .sort((a, b) => b.zero_results - a.zero_results).slice(0, 10),
+    };
+
+    // ── Engagement funnel ────────────────────────────────────────────────────
+    const inter = interactionsRes.data || [];
+    const byAction = {};
+    let dwellSum = 0, dwellN = 0;
+    for (const i of inter) {
+      byAction[i.action] = (byAction[i.action] || 0) + 1;
+      if (i.duration_seconds != null) { dwellSum += i.duration_seconds; dwellN += 1; }
+    }
+    const engagement = {
+      events: inter.length,
+      by_action: Object.entries(byAction).sort((a, b) => b[1] - a[1])
+        .map(([action, count]) => ({ action, count })),
+      view_to_cart_rate: byAction.view
+        ? +((byAction.cart || 0) / byAction.view * 100).toFixed(1) : null,
+      avg_dwell_seconds: dwellN ? +(dwellSum / dwellN).toFixed(1) : null,
+    };
+
+    // ── Data coverage health ─────────────────────────────────────────────────
+    const shoppers = shoppersRes.data || [];
+    const products = productsRes.data || [];
+    const coverage = {
+      shoppers_total: shoppers.length,
+      measurement_coverage_pct: shoppers.length
+        ? +(shoppers.filter((s) => s.body_measurements).length / shoppers.length * 100).toFixed(1) : 0,
+      style_profile_coverage_pct: shoppers.length
+        ? +(shoppers.filter((s) => s.style_preferences?.length).length / shoppers.length * 100).toFixed(1) : 0,
+      products_total: products.length,
+      variant_stock_coverage_pct: products.length
+        ? +(products.filter((p) => p.variant_stock).length / products.length * 100).toFixed(1) : 0,
+    };
+
+    // ── City GMV (window) ────────────────────────────────────────────────────
+    const cityAgg = {};
+    for (const o of orders) {
+      if (!['delivered', 'completed'].includes(o.status)) continue;
+      const name = cityName[o.city_id] || 'Unknown';
+      if (!cityAgg[name]) cityAgg[name] = { city: name, orders: 0, gmv: 0 };
+      cityAgg[name].orders += 1;
+      cityAgg[name].gmv += parseFloat(o.total_amount || 0);
+    }
+
+    res.json({
+      window_days: days,
+      fit,
+      sell_through: sellThrough,
+      demand,
+      engagement,
+      coverage,
+      cities: Object.values(cityAgg).sort((a, b) => b.gmv - a.gmv)
+        .map((c) => ({ ...c, gmv: +c.gmv.toFixed(2) })),
+    });
+  })
+);
+
 module.exports = router;

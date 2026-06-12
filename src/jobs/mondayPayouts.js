@@ -116,6 +116,15 @@ async function runMondayPayouts() {
           error_message:  err.message,
           attempted_at:   new Date().toISOString(),
         }).catch(() => {}); // don't let logging failure crash the loop
+
+        // payout_failures rows used to sit unseen — tell a human
+        const { notifyAdmins } = require('../utils/adminAlerts');
+        await notifyAdmins({
+          type:  'payout_failed',
+          title: '🚨 Driver payout failed',
+          body:  `Weekly payout of $${total.toFixed(2)} to ${driver.full_name || driverId} failed: ${err.message}`,
+          data:  { recipient_id: driverId, amount: total, order_ids: orderIds },
+        });
       }
     }
 

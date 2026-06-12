@@ -166,10 +166,12 @@ router.post(
           const charge = event.data.object;
           const pi = charge.payment_intent;
 
+          // Idempotent: duplicate webhook deliveries must not re-stamp refunded_at
           await supabaseAdmin
             .from('orders')
             .update({ payment_status: 'refunded', refunded_at: new Date().toISOString() })
-            .eq('stripe_payment_intent_id', pi);
+            .eq('stripe_payment_intent_id', pi)
+            .neq('payment_status', 'refunded');
           break;
         }
 
@@ -232,20 +234,17 @@ router.post(
           const payout = event.data.object;
           const payoutId = payout.metadata?.payout_id;
           if (payoutId) {
-            await supabaseAdmin
+            // Idempotent: only the first delivery advances + notifies
+            const { data: advanced } = await supabaseAdmin
               .from('payouts')
               .update({ status: 'paid', stripe_transfer_id: payout.id })
               .eq('id', payoutId)
-              .catch(() => {});
-
-            // Notify recipient
-            const { data: payoutRecord } = await supabaseAdmin
-              .from('payouts')
+              .neq('status', 'paid')
               .select('recipient_id, recipient_type, amount')
-              .eq('id', payoutId)
               .single()
               .catch(() => ({ data: null }));
 
+            const payoutRecord = advanced;
             if (payoutRecord) {
               await supabaseAdmin
                 .from('notifications')

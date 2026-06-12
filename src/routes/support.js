@@ -95,6 +95,15 @@ router.post(
       throw Object.assign(new Error('Failed to create support ticket.'), { status: 500 });
     }
 
+    // Alert admins — tickets used to land in the table with nobody told
+    const { notifyAdmins } = require('../utils/adminAlerts');
+    notifyAdmins({
+      type: 'support_ticket_created',
+      title: `🎫 New support ticket (${category})`,
+      body: `${ticketNumber} from ${userEmail} (${userRole}): ${subject}`,
+      data: { ticket_id: ticket.id, ticket_number: ticketNumber },
+    }).catch(() => {});
+
     res.status(201).json(ticket);
   }),
 );

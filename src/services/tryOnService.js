@@ -355,7 +355,10 @@ async function cancelSession({ sessionId, cancelledBy, reason }) {
  *     minus the shopping credit; charge failure flags the shopper for
  *     admin follow-up (driver flow continues regardless)
  */
-async function recordItemsDecision({ sessionId, shopperId, keptItemIds = [], returnedItemIds = [] }) {
+const RETURN_REASONS = ['too_small', 'too_large', 'style', 'fabric', 'color', 'quality', 'other'];
+const FIT_DETAILS = ['shoulders', 'bust', 'waist', 'hips', 'length', 'sleeves', 'overall'];
+
+async function recordItemsDecision({ sessionId, shopperId, keptItemIds = [], returnedItemIds = [], returnReasons = {} }) {
   const session = await getSession(sessionId);
   if (session.shopper_id !== shopperId) {
     throw Object.assign(new Error('Forbidden'), { status: 403 });
@@ -384,18 +387,54 @@ async function recordItemsDecision({ sessionId, shopperId, keptItemIds = [], ret
   }
 
   const now = new Date().toISOString();
+
+  // Returned items carry their reason (per-item, validated against taxonomy)
+  const returnUpdates = returnedItemIds.map((id) => {
+    const r = returnReasons[id] || {};
+    const reason = RETURN_REASONS.includes(r.reason) ? r.reason : null;
+    const fitDetail = reason && FIT_DETAILS.includes(r.fit_detail) ? r.fit_detail : null;
+    return supabaseAdmin.from('try_on_session_items')
+      .update({ status: 'returned', decided_at: now, return_reason: reason, return_fit_detail: fitDetail })
+      .eq('id', id).eq('session_id', sessionId);
+  });
+
   await Promise.all([
     keptItemIds.length
       ? supabaseAdmin.from('try_on_session_items')
           .update({ status: 'kept', decided_at: now })
           .in('id', keptItemIds).eq('session_id', sessionId)
       : Promise.resolve(),
-    returnedItemIds.length
-      ? supabaseAdmin.from('try_on_session_items')
-          .update({ status: 'returned', decided_at: now })
-          .in('id', returnedItemIds).eq('session_id', sessionId)
-      : Promise.resolve(),
+    ...returnUpdates,
   ]);
+
+  // Snapshot the shopper's measurements + sizes at the moment of decision —
+  // bodies change; each fit label must pair with the body that tried the
+  // garment. Fire-and-forget: never blocks the money flow below.
+  supabaseAdmin
+    .from('shoppers')
+    .select('body_measurements, size_tops, size_bottoms, size_shoes, size_dresses, size_bra')
+    .eq('user_id', shopperId)
+    .single()
+    .then(({ data: shopper }) => {
+      if (!shopper) return;
+      return supabaseAdmin
+        .from('try_on_sessions')
+        .update({
+          measurements_snapshot: {
+            body_measurements: shopper.body_measurements || null,
+            sizes: {
+              tops: shopper.size_tops || null,
+              bottoms: shopper.size_bottoms || null,
+              shoes: shopper.size_shoes || null,
+              dresses: shopper.size_dresses || null,
+              bra: shopper.size_bra || null,
+            },
+            captured_at: now,
+          },
+        })
+        .eq('id', sessionId);
+    })
+    .then(() => {}, (e) => console.warn('[TryOn] Measurement snapshot failed:', e.message));
 
   const keptItems = keptItemIds.map((id) => itemMap[id]);
   const revenueCents = keptItems.reduce((s, i) => s + (i.price_cents || 0), 0);

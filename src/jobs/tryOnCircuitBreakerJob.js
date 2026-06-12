@@ -77,16 +77,14 @@ async function runCircuitBreaker() {
 
       if (boutiqueCancels > (maxBoutiqueIssues.count || 2)) {
         breaches.push(`Boutique ${boutiqueId.slice(0,8)} cancelled ${boutiqueCancels}x this week`);
-        // Flag the boutique but don't disable the whole feature
-        await supabaseAdmin
-          .from('try_on_shopper_flags')
-          .insert({
-            shopper_id:  '00000000-0000-0000-0000-000000000000', // system placeholder
-            session_id:  null,
-            flag_type:   'boutique_cancel_rate',
-            severity:    'critical',
-            notes:       `Boutique ${boutiqueId} cancelled ${boutiqueCancels} sessions in 7 days`,
-          }).catch(() => {});
+        // Flag the boutique to admins (don't disable the whole feature)
+        const { notifyAdmins: alertAdmins } = require('../utils/adminAlerts');
+        await alertAdmins({
+          type:  'try_on_boutique_flagged',
+          title: '⚠️ Boutique cancelling try-on sessions',
+          body:  `Boutique ${boutiqueId} cancelled ${boutiqueCancels} sessions in 7 days.`,
+          data:  { boutique_id: boutiqueId, cancellations_7d: boutiqueCancels },
+        });
       }
     }
 
@@ -100,16 +98,14 @@ async function runCircuitBreaker() {
         .eq('key', 'try_on_feature_enabled');
       invalidateSetting('try_on_feature_enabled');
 
-      // Notify admin via notifications table (no admin user_id — use system)
-      await supabaseAdmin.from('notifications').insert({
-        user_id:   '00000000-0000-0000-0000-000000000000', // system admin placeholder
-        type:      'try_on_circuit_breaker',
-        title:     '🚨 Try-On Feature Paused',
-        body:      `Circuit breaker triggered: ${breaches.join('; ')}`,
-        data:      { breaches },
-        is_read:   false,
-        sent_push: false,
-      }).catch(() => {});
+      // Alert real admin accounts (placeholder-UUID notifications were never read)
+      const { notifyAdmins } = require('../utils/adminAlerts');
+      await notifyAdmins({
+        type:  'try_on_circuit_breaker',
+        title: '🚨 Try-On Feature Paused',
+        body:  `Circuit breaker triggered: ${breaches.join('; ')}`,
+        data:  { breaches },
+      });
 
       console.warn('[CIRCUIT BREAKER] ⛔ try_on_feature_enabled set to false');
     }

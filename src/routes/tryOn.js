@@ -374,9 +374,16 @@ router.post(
 /**
  * POST /api/v1/try-on/sessions/:id/items-decision
  * Shopper declares keep/return for every item during the in-home window.
- * Body: { kept_item_ids: [], returned_item_ids: [] }
+ * Body: {
+ *   kept_item_ids: [], returned_item_ids: [],
+ *   return_reasons?: { [item_id]: { reason, fit_detail? } }
+ * }
+ *   reason:     too_small | too_large | style | fabric | color | quality | other
+ *   fit_detail: shoulders | bust | waist | hips | length | sleeves | overall
  * Captures the session fee (kept ≥ 1) or voids it (kept 0), converts
  * inventory holds, and charges kept items minus the shopping credit.
+ * Return reasons + the shopper's measurement snapshot are stored with the
+ * decision — this is the ground-truth fit dataset; it cannot be backfilled.
  */
 router.post(
   '/sessions/:id/items-decision',
@@ -387,6 +394,7 @@ router.post(
     body('kept_item_ids.*').isUUID(),
     body('returned_item_ids').isArray(),
     body('returned_item_ids.*').isUUID(),
+    body('return_reasons').optional().isObject(),
   ],
   validate,
   asyncHandler(async (req, res) => {
@@ -395,6 +403,7 @@ router.post(
       shopperId:       req.userId,
       keptItemIds:     req.body.kept_item_ids,
       returnedItemIds: req.body.returned_item_ids,
+      returnReasons:   req.body.return_reasons || {},
     });
     res.json(updated);
   })

@@ -83,6 +83,9 @@ const createOrder = [
         // the shopper's displayed total never matched the charged amount.
         tip: tip,
         promoCode: promo_code,
+        // Double-tap guard: client sends a per-checkout key (header or body)
+        idempotencyKey:
+          req.get('Idempotency-Key') || req.body.idempotency_key || null,
       });
     } catch (orderErr) {
       // 409 = inventory hold failed (Decision A). Order already cancelled by DB.

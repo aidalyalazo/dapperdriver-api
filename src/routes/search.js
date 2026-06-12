@@ -71,6 +71,18 @@ router.get(
       }
     }
 
+    // Demand-signal logging (fire-and-forget): zero-result queries are
+    // literal demand gaps — the admin Search dashboard reads this table.
+    supabaseAdmin
+      .from('search_logs')
+      .insert({
+        query: String(q).slice(0, 200),
+        result_count: total,
+        city_id: city_id || null,
+        shopper_id: null, // route is unauthenticated; keep logs anonymous
+      })
+      .then(() => {}, () => {});
+
     res.json({
       boutiques,
       products,

@@ -181,10 +181,26 @@ async function createOrder({
   promoCode,
   fulfillmentType = 'delivery',
   tip = 0,
+  idempotencyKey = null,
 }) {
   const productIds = items.map((i) => i.product_id);
   const cityName = deliveryAddress?.city;
   const isPickup = fulfillmentType === 'pickup';
+
+  // Double-submit guard: same key from the same shopper returns the original
+  // order instead of creating a duplicate (double-tap on checkout).
+  if (idempotencyKey) {
+    const { data: existing } = await supabaseAdmin
+      .from('orders')
+      .select('*')
+      .eq('shopper_id', shopperId)
+      .eq('idempotency_key', idempotencyKey)
+      .maybeSingle();
+    if (existing) {
+      existing._idempotent_replay = true;
+      return existing;
+    }
+  }
 
   // ── Phase 1: All independent lookups in parallel ──────────────────────────
   // This replaces 6-8 sequential awaits with a single Promise.all so the
@@ -202,7 +218,7 @@ async function createOrder({
     // Server-side prices — never trust client-submitted unit_price.
     // Products table stores images as an array column named 'images', not 'image_url'.
     supabaseAdmin.from('products')
-      .select('id, name, price, images')
+      .select('id, name, price, images, sizes')
       .in('id', productIds)
       .then((r) => {
         if (r.error) console.error('[ORDER] Products query failed:', r.error.message);
@@ -307,6 +323,22 @@ async function createOrder({
     };
   });
 
+  // Sized products must carry a size — per-variant sell-through and fit data
+  // are worthless with size holes in them.
+  const missingSize = validatedItems.filter((i) => {
+    const sizes = trustedProductsMap[i.product_id]?.sizes;
+    return Array.isArray(sizes) && sizes.length > 0 && !i.selected_size;
+  });
+  if (missingSize.length) {
+    const names = missingSize
+      .map((i) => trustedProductsMap[i.product_id]?.name || i.product_id)
+      .join(', ');
+    throw Object.assign(
+      new Error(`Please select a size for: ${names}`),
+      { status: 422, code: 'SIZE_REQUIRED' }
+    );
+  }
+
   const subtotal = validatedItems.reduce((sum, i) => sum + i.unit_price * i.quantity, 0);
 
   // ── Phase 2: Promo validation (depends on subtotal from Phase 1) ──────────
@@ -376,6 +408,7 @@ async function createOrder({
       id: orderId,           // ← pre-generated so fn_reserve_for_order can reference it
       shopper_id: shopperId,
       boutique_id: boutiqueId,
+      idempotency_key: idempotencyKey,
       status: 'pending',
       subtotal,
       delivery_fee: deliveryFee,
@@ -399,6 +432,20 @@ async function createOrder({
     .single();
 
   if (error) {
+    // Unique violation on (shopper_id, idempotency_key): a concurrent
+    // double-submit won the race — return the order it created.
+    if (error.code === '23505' && idempotencyKey) {
+      const { data: existing } = await supabaseAdmin
+        .from('orders')
+        .select('*')
+        .eq('shopper_id', shopperId)
+        .eq('idempotency_key', idempotencyKey)
+        .maybeSingle();
+      if (existing) {
+        existing._idempotent_replay = true;
+        return existing;
+      }
+    }
     throw Object.assign(new Error(error.message), { status: 400 });
   }
 

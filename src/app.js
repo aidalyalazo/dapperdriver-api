@@ -37,6 +37,9 @@ require('./jobs/tryOnSessionTimeoutProcessor');
 require('./jobs/tryOnReminderProcessor');
 require('./jobs/tryOnQueueExpiryProcessor');
 require('./jobs/tryOnCircuitBreakerJob');
+// Ops recovery jobs
+require('./jobs/stalledOrderSweep');
+require('./jobs/payoutReconciliationJob');
 
 const { errorHandler } = require('./middleware/errorHandler');
 
