@@ -282,26 +282,24 @@ async function gatherBoutiqueData(boutiqueId) {
   const since30 = new Date(Date.now() - 30 * DAY_MS).toISOString();
   const since90 = new Date(Date.now() - 90 * DAY_MS).toISOString();
 
-  const [boutiqueRes, ordersRes, itemsAllRes, productsRes, reviewsRes, cityOrdersRes, tryOnItemsRes] =
+  const [boutiqueRes, ordersRes, itemsAllRes, productsRes, cityOrdersRes, tryOnItemsRes] =
     await Promise.all([
       supabaseAdmin.from('boutiques')
         .select('id, name, email, owner_name, status, rating, review_count, commission_rate, city_id, created_at, cities(name)')
         .eq('id', boutiqueId).single(),
       supabaseAdmin.from('orders')
-        .select('id, status, total_amount, fulfillment_type, created_at')
+        .select('id, status, total_amount, fulfillment_type, created_at, shopper_id')
         .eq('boutique_id', boutiqueId).gte('created_at', since90),
       supabaseAdmin.from('order_items')
         .select('order_id, product_id, name, quantity, unit_price, selected_size'),
       supabaseAdmin.from('products')
-        .select('id, name, price, status, category', { count: 'exact' })
+        .select('id, name, price, status, category, variant_stock', { count: 'exact' })
         .eq('boutique_id', boutiqueId),
-      supabaseAdmin.from('product_reviews')
-        .select('rating').limit(500),
       supabaseAdmin.from('orders')
         .select('boutique_id, total_amount, status')
         .gte('created_at', since30),
       supabaseAdmin.from('try_on_session_items')
-        .select('status, selected_size, return_reason, try_on_sessions!inner(boutique_id)')
+        .select('status, selected_size, return_reason, return_fit_detail, try_on_sessions!inner(boutique_id)')
         .eq('try_on_sessions.boutique_id', boutiqueId),
     ]);
 
@@ -309,6 +307,25 @@ async function gatherBoutiqueData(boutiqueId) {
     throw Object.assign(new Error('Boutique not found'), { status: 404 });
   }
   const b = boutiqueRes.data;
+  const products = productsRes.data || [];
+  const productIds = products.map((p) => p.id);
+  const productName = Object.fromEntries(products.map((p) => [p.id, p.name]));
+
+  // Second wave — these need the product id list
+  const [interactionsRes, savedRes, searchRes] = await Promise.all([
+    productIds.length
+      ? supabaseAdmin.from('shopper_interactions')
+          .select('product_id, action, duration_seconds, created_at')
+          .in('product_id', productIds).gte('created_at', since30)
+      : Promise.resolve({ data: [] }),
+    productIds.length
+      ? supabaseAdmin.from('saved_items').select('product_id').in('product_id', productIds)
+      : Promise.resolve({ data: [] }),
+    supabaseAdmin.from('search_logs')
+      .select('query, result_count, city_id')
+      .gte('created_at', since30),
+  ]);
+
   const orders90 = ordersRes.data || [];
   const done = (o) => ['delivered', 'completed'].includes(o.status);
   const orders30 = orders90.filter((o) => new Date(o.created_at).getTime() >= Date.now() - 30 * DAY_MS);
@@ -325,7 +342,82 @@ async function gatherBoutiqueData(boutiqueId) {
     if (i.selected_size) bySize[i.selected_size] = (bySize[i.selected_size] || 0) + qty;
   }
 
-  // City benchmark: average 30d completed GMV per active boutique in the same city
+  // ── Shopper-interest funnel per product (views → carts → sales) ───────────
+  // This is what the boutique can actually act on: high views + no carts =
+  // price/photo problem; no views at all = visibility problem.
+  const funnel = {};
+  for (const ev of interactionsRes.data || []) {
+    if (!funnel[ev.product_id]) funnel[ev.product_id] = { views: 0, carts: 0, dwell: 0, dwellN: 0 };
+    const f = funnel[ev.product_id];
+    if (ev.action === 'view') f.views += 1;
+    if (ev.action === 'cart') f.carts += 1;
+    if (ev.duration_seconds != null) { f.dwell += ev.duration_seconds; f.dwellN += 1; }
+  }
+  const saves = {};
+  for (const s of savedRes.data || []) saves[s.product_id] = (saves[s.product_id] || 0) + 1;
+
+  const productSignals = productIds.map((id) => ({
+    name: productName[id],
+    views_30d: funnel[id]?.views || 0,
+    carts_30d: funnel[id]?.carts || 0,
+    avg_seconds_viewed: funnel[id]?.dwellN ? Math.round(funnel[id].dwell / funnel[id].dwellN) : null,
+    wishlist_saves: saves[id] || 0,
+    units_sold_90d: byProduct[id]?.units || 0,
+  }));
+  const mostViewed = [...productSignals].sort((a, c) => c.views_30d - a.views_30d).slice(0, 5)
+    .filter((p) => p.views_30d > 0);
+  const windowShopped = productSignals
+    .filter((p) => p.views_30d >= 3 && p.units_sold_90d === 0)
+    .sort((a, c) => c.views_30d - a.views_30d).slice(0, 5);
+  const invisible = productSignals.filter((p) => p.views_30d === 0 && p.units_sold_90d === 0).length;
+
+  // ── Local demand the boutique could capture ────────────────────────────────
+  const cityGaps = {};
+  for (const s of searchRes.data || []) {
+    if (s.result_count) continue;
+    if (b.city_id && s.city_id && s.city_id !== b.city_id) continue; // their city (or global)
+    const q = (s.query || '').toLowerCase().trim();
+    if (q) cityGaps[q] = (cityGaps[q] || 0) + 1;
+  }
+
+  // ── Repeat customers + busiest days ───────────────────────────────────────
+  const shopperCounts = {};
+  for (const o of orders90.filter(done)) {
+    if (o.shopper_id) shopperCounts[o.shopper_id] = (shopperCounts[o.shopper_id] || 0) + 1;
+  }
+  const customers = Object.values(shopperCounts);
+  const repeatCustomers = customers.filter((n) => n > 1).length;
+
+  const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const dayCounts = {};
+  for (const o of orders90) {
+    const d = DAYS[new Date(o.created_at).getDay()];
+    dayCounts[d] = (dayCounts[d] || 0) + 1;
+  }
+
+  // ── Stock-out risk: sizes that sell but are nearly out (variant_stock) ────
+  const stockRisks = [];
+  for (const p of products) {
+    if (!p.variant_stock || typeof p.variant_stock !== 'object') continue;
+    for (const [size, qty] of Object.entries(p.variant_stock)) {
+      const stock = parseInt(qty);
+      if (!Number.isFinite(stock)) continue;
+      const sells = bySize[size] > 0;
+      if (stock <= 2 && sells) stockRisks.push({ product: p.name, size, units_left: stock });
+    }
+  }
+
+  // ── Try-on fit signals (return reasons are gold for a boutique) ───────────
+  const tItems = (tryOnItemsRes.data || []).filter((i) => ['kept', 'returned'].includes(i.status));
+  const tKept = tItems.filter((i) => i.status === 'kept').length;
+  const reasonCounts = {};
+  const fitAreaCounts = {};
+  for (const i of tItems) {
+    if (i.return_reason) reasonCounts[i.return_reason] = (reasonCounts[i.return_reason] || 0) + 1;
+    if (i.return_fit_detail) fitAreaCounts[i.return_fit_detail] = (fitAreaCounts[i.return_fit_detail] || 0) + 1;
+  }
+
+  // City benchmark: average 30d completed GMV per boutique in the same city
   const cityRows = (cityOrdersRes.data || []).filter((o) => done(o));
   const byBoutique = {};
   for (const o of cityRows) {
@@ -333,9 +425,6 @@ async function gatherBoutiqueData(boutiqueId) {
   }
   const peers = Object.values(byBoutique);
   const cityAvgGmv30 = peers.length ? money(peers.reduce((s, v) => s + v, 0) / peers.length) : 0;
-
-  const tItems = (tryOnItemsRes.data || []).filter((i) => ['kept', 'returned'].includes(i.status));
-  const tKept = tItems.filter((i) => i.status === 'kept').length;
 
   const gmv = (rows) => money(rows.filter(done).reduce((s, o) => s + parseFloat(o.total_amount || 0), 0));
   const completed30 = orders30.filter(done).length;
@@ -358,10 +447,29 @@ async function gatherBoutiqueData(boutiqueId) {
       city_avg_gmv_per_boutique: cityAvgGmv30,
     },
     last_90_days: { orders: orders90.length, gmv: gmv(orders90) },
-    top_products_90d: Object.values(byProduct).sort((a, b2) => b2.units - a.units).slice(0, 5),
-    units_by_size_90d: Object.entries(bySize).sort((a, b2) => b2[1] - a[1]).map(([size, units]) => ({ size, units })),
+    top_products_90d: Object.values(byProduct).sort((a, c) => c.units - a.units).slice(0, 5),
+    units_by_size_90d: Object.entries(bySize).sort((a, c) => c[1] - a[1]).map(([size, units]) => ({ size, units })),
+    shopper_interest_30d: {
+      most_viewed: mostViewed,
+      viewed_but_never_bought: windowShopped,
+      products_with_zero_views: invisible,
+    },
+    local_demand_gaps_30d: Object.entries(cityGaps).sort((a, c) => c[1] - a[1]).slice(0, 5)
+      .map(([query, count]) => ({ shoppers_searched_for: query, times: count, results_found: 0 })),
+    customers_90d: {
+      unique: customers.length,
+      repeat: repeatCustomers,
+      repeat_rate_pct: customers.length ? Math.round(repeatCustomers / customers.length * 100) : 0,
+    },
+    orders_by_day_of_week_90d: dayCounts,
+    stock_out_risk: stockRisks.slice(0, 8),
     try_on: tItems.length
-      ? { items_tried: tItems.length, items_kept: tKept, keep_rate_pct: Math.round(tKept / tItems.length * 100) }
+      ? {
+          items_tried: tItems.length, items_kept: tKept,
+          keep_rate_pct: Math.round(tKept / tItems.length * 100),
+          return_reasons: reasonCounts,
+          fit_problem_areas: fitAreaCounts,
+        }
       : null,
   };
 }
@@ -374,7 +482,7 @@ function fallbackReport(d) {
   const sections = [
     {
       heading: 'Performance',
-      body: `${d.boutique.name} completed ${m.completed_orders} of ${m.orders} orders in the last 30 days for $${m.gmv} in sales (average order $${m.avg_order_value}), ${vs}. Over 90 days: ${d.last_90_days.orders} orders, $${d.last_90_days.gmv}.`,
+      body: `You completed ${m.completed_orders} of ${m.orders} orders in the last 30 days for $${m.gmv} in sales (average order $${m.avg_order_value}), ${vs}. Over 90 days: ${d.last_90_days.orders} orders, $${d.last_90_days.gmv}. ${d.customers_90d.unique} unique customers, ${d.customers_90d.repeat} of whom came back (${d.customers_90d.repeat_rate_pct}% repeat rate).`,
     },
   ];
   if (d.top_products_90d.length) {
@@ -386,26 +494,83 @@ function fallbackReport(d) {
   if (d.units_by_size_90d.length) {
     sections.push({
       heading: 'Size demand',
-      body: 'Units by size: ' + d.units_by_size_90d.map((s) => `${s.size}: ${s.units}`).join(', ') + '. Stock depth should follow this curve.',
+      body: 'Units by size: ' + d.units_by_size_90d.map((s) => `${s.size}: ${s.units}`).join(', ') + '. Buy and restock to this curve, not evenly across sizes.',
     });
   }
+
+  const si = d.shopper_interest_30d;
+  const interestBits = [];
+  if (si.most_viewed.length) {
+    const top = si.most_viewed[0];
+    interestBits.push(`Your most-browsed item this month is ${top.name} (${top.views_30d} views${top.wishlist_saves ? `, ${top.wishlist_saves} wishlist saves` : ''}).`);
+  }
+  if (si.viewed_but_never_bought.length) {
+    const w = si.viewed_but_never_bought[0];
+    interestBits.push(`${w.name} gets looked at (${w.views_30d} views) but never bought — shoppers are interested and something stops them: usually price, photos, or missing size info.`);
+  }
+  if (si.products_with_zero_views > 0) {
+    interestBits.push(`${si.products_with_zero_views} of your products got zero views — they have a visibility problem (photos, tags, or category), not a product problem.`);
+  }
+  if (interestBits.length) {
+    sections.push({ heading: 'What shoppers look at', body: interestBits.join(' ') });
+  }
+
+  if (d.local_demand_gaps_30d.length) {
+    sections.push({
+      heading: 'Demand you could capture',
+      body: `Shoppers in your area searched for things nobody stocks: ` +
+        d.local_demand_gaps_30d.map((g) => `"${g.shoppers_searched_for}" (${g.times}×)`).join(', ') +
+        '. If any of these fit your buying, you would be the only result.',
+    });
+  }
+
+  const days = Object.entries(d.orders_by_day_of_week_90d || {}).sort((a, c) => c[1] - a[1]);
+  if (days.length >= 2) {
+    sections.push({
+      heading: 'When your orders come in',
+      body: `Your busiest day is ${days[0][0]} (${days[0][1]} orders in 90 days), quietest is ${days[days.length - 1][0]}. Plan prep and staffing around ${days[0][0]}s.`,
+    });
+  }
+
   if (d.try_on) {
+    let fitNote = '';
+    const reasons = Object.entries(d.try_on.return_reasons || {}).sort((a, c) => c[1] - a[1]);
+    const areas = Object.entries(d.try_on.fit_problem_areas || {}).sort((a, c) => c[1] - a[1]);
+    if (reasons.length) {
+      fitNote = ` Top return reason: ${reasons[0][0].replace('_', ' ')}${areas.length ? ` (most often at the ${areas[0][0]})` : ''} — add size guidance on your listings to fix this before the try-on.`;
+    }
     sections.push({
       heading: 'Try-on performance',
-      body: `${d.try_on.items_tried} items tried at home, ${d.try_on.items_kept} kept (${d.try_on.keep_rate_pct}% keep rate).`,
+      body: `${d.try_on.items_tried} items tried at home, ${d.try_on.items_kept} kept (${d.try_on.keep_rate_pct}% keep rate).${fitNote}`,
     });
   }
+
   const recommendations = [];
-  if (m.cancelled > 0) recommendations.push(`Reduce the ${m.cancelled} cancellation(s) this month — fast order acceptance is the biggest lever.`);
-  if (d.units_by_size_90d.length >= 2) recommendations.push(`Deepen stock in size ${d.units_by_size_90d[0].size} — it outsells every other size.`);
-  if ((d.boutique.live_products || 0) < 10) recommendations.push('List more products — boutiques with fuller catalogs get found in more searches.');
-  if (!recommendations.length) recommendations.push('Keep inventory and hours current — accuracy drives repeat shoppers.');
+  for (const r of d.stock_out_risk.slice(0, 3)) {
+    recommendations.push(`Restock ${r.product} in size ${r.size} — only ${r.units_left} left and that size sells.`);
+  }
+  if (d.units_by_size_90d.length >= 2) {
+    recommendations.push(`Buy deeper in size ${d.units_by_size_90d[0].size} — it outsells every other size you carry.`);
+  }
+  if (si.viewed_but_never_bought.length) {
+    recommendations.push(`Refresh the listing for ${si.viewed_but_never_bought[0].name} (new photos, check the price) — it has the audience but no conversions.`);
+  }
+  if (d.local_demand_gaps_30d.length) {
+    recommendations.push(`Consider stocking "${d.local_demand_gaps_30d[0].shoppers_searched_for}" — ${d.local_demand_gaps_30d[0].times} local searches found zero results.`);
+  }
+  if (m.cancelled > 0) {
+    recommendations.push(`Reduce the ${m.cancelled} cancellation(s) this month — fast order acceptance is the biggest trust lever.`);
+  }
+  if ((d.boutique.live_products || 0) < 10) {
+    recommendations.push('List more products — fuller catalogs appear in more searches and feeds.');
+  }
+  if (!recommendations.length) recommendations.push('Keep inventory counts and hours current — accuracy drives repeat shoppers.');
 
   return {
     title: `${d.boutique.name} — Performance Report`,
-    summary: `${d.boutique.name} did $${m.gmv} in completed sales over the last 30 days across ${m.completed_orders} orders, ${vs}.`,
+    summary: `You did $${m.gmv} in completed sales over the last 30 days across ${m.completed_orders} orders, ${vs}, with a ${d.customers_90d.repeat_rate_pct}% repeat-customer rate.`,
     sections,
-    recommendations,
+    recommendations: recommendations.slice(0, 6),
   };
 }
 
@@ -428,9 +593,16 @@ async function getBoutiqueReport(boutiqueId, { refresh = false } = {}) {
 
   const ai = await askClaude({
     system:
-      'You write performance reports for independent boutiques on DapperDriver, a fashion delivery marketplace with try-on-at-home. ' +
-      'The report will be emailed to the boutique owner, so write TO them ("you", "your boutique") in a warm but direct professional tone. ' +
-      'Cite the exact numbers given; never invent data. Make recommendations specific to their numbers, not generic retail advice.',
+      'You write performance reports for independent boutique owners on DapperDriver, a fashion delivery marketplace with try-on-at-home. ' +
+      'The report is emailed to the owner, so write TO them ("you", "your") in a warm but direct professional tone. ' +
+      'The owner is a busy small-business person: every section must end in something they can DO. Prioritize, in this order: ' +
+      '(1) restocking decisions — which products and sizes to buy deeper, anything at stock-out risk; ' +
+      '(2) fixable listings — products with views/wishlist saves but no sales (price, photos, size info), and products with zero views (visibility); ' +
+      '(3) local demand they could capture — searches in their city that returned nothing; ' +
+      '(4) fit and sizing — try-on return reasons and problem areas, translated into listing guidance; ' +
+      '(5) operations — busiest days for staffing/prep, cancellations, repeat-customer rate. ' +
+      'Cite the exact numbers given; never invent data. Skip any section where the data is empty rather than padding. ' +
+      'Recommendations must be concrete actions tied to their numbers ("restock the Wide Leg Trouser in M — 2 left and M is your best size"), never generic retail advice.',
     prompt: `Boutique data:\n${JSON.stringify(data, null, 1)}\n\nWrite the performance report.`,
     schema: REPORT_SCHEMA,
   });
