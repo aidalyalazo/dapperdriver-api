@@ -50,12 +50,17 @@ app.use(helmet());
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 
 // ── CORS ───────────────────────────────────────────────────────────────────
-const allowedOrigins = (process.env.ALLOWED_ORIGINS || '').split(',').filter(Boolean);
-if (!allowedOrigins.length) {
-  console.warn('[SECURITY] ALLOWED_ORIGINS env var is not set — CORS is open to all origins (*). Set ALLOWED_ORIGINS in Railway before production launch.');
-}
+// The admin panel is always trusted (it calls the API from the browser);
+// ALLOWED_ORIGINS adds any extra web origins. Native apps (Flutter) don't
+// send an Origin header and are unaffected by this list.
+const PANEL_ORIGINS = [
+  'https://dapperdriver-admin.vercel.app',
+  'http://localhost:3000',
+];
+const envOrigins = (process.env.ALLOWED_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);
+const allowedOrigins = [...new Set([...PANEL_ORIGINS, ...envOrigins])];
 app.use(cors({
-  origin: allowedOrigins.length ? allowedOrigins : '*',
+  origin: allowedOrigins,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
