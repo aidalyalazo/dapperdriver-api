@@ -108,9 +108,10 @@ CREATE POLICY "shopper_addresses_own"
 
 -- ── 8. Shopper profiles / taste ──────────────────────────────────────────────
 
+-- shopper_profiles.id IS the auth user id (PK references auth.users)
 CREATE POLICY "shopper_profiles_own"
   ON shopper_profiles FOR ALL
-  USING (user_id = auth.uid());
+  USING (id = auth.uid());
 
 CREATE POLICY "shopper_taste_own"
   ON shopper_taste_profile FOR ALL
