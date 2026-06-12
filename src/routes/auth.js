@@ -153,7 +153,10 @@ router.post(
       user: {
         id:   data.user.id,
         email: data.user.email,
-        role: data.user.app_metadata?.role || data.user.user_metadata?.role,
+        // Routing role for the apps (shopper/boutique/driver screens).
+        // Authorization is enforced server-side from app_metadata; an admin's
+        // personal account still routes as its user_metadata role here.
+        role: data.user.user_metadata?.role || data.user.app_metadata?.role,
       },
     });
   })

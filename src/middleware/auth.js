@@ -45,8 +45,11 @@ async function authenticate(req, res, next) {
 function requireRole(...roles) {
   return (req, res, next) => {
     const appRole = req.user?.app_metadata?.role;
+    // Admin (app_metadata only) passes every role gate — the admin's personal
+    // account keeps working in the shopper app.
+    if (appRole === 'admin') return next();
     let userRole = appRole || req.user?.user_metadata?.role;
-    if (userRole === 'admin' && appRole !== 'admin') userRole = null;
+    if (userRole === 'admin') userRole = null; // user_metadata admin is forgeable
     if (!userRole || !roles.includes(userRole)) {
       return res.status(403).json({
         error: `Access denied. Required role(s): ${roles.join(', ')}.`,
