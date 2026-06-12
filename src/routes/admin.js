@@ -19,16 +19,17 @@ router.get(
   asyncHandler(async (req, res) => {
     const today = new Date().toISOString().split('T')[0];
 
+    // 'delivered' = delivery orders, 'completed' = pickup orders
     const [ordersRes, revenueRes, driversRes, boutiquesRes] = await Promise.all([
       supabaseAdmin
         .from('orders')
         .select('id', { count: 'exact', head: true })
-        .eq('status', 'delivered')
+        .in('status', ['delivered', 'completed'])
         .gte('created_at', `${today}T00:00:00Z`),
       supabaseAdmin
         .from('orders')
         .select('total_amount')
-        .eq('status', 'delivered')
+        .in('status', ['delivered', 'completed'])
         .gte('created_at', `${today}T00:00:00Z`),
       supabaseAdmin
         .from('drivers')
@@ -59,16 +60,17 @@ router.patch(
   '/boutiques/:id/status',
   [
     param('id').isUUID(),
-    body('status').isIn(['active', 'suspended', 'closed']),
+    body('status').isIn(['active', 'pending_approval', 'suspended', 'closed']),
     validate,
   ],
   asyncHandler(async (req, res) => {
     const { status } = req.body;
 
+    // :id is the boutique row id (what the admin panel passes), not user_id
     const { data, error } = await supabaseAdmin
       .from('boutiques')
       .update({ status })
-      .eq('user_id', req.params.id)
+      .eq('id', req.params.id)
       .select()
       .single();
 
@@ -89,7 +91,7 @@ router.patch(
     const { data, error } = await supabaseAdmin
       .from('boutiques')
       .update({ commission_rate })
-      .eq('user_id', req.params.id)
+      .eq('id', req.params.id)
       .select()
       .single();
 
@@ -109,7 +111,7 @@ router.patch(
     const { data, error } = await supabaseAdmin
       .from('drivers')
       .update({ is_approved: true, status: 'offline' })
-      .eq('user_id', req.params.id)
+      .eq('id', req.params.id)
       .select()
       .single();
 
@@ -130,7 +132,7 @@ router.patch(
 
     const { data, error } = await supabaseAdmin
       .from('driver_documents')
-      .update({ status })
+      .update({ status, verified_at: status === 'valid' ? new Date().toISOString() : null })
       .eq('id', req.params.docId)
       .eq('driver_id', req.params.id)
       .select()
@@ -138,28 +140,25 @@ router.patch(
 
     if (error) throw new Error(error.message);
 
-    // Send notification
-    if (status === 'valid') {
+    // Notifications are keyed by auth user id, not the driver row id
+    const { data: driverRow } = await supabaseAdmin
+      .from('drivers')
+      .select('user_id')
+      .eq('id', req.params.id)
+      .single();
+    const notifyUserId = driverRow?.user_id;
+
+    if (notifyUserId && (status === 'valid' || status === 'rejected')) {
+      const approved = status === 'valid';
       await supabaseAdmin
         .from('notifications')
         .insert({
-          user_id: req.params.id,
-          type: 'document_approved',
-          title: '✅ Document Approved',
-          body: `Your ${data.type} has been approved.`,
-          data: { document_id: data.id },
-          is_read: false,
-          sent_push: false,
-        })
-        .catch(() => {});
-    } else if (status === 'rejected') {
-      await supabaseAdmin
-        .from('notifications')
-        .insert({
-          user_id: req.params.id,
-          type: 'document_rejected',
-          title: '❌ Document Rejected',
-          body: `Your ${data.type} was rejected. Please resubmit.`,
+          user_id: notifyUserId,
+          type: approved ? 'document_approved' : 'document_rejected',
+          title: approved ? '✅ Document Approved' : '❌ Document Rejected',
+          body: approved
+            ? `Your ${data.doc_type} has been approved.`
+            : `Your ${data.doc_type} was rejected. Please resubmit.`,
           data: { document_id: data.id },
           is_read: false,
           sent_push: false,
@@ -173,6 +172,8 @@ router.patch(
 
 /**
  * PATCH /api/v1/admin/users/:id/status
+ * :id is the auth user id. suspended/deleted ban the account (Supabase auth
+ * refuses login + token refresh while banned); active lifts the ban.
  */
 router.patch(
   '/users/:id/status',
@@ -180,14 +181,28 @@ router.patch(
   validate,
   asyncHandler(async (req, res) => {
     const { status } = req.body;
-    // This would typically update user metadata or a users table
-    // For now, respond with success
-    res.json({ message: `User ${status}.` });
+    const userId = req.params.id;
+
+    const { data: existing, error: getErr } = await supabaseAdmin.auth.admin.getUserById(userId);
+    if (getErr || !existing?.user) {
+      return res.status(404).json({ error: 'User not found.' });
+    }
+
+    const attrs = { ban_duration: status === 'active' ? 'none' : '876000h' };
+    if (status === 'deleted') {
+      attrs.user_metadata = { ...existing.user.user_metadata, deleted: true };
+    }
+
+    const { error } = await supabaseAdmin.auth.admin.updateUserById(userId, attrs);
+    if (error) throw new Error(error.message);
+
+    res.json({ user_id: userId, status });
   })
 );
 
 /**
  * PATCH /api/v1/admin/users/:id/role
+ * Writes the role to app_metadata (authoritative) and user_metadata (display).
  */
 router.patch(
   '/users/:id/role',
@@ -195,8 +210,20 @@ router.patch(
   validate,
   asyncHandler(async (req, res) => {
     const { role } = req.body;
-    // Update would be done via Supabase Auth or user metadata table
-    res.json({ message: `User role set to ${role}.` });
+    const userId = req.params.id;
+
+    const { data: existing, error: getErr } = await supabaseAdmin.auth.admin.getUserById(userId);
+    if (getErr || !existing?.user) {
+      return res.status(404).json({ error: 'User not found.' });
+    }
+
+    const { error } = await supabaseAdmin.auth.admin.updateUserById(userId, {
+      app_metadata: { ...existing.user.app_metadata, role },
+      user_metadata: { ...existing.user.user_metadata, role },
+    });
+    if (error) throw new Error(error.message);
+
+    res.json({ user_id: userId, role });
   })
 );
 
@@ -265,12 +292,15 @@ router.post(
     body('code').notEmpty(),
     body('type').isIn(['percent', 'flat', 'free_delivery']),
     body('value').isFloat({ min: 0 }),
-    body('valid_from').isISO8601(),
-    body('valid_until').isISO8601(),
   ],
   validate,
   asyncHandler(async (req, res) => {
-    const { code, type, value, valid_from, valid_until, min_order_amount, max_uses, boutique_id, is_active } = req.body;
+    const { code, type, value, max_uses, max_uses_per_user, max_discount, boutique_id, city_id, is_active } = req.body;
+    // Real column names are starts_at / expires_at / min_order_value;
+    // accept the legacy aliases too.
+    const starts_at       = req.body.starts_at  || req.body.valid_from  || null;
+    const expires_at      = req.body.expires_at || req.body.valid_until || null;
+    const min_order_value = req.body.min_order_value ?? req.body.min_order_amount ?? null;
 
     const { data, error } = await supabaseAdmin
       .from('promos')
@@ -278,12 +308,16 @@ router.post(
         code: code.toUpperCase(),
         type,
         value,
-        valid_from,
-        valid_until,
-        min_order_amount: min_order_amount || null,
+        starts_at,
+        expires_at,
+        min_order_value,
+        max_discount: max_discount || null,
         max_uses: max_uses || null,
+        max_uses_per_user: max_uses_per_user || null,
         boutique_id: boutique_id || null,
+        city_id: city_id || null,
         is_active: is_active !== false,
+        created_by: req.userId,
       })
       .select()
       .single();
@@ -301,10 +335,14 @@ router.patch(
   [param('id').isUUID()],
   validate,
   asyncHandler(async (req, res) => {
-    const allowed = ['code', 'type', 'value', 'valid_from', 'valid_until', 'min_order_amount', 'max_uses', 'is_active'];
-    const updates = Object.fromEntries(
-      Object.entries(req.body).filter(([k]) => allowed.includes(k))
-    );
+    // Map legacy field names onto the real promos columns
+    const aliases = { valid_from: 'starts_at', valid_until: 'expires_at', min_order_amount: 'min_order_value' };
+    const allowed = ['code', 'type', 'value', 'starts_at', 'expires_at', 'min_order_value', 'max_discount', 'max_uses', 'max_uses_per_user', 'is_active'];
+    const updates = {};
+    for (const [k, v] of Object.entries(req.body)) {
+      const key = aliases[k] || k;
+      if (allowed.includes(key)) updates[key] = v;
+    }
 
     const { data, error } = await supabaseAdmin
       .from('promos')
@@ -360,7 +398,14 @@ router.post(
  */
 router.patch(
   '/orders/:id/status',
-  [param('id').isUUID(), body('status').notEmpty()],
+  [
+    param('id').isUUID(),
+    body('status').isIn([
+      'pending', 'confirmed', 'preparing', 'ready_for_pickup',
+      'driver_assigned', 'picked_up', 'out_for_delivery',
+      'delivered', 'completed', 'cancelled',
+    ]),
+  ],
   validate,
   asyncHandler(async (req, res) => {
     const { status } = req.body;
@@ -426,7 +471,7 @@ router.post(
   [body('name').notEmpty(), body('tax_rate').isFloat({ min: 0, max: 1 })],
   validate,
   asyncHandler(async (req, res) => {
-    const { name, tax_rate, timezone } = req.body;
+    const { name, tax_rate, timezone, status } = req.body;
 
     const { data, error } = await supabaseAdmin
       .from('cities')
@@ -434,6 +479,7 @@ router.post(
         name,
         tax_rate,
         timezone: timezone || 'America/New_York',
+        status: status || 'live',
       })
       .select()
       .single();
@@ -455,19 +501,31 @@ router.get(
   asyncHandler(async (req, res) => {
     const { limit = 50, offset = 0 } = req.query;
 
+    // outfit_posts has no FK relationship to shoppers in the schema cache,
+    // so shopper info is fetched in a second query instead of an embed.
     const { data, error, count } = await supabaseAdmin
       .from('outfit_posts')
-      .select(
-        `id, caption, image_url, created_at, is_flagged,
-         shopper:shopper_id (user_id, display_name, avatar_url),
-         post_likes (count)`,
-        { count: 'exact' }
-      )
+      .select('id, caption, image_url, created_at, hidden, like_count, shopper_id', { count: 'exact' })
       .order('created_at', { ascending: false })
       .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
 
     if (error) throw new Error(error.message);
-    res.json({ posts: data || [], total: count });
+
+    const posts = data || [];
+    const shopperIds = [...new Set(posts.map((p) => p.shopper_id).filter(Boolean))];
+    let shoppersById = {};
+    if (shopperIds.length) {
+      const { data: shopperRows } = await supabaseAdmin
+        .from('shoppers')
+        .select('id, display_name, full_name')
+        .in('id', shopperIds);
+      shoppersById = Object.fromEntries((shopperRows || []).map((s) => [s.id, s]));
+    }
+
+    res.json({
+      posts: posts.map((p) => ({ ...p, shopper: shoppersById[p.shopper_id] || null })),
+      total: count,
+    });
   })
 );
 
@@ -486,6 +544,7 @@ router.delete(
     await Promise.all([
       supabaseAdmin.from('post_product_tags').delete().eq('post_id', postId),
       supabaseAdmin.from('post_likes').delete().eq('post_id', postId),
+      supabaseAdmin.from('post_reports').delete().eq('post_id', postId).then(() => {}, () => {}),
     ]);
 
     const { error } = await supabaseAdmin
@@ -502,16 +561,22 @@ router.delete(
 
 /**
  * PATCH /api/v1/admin/social/posts/:id/flag
- * Flag a post for review without immediately deleting it.
+ * Hide/unhide a post (kept at /flag for backward compatibility; the real
+ * column is outfit_posts.hidden). Body: { hidden } or legacy { is_flagged }.
  */
 router.patch(
   '/social/posts/:id/flag',
-  [param('id').isUUID(), body('is_flagged').isBoolean()],
+  [param('id').isUUID()],
   validate,
   asyncHandler(async (req, res) => {
+    const hidden = typeof req.body.hidden === 'boolean' ? req.body.hidden : req.body.is_flagged;
+    if (typeof hidden !== 'boolean') {
+      return res.status(400).json({ error: 'hidden (boolean) is required.' });
+    }
+
     const { data, error } = await supabaseAdmin
       .from('outfit_posts')
-      .update({ is_flagged: req.body.is_flagged })
+      .update({ hidden })
       .eq('id', req.params.id)
       .select()
       .single();
@@ -627,30 +692,33 @@ router.get(
 
 /**
  * POST /api/v1/admin/editorials
- * Create a new editorial.
- * Body: { title, subtitle?, body_md, cover_image_url, tag?, is_published? }
+ * Create a new editorial. Editorials belong to a boutique and use JSONB
+ * content blocks (see migration 007):
+ * Body: { boutique_id, title, subtitle?, cover_image_url?, content?, published? }
+ *   content = [{ type: 'paragraph', text }, { type: 'image', url, caption },
+ *              { type: 'product', product_id }, { type: 'boutique_cta', label }]
  */
 router.post(
   '/editorials',
   [
+    body('boutique_id').isUUID().withMessage('boutique_id is required'),
     body('title').notEmpty().withMessage('title is required'),
-    body('body_md').notEmpty().withMessage('body_md is required'),
-    body('cover_image_url').notEmpty().withMessage('cover_image_url is required'),
+    body('content').optional().isArray().withMessage('content must be an array of blocks'),
   ],
   validate,
   asyncHandler(async (req, res) => {
-    const { title, subtitle, body_md, cover_image_url, tag, is_published } = req.body;
+    const { boutique_id, title, subtitle, cover_image_url, content, published } = req.body;
 
     const { data, error } = await supabaseAdmin
       .from('editorials')
       .insert({
+        boutique_id,
         title,
         subtitle: subtitle || null,
-        body_md,
-        cover_image_url,
-        tag: tag || null,
-        is_published: is_published !== false,
-        created_by: req.userId,
+        cover_image_url: cover_image_url || null,
+        content: content || [],
+        published: published !== false,
+        published_at: new Date().toISOString(),
       })
       .select()
       .single();
@@ -669,14 +737,14 @@ router.patch(
   [param('id').isUUID()],
   validate,
   asyncHandler(async (req, res) => {
-    const allowed = ['title', 'subtitle', 'body_md', 'cover_image_url', 'tag', 'is_published'];
+    const allowed = ['title', 'subtitle', 'cover_image_url', 'content', 'published', 'boutique_id'];
     const updates = Object.fromEntries(
       Object.entries(req.body).filter(([k]) => allowed.includes(k))
     );
 
     const { data, error } = await supabaseAdmin
       .from('editorials')
-      .update({ ...updates, updated_at: new Date().toISOString() })
+      .update(updates)
       .eq('id', req.params.id)
       .select()
       .single();
@@ -765,22 +833,23 @@ router.post(
     const { title, body: msgBody, target, data: extraData } = req.body;
     const { sendOrderNotification } = require('../services/fcmService');
 
-    // Collect push tokens by target role
+    // Collect FCM tokens by target role (tokens live in <role>.fcm_token,
+    // registered via POST /notifications/register-token)
     const tokenQueries = [];
     if (target === 'shoppers' || target === 'all') {
-      tokenQueries.push(supabaseAdmin.from('shoppers').select('user_id, push_token').not('push_token', 'is', null));
+      tokenQueries.push(supabaseAdmin.from('shoppers').select('fcm_token').not('fcm_token', 'is', null).not('fcm_token', 'eq', ''));
     }
     if (target === 'boutiques' || target === 'all') {
-      tokenQueries.push(supabaseAdmin.from('boutiques').select('user_id, push_token').not('push_token', 'is', null).not('push_token', 'eq', ''));
+      tokenQueries.push(supabaseAdmin.from('boutiques').select('fcm_token').not('fcm_token', 'is', null).not('fcm_token', 'eq', ''));
     }
     if (target === 'drivers' || target === 'all') {
-      tokenQueries.push(supabaseAdmin.from('drivers').select('user_id, push_token').not('push_token', 'is', null).not('push_token', 'eq', ''));
+      tokenQueries.push(supabaseAdmin.from('drivers').select('fcm_token').not('fcm_token', 'is', null).not('fcm_token', 'eq', ''));
     }
 
     const results = await Promise.all(tokenQueries);
     const tokens = results
       .flatMap((r) => r.data || [])
-      .map((r) => r.push_token)
+      .map((r) => r.fcm_token)
       .filter(Boolean);
 
     // Fan out via FCM (fire-and-forget, log errors)

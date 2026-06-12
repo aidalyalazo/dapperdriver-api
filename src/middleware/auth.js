@@ -35,13 +35,18 @@ async function authenticate(req, res, next) {
 
 /**
  * Role-based guard. Call AFTER authenticate.
- * Checks `user.user_metadata.role` (set at sign-up).
+ * app_metadata.role is authoritative (only writable server-side); falls back
+ * to user_metadata.role for legacy accounts — EXCEPT for 'admin', which must
+ * come from app_metadata because users can edit their own user_metadata via
+ * the Supabase auth API.
  *
  * @param {...string} roles  — accepted roles, e.g. requireRole('boutique', 'admin')
  */
 function requireRole(...roles) {
   return (req, res, next) => {
-    const userRole = req.user?.user_metadata?.role;
+    const appRole = req.user?.app_metadata?.role;
+    let userRole = appRole || req.user?.user_metadata?.role;
+    if (userRole === 'admin' && appRole !== 'admin') userRole = null;
     if (!userRole || !roles.includes(userRole)) {
       return res.status(403).json({
         error: `Access denied. Required role(s): ${roles.join(', ')}.`,

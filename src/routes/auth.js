@@ -65,9 +65,12 @@ router.post(
 
     const userId = authData.user.id;
 
-    // 2. Update user metadata to include the real role
+    // 2. Update user metadata to include the real role.
+    //    app_metadata is the authoritative copy — users can self-edit
+    //    user_metadata via the auth API, so role checks must not trust it.
     await supabaseAdmin.auth.admin.updateUserById(userId, {
       user_metadata: { role, full_name },
+      app_metadata: { role },
     });
 
     // 3. The trigger may have auto-created a shoppers row.
@@ -150,7 +153,7 @@ router.post(
       user: {
         id:   data.user.id,
         email: data.user.email,
-        role: data.user.user_metadata?.role,
+        role: data.user.app_metadata?.role || data.user.user_metadata?.role,
       },
     });
   })

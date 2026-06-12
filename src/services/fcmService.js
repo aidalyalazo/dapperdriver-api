@@ -81,9 +81,9 @@ async function notifyAvailableDrivers({ orderId, cityId }) {
   // Supabase query builder is immutable — must reassign to chain conditionally.
   let query = supabaseAdmin
     .from('drivers')
-    .select('push_token')
+    .select('fcm_token')
     .eq('is_approved', true)
-    .not('push_token', 'is', null);
+    .not('fcm_token', 'is', null);
 
   // Filter by city_id if provided
   if (cityId) {
@@ -94,7 +94,7 @@ async function notifyAvailableDrivers({ orderId, cityId }) {
 
   if (!drivers || drivers.length === 0) return;
 
-  const tokens = drivers.map((d) => d.push_token).filter(Boolean);
+  const tokens = drivers.map((d) => d.fcm_token).filter(Boolean);
 
   return sendMulticast({
     tokens,

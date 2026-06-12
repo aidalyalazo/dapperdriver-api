@@ -430,17 +430,29 @@ router.post(
   '/me/documents',
   requireRole('driver'),
   asyncHandler(async (req, res) => {
-    const { type, file_url } = req.body;
+    const { type, doc_type, file_url } = req.body;
+    const docType = doc_type || type; // column is doc_type; accept legacy `type`
 
-    if (!type || !file_url) {
-      throw Object.assign(new Error('type and file_url are required'), { status: 400 });
+    if (!docType || !file_url) {
+      throw Object.assign(new Error('doc_type and file_url are required'), { status: 400 });
+    }
+
+    // driver_documents.driver_id references the drivers row id, not the auth id
+    const { data: driverRow, error: driverErr } = await supabaseAdmin
+      .from('drivers')
+      .select('id')
+      .eq('user_id', req.userId)
+      .single();
+
+    if (driverErr || !driverRow) {
+      throw Object.assign(new Error('Driver profile not found'), { status: 404 });
     }
 
     const { data, error } = await supabaseAdmin
       .from('driver_documents')
       .insert({
-        driver_id: req.userId,
-        type,
+        driver_id: driverRow.id,
+        doc_type: docType,
         file_url,
         status: 'pending',
       })
