@@ -921,6 +921,39 @@ router.patch(
   })
 );
 
+// ── AI Insights ───────────────────────────────────────────────────────────────
+
+/**
+ * GET /api/v1/admin/insights/daily?refresh=1
+ * The morning briefing: trends, tasks, efficiency tips. Generated once per
+ * day (Claude if ANTHROPIC_API_KEY is set, rule-based fallback otherwise)
+ * and cached in ai_insights.
+ */
+router.get(
+  '/insights/daily',
+  asyncHandler(async (req, res) => {
+    const { getDailyBriefing } = require('../services/aiInsightsService');
+    const briefing = await getDailyBriefing({ refresh: req.query.refresh === '1' });
+    res.json(briefing);
+  })
+);
+
+/**
+ * GET /api/v1/admin/boutiques/:id/report?refresh=1
+ * AI performance report for one boutique (cached 24h). The panel renders it
+ * in a drawer and can email it to the boutique owner.
+ */
+router.get(
+  '/boutiques/:id/report',
+  [param('id').isUUID()],
+  validate,
+  asyncHandler(async (req, res) => {
+    const { getBoutiqueReport } = require('../services/aiInsightsService');
+    const report = await getBoutiqueReport(req.params.id, { refresh: req.query.refresh === '1' });
+    res.json(report);
+  })
+);
+
 // ── Data Intelligence ─────────────────────────────────────────────────────────
 
 /**
