@@ -153,9 +153,12 @@ async function calculateEstimatedDelivery(boutiqueId) {
     }
   }
 
-  // Delivery = clock start + base + queue backlog, capped at 2h for after-hours queue
+  // Same-day delivery. After-hours orders are delivered the same day the
+  // boutique reopens; the offset from opening is capped at 120 min so the
+  // estimate timestamp stays realistic. (Rush sub-2h delivery is a
+  // surcharge add-on requested per order, handled separately.)
   const deliveryOffsetMins = isOutsideHours
-    ? Math.min(BASE_MINUTES + totalExtraMinutes, 120)  // within 2h of opening
+    ? Math.min(BASE_MINUTES + totalExtraMinutes, 120)
     : BASE_MINUTES + totalExtraMinutes;
 
   const estimatedAt = new Date(clockStart.getTime() + deliveryOffsetMins * 60 * 1000);

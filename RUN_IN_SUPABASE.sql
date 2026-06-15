@@ -251,7 +251,60 @@ EXCEPTION
 END $run$;
 
 
--- ── G. RLS security hardening ─────────────────────────────────────────────
+-- ── G. Migration 015 — driver capacity + batching ─────────────────────────
+
+DO $run$ BEGIN
+  EXECUTE $stmt$ALTER TABLE drivers ADD COLUMN IF NOT EXISTS max_active_orders INT NOT NULL DEFAULT 1$stmt$;
+EXCEPTION
+  WHEN undefined_column OR undefined_table OR undefined_object
+    OR duplicate_object OR duplicate_table OR duplicate_column THEN
+    RAISE NOTICE 'SKIPPED: %', SQLERRM;
+END $run$;
+
+DO $run$ BEGIN
+  EXECUTE $stmt$ALTER TABLE orders ADD COLUMN IF NOT EXISTS batch_id UUID$stmt$;
+EXCEPTION
+  WHEN undefined_column OR undefined_table OR undefined_object
+    OR duplicate_object OR duplicate_table OR duplicate_column THEN
+    RAISE NOTICE 'SKIPPED: %', SQLERRM;
+END $run$;
+
+DO $run$ BEGIN
+  EXECUTE $stmt$CREATE TABLE IF NOT EXISTS delivery_batches (
+  id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  driver_id  UUID,
+  status     TEXT DEFAULT 'open',
+  created_at TIMESTAMPTZ DEFAULT now()
+)$stmt$;
+EXCEPTION
+  WHEN undefined_column OR undefined_table OR undefined_object
+    OR duplicate_object OR duplicate_table OR duplicate_column THEN
+    RAISE NOTICE 'SKIPPED: %', SQLERRM;
+END $run$;
+
+DO $run$ BEGIN
+  EXECUTE $stmt$CREATE INDEX IF NOT EXISTS idx_orders_batch_id ON orders(batch_id) WHERE batch_id IS NOT NULL$stmt$;
+EXCEPTION
+  WHEN undefined_column OR undefined_table OR undefined_object
+    OR duplicate_object OR duplicate_table OR duplicate_column THEN
+    RAISE NOTICE 'SKIPPED: %', SQLERRM;
+END $run$;
+
+
+-- ── H. Migration 016 — disable try-on ─────────────────────────────────────
+
+DO $run$ BEGIN
+  EXECUTE $stmt$INSERT INTO platform_settings (key, value)
+VALUES ('try_on_feature_enabled', '{"enabled": false}')
+ON CONFLICT (key) DO UPDATE SET value = '{"enabled": false}'$stmt$;
+EXCEPTION
+  WHEN undefined_column OR undefined_table OR undefined_object
+    OR duplicate_object OR duplicate_table OR duplicate_column THEN
+    RAISE NOTICE 'SKIPPED: %', SQLERRM;
+END $run$;
+
+
+-- ── I. RLS security hardening ─────────────────────────────────────────────
 
 DO $run$ BEGIN
   EXECUTE $stmt$ALTER TABLE orders                ENABLE ROW LEVEL SECURITY$stmt$;
@@ -501,6 +554,7 @@ BEGIN
     SELECT schemaname, tablename, policyname
     FROM pg_policies
     WHERE schemaname = 'public'
+      AND policyname NOT LIKE 'admin_all_%'  -- keep admin-panel policies (migration 015)
   LOOP
     EXECUTE format('DROP POLICY IF EXISTS %I ON %I.%I',
                    r.policyname, r.schemaname, r.tablename);
@@ -583,16 +637,6 @@ EXCEPTION
 END $run$;
 
 DO $run$ BEGIN
-  EXECUTE $stmt$CREATE POLICY "shoppers_read_public"
-  ON shoppers FOR SELECT
-  USING (true)$stmt$;
-EXCEPTION
-  WHEN undefined_column OR undefined_table OR undefined_object
-    OR duplicate_object OR duplicate_table OR duplicate_column THEN
-    RAISE NOTICE 'SKIPPED: %', SQLERRM;
-END $run$;
-
-DO $run$ BEGIN
   EXECUTE $stmt$CREATE POLICY "shopper_addresses_own"
   ON shopper_addresses FOR ALL
   USING (shopper_id = auth.uid())$stmt$;
@@ -605,7 +649,7 @@ END $run$;
 DO $run$ BEGIN
   EXECUTE $stmt$CREATE POLICY "shopper_profiles_own"
   ON shopper_profiles FOR ALL
-  USING (user_id = auth.uid())$stmt$;
+  USING (id = auth.uid())$stmt$;
 EXCEPTION
   WHEN undefined_column OR undefined_table OR undefined_object
     OR duplicate_object OR duplicate_table OR duplicate_column THEN
@@ -633,19 +677,9 @@ EXCEPTION
 END $run$;
 
 DO $run$ BEGIN
-  EXECUTE $stmt$CREATE POLICY "drivers_public_read"
-  ON drivers FOR SELECT
-  USING (true)$stmt$;
-EXCEPTION
-  WHEN undefined_column OR undefined_table OR undefined_object
-    OR duplicate_object OR duplicate_table OR duplicate_column THEN
-    RAISE NOTICE 'SKIPPED: %', SQLERRM;
-END $run$;
-
-DO $run$ BEGIN
   EXECUTE $stmt$CREATE POLICY "driver_documents_own"
   ON driver_documents FOR ALL
-  USING (driver_id = auth.uid())$stmt$;
+  USING (driver_id IN (SELECT id FROM drivers WHERE user_id = auth.uid()))$stmt$;
 EXCEPTION
   WHEN undefined_column OR undefined_table OR undefined_object
     OR duplicate_object OR duplicate_table OR duplicate_column THEN

@@ -1,6 +1,37 @@
 const { supabaseAdmin } = require('../config/supabase');
 const { sendOrderNotification, notifyAvailableDrivers } = require('./fcmService');
 
+// Statuses that count against a driver's active-order capacity.
+const ACTIVE_ORDER_STATUSES = ['driver_assigned', 'picked_up', 'out_for_delivery'];
+
+/**
+ * How many orders a driver is currently carrying (assigned but not yet
+ * delivered/cancelled). Used to gate new assignments by capacity instead of
+ * the old binary 'busy' status.
+ * @param {string} driverId
+ * @returns {Promise<number>}
+ */
+async function getDriverActiveOrderCount(driverId) {
+  const { count } = await supabaseAdmin
+    .from('orders')
+    .select('id', { count: 'exact', head: true })
+    .eq('driver_id', driverId)
+    .in('status', ACTIVE_ORDER_STATUSES);
+  return count || 0;
+}
+
+/**
+ * A driver can take another order when their active load is below their
+ * max_active_orders (default 1 → behaves exactly like the old binary gate).
+ * @param {{ id: string, max_active_orders?: number }} driver
+ * @returns {Promise<boolean>}
+ */
+async function driverHasCapacity(driver) {
+  const max = driver.max_active_orders || 1;
+  const current = await getDriverActiveOrderCount(driver.id);
+  return current < max;
+}
+
 /**
  * Calculate distance between two coordinates using Haversine formula.
  * @param {number} lat1 - Latitude 1
@@ -53,12 +84,13 @@ async function findAndAssignDriver(orderId, retryCount = 0) {
     // ── Check if only one driver exists in the city ──────────────────────
     const { data: allCityDrivers } = await supabaseAdmin
       .from('drivers')
-      .select('id, current_lat, current_lng, push_token, status')
+      .select('id, current_lat, current_lng, push_token, status, max_active_orders')
       .eq('city_id', order.city_id)
       .eq('is_approved', true)
       .catch(() => ({ data: [] }));
 
     // Single-driver shortcut: assign them regardless of online status
+    // (preserved exactly — a lone city driver still takes every order).
     if (allCityDrivers && allCityDrivers.length === 1) {
       const soloDriver = allCityDrivers[0];
       console.log(
@@ -68,11 +100,16 @@ async function findAndAssignDriver(orderId, retryCount = 0) {
       return;
     }
 
-    // ── First attempt: try nearest ONLINE driver ─────────────────────────
+    // ── First attempt: nearest ONLINE driver with spare capacity ─────────
+    // Capacity replaces the old binary 'busy' gate: a driver at
+    // max_active_orders (default 1) is skipped, so default behavior is
+    // identical to before — one active order per driver.
     const onlineDrivers = (allCityDrivers || []).filter((d) => d.status === 'online');
+    const capacityFlags = await Promise.all(onlineDrivers.map((d) => driverHasCapacity(d)));
+    const availableDrivers = onlineDrivers.filter((_, i) => capacityFlags[i]);
 
-    if (onlineDrivers.length > 0) {
-      const nearest = pickNearest(onlineDrivers, boutiqueLat, boutiqueLng);
+    if (availableDrivers.length > 0) {
+      const nearest = pickNearest(availableDrivers, boutiqueLat, boutiqueLng);
       if (nearest) {
         await assignDriverToOrder(order, nearest.driver, boutiqueLat, boutiqueLng);
         return;
@@ -183,11 +220,10 @@ async function assignDriverToOrder(order, driver, boutiqueLat, boutiqueLng) {
     .eq('id', orderId)
     .catch(() => {});
 
-  await supabaseAdmin
-    .from('drivers')
-    .update({ status: 'busy' })
-    .eq('id', driver.id)
-    .catch(() => {});
+  // NOTE: we intentionally no longer flip the driver to 'busy'. Capacity is
+  // now derived from their live active-order count (getDriverActiveOrderCount),
+  // so 'online'/'offline' stays the driver's own availability toggle and one
+  // driver can carry up to max_active_orders deliveries at once.
 
   await supabaseAdmin
     .from('order_timeline')
@@ -253,4 +289,9 @@ async function broadcastToAllDrivers(orderId, cityId) {
   }
 }
 
-module.exports = { findAndAssignDriver };
+module.exports = {
+  findAndAssignDriver,
+  getDriverActiveOrderCount,
+  driverHasCapacity,
+  ACTIVE_ORDER_STATUSES,
+};

@@ -1115,4 +1115,118 @@ router.get(
   })
 );
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// MANUAL DRIVER ASSIGNMENT + BATCHING
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const { getDriverActiveOrderCount } = require('../services/driverAssignmentService');
+
+/**
+ * POST /api/v1/admin/orders/:orderId/assign
+ * Manually assign a specific driver to an order, overriding auto-assign.
+ * Body: { driverId, force? }
+ * Respects the driver's max_active_orders unless force:true.
+ */
+router.post(
+  '/orders/:orderId/assign',
+  [param('orderId').isUUID(), body('driverId').isUUID(), body('force').optional().isBoolean()],
+  validate,
+  asyncHandler(async (req, res) => {
+    const { orderId } = req.params;
+    const { driverId, force } = req.body;
+
+    const { data: order } = await supabaseAdmin
+      .from('orders').select('id, status').eq('id', orderId).single();
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+
+    const { data: driver } = await supabaseAdmin
+      .from('drivers').select('id, max_active_orders, full_name').eq('id', driverId).single();
+    if (!driver) return res.status(404).json({ error: 'Driver not found' });
+
+    // Capacity check (skippable with force)
+    if (!force) {
+      const active = await getDriverActiveOrderCount(driverId);
+      const max = driver.max_active_orders || 1;
+      if (active >= max) {
+        return res.status(409).json({
+          error: `Driver is at capacity (${active}/${max} active orders). Pass force:true to override.`,
+          active_orders: active,
+          max_active_orders: max,
+        });
+      }
+    }
+
+    const now = new Date().toISOString();
+    const { data: updated, error } = await supabaseAdmin
+      .from('orders')
+      .update({ driver_id: driverId, status: 'driver_assigned', driver_assigned_at: now })
+      .eq('id', orderId)
+      .select()
+      .single();
+    if (error) throw new Error(error.message);
+
+    await supabaseAdmin.from('order_timeline').insert({
+      order_id: orderId,
+      status:   'driver_assigned',
+      notes:    `Manually assigned to ${driver.full_name || driverId} by admin${force ? ' (capacity override)' : ''}`,
+    }).catch(() => {});
+
+    res.json(updated);
+  })
+);
+
+/**
+ * POST /api/v1/admin/batches
+ * Create a delivery batch: one driver carries several orders on one run.
+ * Body: { driverId, orderIds[] }
+ * Sets batch_id on each order and assigns the driver to all of them.
+ */
+router.post(
+  '/batches',
+  [
+    body('driverId').isUUID(),
+    body('orderIds').isArray({ min: 1 }),
+    body('orderIds.*').isUUID(),
+  ],
+  validate,
+  asyncHandler(async (req, res) => {
+    const { driverId, orderIds } = req.body;
+
+    const { data: driver } = await supabaseAdmin
+      .from('drivers').select('id, full_name').eq('id', driverId).single();
+    if (!driver) return res.status(404).json({ error: 'Driver not found' });
+
+    // Create the batch row
+    const { data: batch, error: batchErr } = await supabaseAdmin
+      .from('delivery_batches')
+      .insert({ driver_id: driverId, status: 'open' })
+      .select()
+      .single();
+    if (batchErr) throw new Error(batchErr.message);
+
+    const now = new Date().toISOString();
+    const { data: orders, error: ordErr } = await supabaseAdmin
+      .from('orders')
+      .update({
+        batch_id:           batch.id,
+        driver_id:          driverId,
+        status:             'driver_assigned',
+        driver_assigned_at: now,
+      })
+      .in('id', orderIds)
+      .select('id');
+    if (ordErr) throw new Error(ordErr.message);
+
+    await supabaseAdmin.from('order_timeline').insert(
+      (orders || []).map((o) => ({
+        order_id: o.id,
+        status:   'driver_assigned',
+        notes:    `Batched to ${driver.full_name || driverId} (batch ${batch.id.slice(0, 8)}) by admin`,
+      }))
+    ).catch(() => {});
+
+    res.status(201).json({ batch, assigned_orders: (orders || []).map((o) => o.id) });
+  })
+);
+
 module.exports = router;
