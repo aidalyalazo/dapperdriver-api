@@ -32,7 +32,7 @@ router.get(
     const { status, category, try_on_enabled } = req.query;
     let q = supabaseAdmin
       .from('boutiques')
-      .select('id, name, slug, description, logo_url, logo_initials, logo_bg, campaign_images, address, state, city_id, rating, review_count, follower_count, primary_category, category_tags, style_tags, price_tier, status, try_on_enabled', { count: 'exact' })
+      .select('id, name, slug, description, logo_url, logo_initials, logo_bg, campaign_images, campaign_image_fit, address, state, city_id, rating, review_count, follower_count, primary_category, category_tags, style_tags, price_tier, status, try_on_enabled', { count: 'exact' })
       .order('rating', { ascending: false })
       .range((page - 1) * limit, page * limit - 1);
 
@@ -182,8 +182,8 @@ router.patch(
   requireRole('boutique'),
   asyncHandler(async (req, res) => {
     const allowed = ['name', 'description', 'phone', 'address', 'logo_url', 'logo_initials', 'logo_bg',
-                     'style_tags', 'category_tags', 'primary_category', 'price_tier', 'email',
-                     'website', 'slug', 'owner_name'];
+                     'campaign_images', 'campaign_image_fit', 'style_tags', 'category_tags',
+                     'primary_category', 'price_tier', 'email', 'website', 'slug', 'owner_name'];
 
     // Map client field names to DB column names
     const fieldMap = { bio: 'description', tags: 'style_tags', banner_url: 'logo_bg' };
