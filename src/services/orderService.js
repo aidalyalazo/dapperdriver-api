@@ -260,12 +260,12 @@ async function createOrder({
     // Platform commission rate (fallback only, used when boutique has no custom rate)
     isPickup
       ? Promise.resolve(null)
-      : getPlatformSettingJson('commission_rate', { default: 25 }),
+      : getPlatformSettingJson('commission_rate', { default: 20 }),
 
     // Driver payout rate (delivery only)
     isPickup
       ? Promise.resolve(null)
-      : getPlatformSettingJson('driver_payout_rate', { delivery_fee_cut: 80, tip_cut: 100 }),
+      : getPlatformSettingJson('driver_payout_rate', { delivery_fee_cut: 100, tip_cut: 100 }),
 
     // Pickup commission rate
     isPickup

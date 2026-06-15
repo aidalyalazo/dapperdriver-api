@@ -32,7 +32,11 @@ router.get(
     const { status, category, try_on_enabled } = req.query;
     let q = supabaseAdmin
       .from('boutiques')
-      .select('id, name, slug, description, logo_url, logo_initials, logo_bg, campaign_images, campaign_image_fit, address, state, city_id, rating, review_count, follower_count, primary_category, category_tags, style_tags, price_tier, status, try_on_enabled', { count: 'exact' })
+      // NB: campaign_image_fit intentionally NOT selected here — listing this
+      // column would 500 the whole browse if the (additive) migration 017
+      // hasn't run yet. The detail route below uses select('*'), which returns
+      // it safely once the column exists.
+      .select('id, name, slug, description, logo_url, logo_initials, logo_bg, campaign_images, address, state, city_id, rating, review_count, follower_count, primary_category, category_tags, style_tags, price_tier, status, try_on_enabled', { count: 'exact' })
       .order('rating', { ascending: false })
       .range((page - 1) * limit, page * limit - 1);
 
@@ -181,8 +185,11 @@ router.patch(
   '/me',
   requireRole('boutique'),
   asyncHandler(async (req, res) => {
+    // NB: campaign_image_fit deliberately excluded — until migration 017 runs
+    // everywhere, a PATCH writing it would 500. Nothing sends it yet; re-add
+    // when a fit selector ships.
     const allowed = ['name', 'description', 'phone', 'address', 'logo_url', 'logo_initials', 'logo_bg',
-                     'campaign_images', 'campaign_image_fit', 'style_tags', 'category_tags',
+                     'campaign_images', 'style_tags', 'category_tags',
                      'primary_category', 'price_tier', 'email', 'website', 'slug', 'owner_name'];
 
     // Map client field names to DB column names

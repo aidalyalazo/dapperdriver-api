@@ -304,7 +304,18 @@ EXCEPTION
 END $run$;
 
 
--- ── I. RLS security hardening ─────────────────────────────────────────────
+-- ── I. Migration 017 — campaign image fit ─────────────────────────────────
+
+DO $run$ BEGIN
+  EXECUTE $stmt$ALTER TABLE boutiques ADD COLUMN IF NOT EXISTS campaign_image_fit TEXT DEFAULT 'cover'$stmt$;
+EXCEPTION
+  WHEN undefined_column OR undefined_table OR undefined_object
+    OR duplicate_object OR duplicate_table OR duplicate_column THEN
+    RAISE NOTICE 'SKIPPED: %', SQLERRM;
+END $run$;
+
+
+-- ── J. RLS security hardening ─────────────────────────────────────────────
 
 DO $run$ BEGIN
   EXECUTE $stmt$ALTER TABLE orders                ENABLE ROW LEVEL SECURITY$stmt$;
