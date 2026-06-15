@@ -60,20 +60,66 @@ router.patch(
   '/boutiques/:id/status',
   [
     param('id').isUUID(),
-    body('status').isIn(['active', 'pending_approval', 'suspended', 'closed']),
+    body('status').isIn(['active', 'pending', 'pending_approval', 'suspended', 'closed', 'inactive']),
     validate,
   ],
   asyncHandler(async (req, res) => {
     const { status } = req.body;
 
+    // Stamp approval metadata when a pending boutique is accepted.
+    const update = { status };
+    if (status === 'active') {
+      update.approved_at = new Date().toISOString();
+      update.approved_by = req.userId;
+    } else if (status === 'suspended') {
+      update.suspended_at = new Date().toISOString();
+    }
+
     // :id is the boutique row id (what the admin panel passes), not user_id
     const { data, error } = await supabaseAdmin
       .from('boutiques')
-      .update({ status })
+      .update(update)
       .eq('id', req.params.id)
       .select()
       .single();
 
+    if (error) throw new Error(error.message);
+
+    // Notify the boutique owner (notifications keyed by auth user id)
+    if (data?.user_id && (status === 'active' || status === 'suspended')) {
+      const approved = status === 'active';
+      await supabaseAdmin.from('notifications').insert({
+        user_id: data.user_id,
+        type: approved ? 'boutique_approved' : 'boutique_suspended',
+        title: approved ? '🎉 You\'re approved!' : 'Account suspended',
+        body: approved
+          ? `${data.name} is live on DapperDriver. Add products and start selling.`
+          : `${data.name} has been suspended. Contact support for details.`,
+        data: { boutique_id: data.id },
+        is_read: false,
+        sent_push: false,
+      }).catch(() => {});
+    }
+
+    res.json(data);
+  })
+);
+
+/**
+ * POST /api/v1/admin/boutiques/:id/reject
+ * Decline a pending boutique application (status -> closed, with a reason).
+ */
+router.post(
+  '/boutiques/:id/reject',
+  [param('id').isUUID(), body('reason').optional().isString()],
+  validate,
+  asyncHandler(async (req, res) => {
+    const { data, error } = await supabaseAdmin
+      .from('boutiques')
+      .update({ status: 'closed', suspension_reason: req.body.reason || 'Application declined' })
+      .eq('id', req.params.id)
+      .select()
+      .single();
     if (error) throw new Error(error.message);
     res.json(data);
   })
@@ -115,6 +161,38 @@ router.patch(
       .select()
       .single();
 
+    if (error) throw new Error(error.message);
+
+    if (data?.user_id) {
+      await supabaseAdmin.from('notifications').insert({
+        user_id: data.user_id,
+        type: 'driver_approved',
+        title: '🚗 You\'re approved to drive!',
+        body: 'Your DapperDriver application was approved. Go online to start accepting deliveries.',
+        data: { driver_id: data.id },
+        is_read: false,
+        sent_push: false,
+      }).catch(() => {});
+    }
+    res.json(data);
+  })
+);
+
+/**
+ * POST /api/v1/admin/drivers/:id/reject
+ * Decline a pending driver application (un-approve + suspend).
+ */
+router.post(
+  '/drivers/:id/reject',
+  [param('id').isUUID(), body('reason').optional().isString()],
+  validate,
+  asyncHandler(async (req, res) => {
+    const { data, error } = await supabaseAdmin
+      .from('drivers')
+      .update({ is_approved: false, status: 'suspended' })
+      .eq('id', req.params.id)
+      .select()
+      .single();
     if (error) throw new Error(error.message);
     res.json(data);
   })
@@ -443,7 +521,11 @@ router.get(
  */
 router.patch(
   '/cities/:id',
-  [param('id').isUUID()],
+  [
+    param('id').isUUID(),
+    body('status').optional().isIn(['live', 'inactive', 'coming_soon', 'paused'])
+      .withMessage('status must be live, inactive, coming_soon, or paused'),
+  ],
   validate,
   asyncHandler(async (req, res) => {
     const allowed = ['name', 'tax_rate', 'timezone', 'status'];
@@ -468,7 +550,12 @@ router.patch(
  */
 router.post(
   '/cities',
-  [body('name').notEmpty(), body('tax_rate').isFloat({ min: 0, max: 1 })],
+  [
+    body('name').notEmpty(),
+    body('tax_rate').isFloat({ min: 0, max: 1 }),
+    body('status').optional().isIn(['live', 'inactive', 'coming_soon', 'paused'])
+      .withMessage('status must be live, inactive, coming_soon, or paused'),
+  ],
   validate,
   asyncHandler(async (req, res) => {
     const { name, tax_rate, timezone, status } = req.body;
@@ -486,6 +573,42 @@ router.post(
 
     if (error) throw new Error(error.message);
     res.status(201).json(data);
+  })
+);
+
+/**
+ * DELETE /api/v1/admin/cities/:id
+ * Hard-delete a city. Blocked (409) if any boutiques, orders, or drivers still
+ * reference it — deleting would orphan that data. Empty cities delete cleanly.
+ */
+router.delete(
+  '/cities/:id',
+  [param('id').isUUID()],
+  validate,
+  asyncHandler(async (req, res) => {
+    const cityId = req.params.id;
+
+    const [boutiquesRes, ordersRes, driversRes] = await Promise.all([
+      supabaseAdmin.from('boutiques').select('id', { count: 'exact', head: true }).eq('city_id', cityId),
+      supabaseAdmin.from('orders').select('id', { count: 'exact', head: true }).eq('city_id', cityId),
+      supabaseAdmin.from('drivers').select('id', { count: 'exact', head: true }).eq('city_id', cityId),
+    ]);
+    const blockers = {
+      boutiques: boutiquesRes.count || 0,
+      orders: ordersRes.count || 0,
+      drivers: driversRes.count || 0,
+    };
+    const total = blockers.boutiques + blockers.orders + blockers.drivers;
+    if (total > 0) {
+      return res.status(409).json({
+        error: `Can't delete this city — it still has ${blockers.boutiques} boutique(s), ${blockers.orders} order(s), and ${blockers.drivers} driver(s). Reassign or remove them first, or set the city to inactive instead.`,
+        blockers,
+      });
+    }
+
+    const { error } = await supabaseAdmin.from('cities').delete().eq('id', cityId);
+    if (error) throw new Error(error.message);
+    res.json({ deleted: true, city_id: cityId });
   })
 );
 
@@ -602,7 +725,7 @@ router.get(
     const [boutiqueRes, hotspotRes] = await Promise.all([
       supabaseAdmin
         .from('boutiques')
-        .select('id, name, logo_url, campaign_images')
+        .select('id, name, logo_url, campaign_images, campaign_image_fit')
         .eq('id', boutiqueId)
         .single(),
       supabaseAdmin
@@ -623,28 +746,29 @@ router.get(
 
 /**
  * PATCH /api/v1/admin/boutiques/:id/media
- * Admin override: update logo_url or campaign_images for any boutique.
- * Body: { logo_url?, campaign_images? }
+ * Admin override: update logo_url, campaign_images (array of public URLs),
+ * or campaign_image_fit (url -> { focal_x, focal_y, fit }) for any boutique.
+ * Body: { logo_url?, campaign_images?, campaign_image_fit? }
  */
 router.patch(
   '/boutiques/:id/media',
   [param('id').isUUID()],
   validate,
   asyncHandler(async (req, res) => {
-    const allowed = ['logo_url', 'campaign_images'];
+    const allowed = ['logo_url', 'campaign_images', 'campaign_image_fit'];
     const updates = Object.fromEntries(
       Object.entries(req.body).filter(([k]) => allowed.includes(k))
     );
 
     if (Object.keys(updates).length === 0) {
-      return res.status(400).json({ error: 'Nothing to update. Allowed: logo_url, campaign_images' });
+      return res.status(400).json({ error: 'Nothing to update. Allowed: logo_url, campaign_images, campaign_image_fit' });
     }
 
     const { data, error } = await supabaseAdmin
       .from('boutiques')
       .update({ ...updates, updated_at: new Date().toISOString() })
       .eq('id', req.params.id)
-      .select('id, name, logo_url, campaign_images')
+      .select('id, name, logo_url, campaign_images, campaign_image_fit')
       .single();
 
     if (error) throw new Error(error.message);

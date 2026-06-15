@@ -22,6 +22,10 @@ const createOrderValidation = [
     .optional()
     .isIn(['delivery', 'pickup'])
     .withMessage('fulfillment_type must be delivery or pickup'),
+  body('delivery_speed')
+    .optional()
+    .isIn(['standard', 'express'])
+    .withMessage('delivery_speed must be standard or express'),
   body('delivery_address')
     .if((_value, { req }) => (req.body.fulfillment_type || 'delivery') === 'delivery')
     .isObject()
@@ -60,7 +64,7 @@ const createOrder = [
   validate,
   asyncHandler(async (req, res) => {
     const shopperId = req.userId;
-    const { boutique_id, items, delivery_address, notes, fulfillment_type, tip, promo_code } = req.body;
+    const { boutique_id, items, delivery_address, notes, fulfillment_type, delivery_speed, tip, promo_code } = req.body;
 
     // 1. Create the order record (DB write happens before payment by design —
     //    the PI client_secret is returned to Flutter so the payment sheet can
@@ -79,6 +83,7 @@ const createOrder = [
         deliveryAddress: delivery_address,
         notes,
         fulfillmentType: fulfillment_type || 'delivery',
+        deliverySpeed: delivery_speed || 'standard',
         // tip + promo_code were sent by checkout but silently dropped here —
         // the shopper's displayed total never matched the charged amount.
         tip: tip,
@@ -174,7 +179,11 @@ const createOrder = [
  */
 const listOrders = asyncHandler(async (req, res) => {
   const role = req.user?.user_metadata?.role;
-  const { status, page, limit } = req.query;
+  let { status, page, limit } = req.query;
+
+  // Canonical status alias: the apps query ?status=ready, the DB stores
+  // 'ready_for_pickup'. Normalize so the boutique app's Ready tab isn't empty.
+  if (status === 'ready') status = 'ready_for_pickup';
 
   const filters = { status, page: parseInt(page) || 1, limit: parseInt(limit) || 20 };
   if (role === 'shopper')  filters.shopperId = req.userId;

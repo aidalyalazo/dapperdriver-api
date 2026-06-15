@@ -183,12 +183,16 @@ async function createOrder({
   notes,
   promoCode,
   fulfillmentType = 'delivery',
+  deliverySpeed = 'standard',
   tip = 0,
   idempotencyKey = null,
 }) {
   const productIds = items.map((i) => i.product_id);
   const cityName = deliveryAddress?.city;
   const isPickup = fulfillmentType === 'pickup';
+  // Express = delivery in ≤2h for an added premium the platform keeps. Pickup
+  // can't be express.
+  const isExpress = !isPickup && deliverySpeed === 'express';
 
   // Double-submit guard: same key from the same shopper returns the original
   // order instead of creating a duplicate (double-tap on checkout).
@@ -217,6 +221,7 @@ async function createOrder({
     driverPayoutSetting,
     pickupCommissionSetting,
     serviceFeeSetting,
+    expressFeeSetting,
   ] = await Promise.all([
     // Server-side prices — never trust client-submitted unit_price.
     // Products table stores images as an array column named 'images', not 'image_url'.
@@ -270,7 +275,12 @@ async function createOrder({
     // Platform service fee (delivery only — admin-configurable)
     isPickup
       ? Promise.resolve({ base: 0 })
-      : getPlatformSettingJson('service_fee', { base: 3.99 }),
+      : getPlatformSettingJson('service_fee', { base: 0 }),
+
+    // Express delivery premium (added on top of base, platform keeps it)
+    isExpress
+      ? getPlatformSettingJson('express_delivery_fee', { premium: 8.0, driver_cut_pct: 0 })
+      : Promise.resolve(null),
   ]);
 
   // ── Process Phase 1 results ───────────────────────────────────────────────
@@ -305,16 +315,23 @@ async function createOrder({
   }
 
   const cityId = cityData?.id || null;
-  const deliveryFee = parseFloat(deliveryFeeSetting?.base || 0);
 
-  // Commission rate
+  // Delivery fee = base (driver keeps 100% via delivery_fee_cut) + express
+  // premium when express (platform keeps the premium minus any express driver
+  // cut). Standard $4.99; express total $4.99 + $8 = $12.99.
+  const baseDeliveryFee = isPickup ? 0 : parseFloat(deliveryFeeSetting?.base || 0);
+  const expressPremium = isExpress ? parseFloat(expressFeeSetting?.premium || 0) : 0;
+  const expressDriverCutPct = isExpress ? parseFloat(expressFeeSetting?.driver_cut_pct || 0) / 100 : 0;
+  const deliveryFee = Math.round((baseDeliveryFee + expressPremium) * 100) / 100;
+
+  // Commission rate (per-boutique override wins, else platform default 20%)
   let commissionRate;
   if (isPickup) {
     commissionRate = parseFloat(pickupCommissionSetting?.default || 20) / 100;
   } else if (boutiqueData?.commission_rate != null) {
     commissionRate = parseFloat(boutiqueData.commission_rate) / 100;
   } else {
-    commissionRate = parseFloat(commissionSetting?.default || 25) / 100;
+    commissionRate = parseFloat(commissionSetting?.default || 20) / 100;
   }
 
   // Replace client unit_price with server prices
@@ -368,10 +385,14 @@ async function createOrder({
   const ddCommissionAmount = Math.round(subtotal * commissionRate * 100) / 100;
   const boutiqueEarnings = subtotal - ddCommissionAmount;
 
+  // Driver earns their cut of the BASE delivery fee (default 100%) plus any
+  // configured cut of the express premium (default 0% → platform keeps it).
   let driverEarnings = 0;
   if (!isPickup) {
-    const deliveryFeeCut = parseFloat(driverPayoutSetting?.delivery_fee_cut || 80) / 100;
-    driverEarnings = Math.round(deliveryFee * deliveryFeeCut * 100) / 100;
+    const deliveryFeeCut = parseFloat(driverPayoutSetting?.delivery_fee_cut || 100) / 100;
+    driverEarnings = Math.round(
+      (baseDeliveryFee * deliveryFeeCut + expressPremium * expressDriverCutPct) * 100
+    ) / 100;
   }
 
   // Service fee + tip were previously shown at checkout but silently
@@ -429,6 +450,7 @@ async function createOrder({
       delivery_notes: notes || null,
       promo_id: promoId,
       fulfillment_type: fulfillmentType,
+      delivery_speed: isExpress ? 'express' : 'standard',
       estimated_delivery_at: deliveryEstimate.estimatedAt.toISOString(),
     })
     .select()
