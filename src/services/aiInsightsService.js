@@ -63,8 +63,22 @@ const BRIEFING_SCHEMA = {
       description: 'Concrete suggestions to run the marketplace more efficiently',
       items: { type: 'string' },
     },
+    predictions: {
+      type: 'array',
+      description: 'Forward-looking, data-grounded predictions and outlook: where a metric is heading (run-rate to month-end), which city/boutique is accelerating or at risk, and the strategic implication. Each must reference the numbers it extrapolates from.',
+      items: {
+        type: 'object',
+        properties: {
+          label: { type: 'string' },
+          detail: { type: 'string' },
+          confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
+        },
+        required: ['label', 'detail', 'confidence'],
+        additionalProperties: false,
+      },
+    },
   },
-  required: ['headline', 'trends', 'tasks', 'efficiency_tips'],
+  required: ['headline', 'trends', 'tasks', 'efficiency_tips', 'predictions'],
   additionalProperties: false,
 };
 
@@ -119,13 +133,13 @@ async function askClaude({ system, prompt, schema, maxTokens = 4000 }) {
 async function gatherBriefingData() {
   const now = Date.now();
   const since7 = new Date(now - 7 * DAY_MS).toISOString();
-  const since14 = new Date(now - 14 * DAY_MS).toISOString();
+  const since60 = new Date(now - 60 * DAY_MS).toISOString();
 
-  const [ordersRes, ticketsRes, payoutFailRes, pendingBoutiquesRes, searchRes, shoppersRes, stalledRes, queuesRes] =
+  const [ordersRes, ticketsRes, payoutFailRes, pendingBoutiquesRes, searchRes, shoppersRes, stalledRes, queuesRes, citiesRes, boutiquesRes, tryOnRes] =
     await Promise.all([
       supabaseAdmin.from('orders')
-        .select('status, total_amount, created_at, fulfillment_type, city_id')
-        .gte('created_at', since14),
+        .select('status, total_amount, created_at, fulfillment_type, city_id, boutique_id, shopper_id')
+        .gte('created_at', since60),
       supabaseAdmin.from('support_tickets')
         .select('id, subject, created_at', { count: 'exact' })
         .eq('status', 'open'),
@@ -147,14 +161,75 @@ async function gatherBriefingData() {
       supabaseAdmin.from('try_on_queues')
         .select('id', { count: 'exact', head: true })
         .eq('status', 'waiting'),
+      supabaseAdmin.from('cities').select('id, name, status'),
+      supabaseAdmin.from('boutiques').select('id, name, city_id'),
+      supabaseAdmin.from('try_on_session_items')
+        .select('status, created_at')
+        .gte('created_at', since60),
     ]);
 
   const orders = ordersRes.data || [];
-  const wk = (o) => new Date(o.created_at).getTime() >= now - 7 * DAY_MS;
   const done = (o) => ['delivered', 'completed'].includes(o.status);
-  const thisWeek = orders.filter(wk);
-  const lastWeek = orders.filter((o) => !wk(o));
+  const ts = (o) => new Date(o.created_at).getTime();
+  const inWin = (o, fromDays, toDays) => ts(o) >= now - fromDays * DAY_MS && ts(o) < now - toDays * DAY_MS;
   const gmv = (rows) => money(rows.filter(done).reduce((s, o) => s + parseFloat(o.total_amount || 0), 0));
+  const pctC = (a, b) => (b > 0 ? Math.round(((a - b) / b) * 100) : null);
+
+  const thisWeek = orders.filter((o) => inWin(o, 7, 0));
+  const lastWeek = orders.filter((o) => inWin(o, 14, 7));
+
+  // ── Month-to-date vs last month, + run-rate projection ────────────────────
+  const d0 = new Date(now);
+  const dayOfMonth = d0.getUTCDate();
+  const daysInMonth = new Date(d0.getUTCFullYear(), d0.getUTCMonth() + 1, 0).getUTCDate();
+  const monthStart = new Date(Date.UTC(d0.getUTCFullYear(), d0.getUTCMonth(), 1)).getTime();
+  const lastMonthStart = new Date(Date.UTC(d0.getUTCFullYear(), d0.getUTCMonth() - 1, 1)).getTime();
+  const mtd = orders.filter((o) => ts(o) >= monthStart);
+  const lastMonthSamePeriod = orders.filter((o) => ts(o) >= lastMonthStart && ts(o) < lastMonthStart + dayOfMonth * DAY_MS);
+  const lastMonthFull = orders.filter((o) => ts(o) >= lastMonthStart && ts(o) < monthStart);
+  const mtdGmv = gmv(mtd);
+  const projectedMonthGmv = dayOfMonth > 0 ? money((mtdGmv / dayOfMonth) * daysInMonth) : 0;
+
+  // ── 4-week weekly GMV trend (oldest → newest) ─────────────────────────────
+  const weeklyGmv = [0, 1, 2, 3].map((w) => gmv(orders.filter((o) => inWin(o, (4 - w) * 7, (3 - w) * 7)))).reverse();
+
+  // ── Per-city: this week GMV + WoW ─────────────────────────────────────────
+  const cityName = Object.fromEntries((citiesRes.data || []).map((c) => [c.id, c.name]));
+  const byCity = {};
+  for (const o of thisWeek.filter(done)) {
+    if (!o.city_id) continue;
+    byCity[o.city_id] = (byCity[o.city_id] || 0) + parseFloat(o.total_amount || 0);
+  }
+  const byCityPrev = {};
+  for (const o of lastWeek.filter(done)) {
+    if (!o.city_id) continue;
+    byCityPrev[o.city_id] = (byCityPrev[o.city_id] || 0) + parseFloat(o.total_amount || 0);
+  }
+  const cityPerformance = Object.keys({ ...byCity, ...byCityPrev }).map((id) => ({
+    city: cityName[id] || 'Unknown',
+    gmv_this_week: money(byCity[id] || 0),
+    wow_pct: pctC(money(byCity[id] || 0), money(byCityPrev[id] || 0)),
+  })).sort((a, b) => b.gmv_this_week - a.gmv_this_week);
+
+  // ── Boutique movers: who's accelerating / decelerating WoW ────────────────
+  const bName = Object.fromEntries((boutiquesRes.data || []).map((b) => [b.id, b.name]));
+  const bThis = {}, bPrev = {};
+  for (const o of thisWeek.filter(done)) if (o.boutique_id) bThis[o.boutique_id] = (bThis[o.boutique_id] || 0) + parseFloat(o.total_amount || 0);
+  for (const o of lastWeek.filter(done)) if (o.boutique_id) bPrev[o.boutique_id] = (bPrev[o.boutique_id] || 0) + parseFloat(o.total_amount || 0);
+  const movers = Object.keys({ ...bThis, ...bPrev }).map((id) => ({
+    boutique: bName[id] || 'Unknown',
+    gmv_this_week: money(bThis[id] || 0),
+    gmv_last_week: money(bPrev[id] || 0),
+    wow_pct: pctC(money(bThis[id] || 0), money(bPrev[id] || 0)),
+  }));
+  const topGrowing = movers.filter((m) => m.wow_pct != null && m.wow_pct > 0).sort((a, b) => b.wow_pct - a.wow_pct).slice(0, 3);
+  const atRisk = movers.filter((m) => m.gmv_last_week > 0 && m.gmv_this_week < m.gmv_last_week * 0.6).sort((a, b) => a.wow_pct - b.wow_pct).slice(0, 3);
+
+  // ── Keep-rate trend (try-on) this week vs last ────────────────────────────
+  const tItems = (tryOnRes.data || []).filter((i) => ['kept', 'returned'].includes(i.status));
+  const keepRate = (rows) => { const dec = rows.filter((i) => ['kept', 'returned'].includes(i.status)); return dec.length ? Math.round(dec.filter((i) => i.status === 'kept').length / dec.length * 100) : null; };
+  const keepThis = keepRate(tItems.filter((i) => inWin(i, 7, 0)));
+  const keepPrev = keepRate(tItems.filter((i) => inWin(i, 14, 7)));
 
   const zeroResult = (searchRes.data || []).filter((s) => !s.result_count);
   const topGaps = {};
@@ -165,6 +240,7 @@ async function gatherBriefingData() {
 
   const shoppers = shoppersRes.data || [];
   const newShoppers7 = shoppers.filter((s) => new Date(s.created_at).getTime() >= now - 7 * DAY_MS).length;
+  const newShoppers14to7 = shoppers.filter((s) => { const t = new Date(s.created_at).getTime(); return t >= now - 14 * DAY_MS && t < now - 7 * DAY_MS; }).length;
 
   return {
     date: new Date().toISOString().slice(0, 10),
@@ -173,11 +249,27 @@ async function gatherBriefingData() {
       orders_prev_week: lastWeek.length,
       gmv: gmv(thisWeek),
       gmv_prev_week: gmv(lastWeek),
+      wow_gmv_pct: pctC(gmv(thisWeek), gmv(lastWeek)),
       cancelled: thisWeek.filter((o) => o.status === 'cancelled').length,
       pickup_share_pct: thisWeek.length
         ? Math.round(thisWeek.filter((o) => o.fulfillment_type === 'pickup').length / thisWeek.length * 100) : 0,
       new_shoppers: newShoppers7,
+      new_shoppers_prev_week: newShoppers14to7,
     },
+    month_to_date: {
+      day_of_month: dayOfMonth,
+      days_in_month: daysInMonth,
+      gmv: mtdGmv,
+      orders: mtd.filter(done).length,
+      last_month_same_period_gmv: gmv(lastMonthSamePeriod),
+      last_month_full_gmv: gmv(lastMonthFull),
+      projected_full_month_gmv: projectedMonthGmv,
+      pace_vs_last_month_pct: pctC(gmv(lastMonthSamePeriod) ? mtdGmv : 0, gmv(lastMonthSamePeriod)),
+    },
+    weekly_gmv_trend_4wk: weeklyGmv,
+    by_city: cityPerformance,
+    boutique_movers: { growing: topGrowing, at_risk: atRisk },
+    keep_rate: { this_week_pct: keepThis, prev_week_pct: keepPrev },
     needs_attention: {
       stalled_orders_no_driver: stalledRes.count || 0,
       open_support_tickets: ticketsRes.count || 0,
@@ -234,9 +326,39 @@ function fallbackBriefing(d) {
   }
   if (!tips.length) tips.push('Check the Intelligence page for sell-through and demand-gap details.');
 
+  // Comparative trend: city movers + keep-rate
+  const kr = d.keep_rate || {};
+  if (kr.this_week_pct != null) {
+    const krDelta = kr.prev_week_pct != null ? kr.this_week_pct - kr.prev_week_pct : null;
+    trends.push({
+      label: `Try-on keep rate ${kr.this_week_pct}%`,
+      detail: krDelta == null ? 'This week.' : `${krDelta >= 0 ? 'Up' : 'Down'} ${Math.abs(krDelta)} pts vs last week (${kr.prev_week_pct}%). Keep rate is the north-star fit metric.`,
+      direction: krDelta == null ? 'flat' : krDelta >= 0 ? 'up' : 'down',
+    });
+  }
+
+  // Predictions / outlook
+  const predictions = [];
+  const m = d.month_to_date || {};
+  if (m.projected_full_month_gmv != null && m.day_of_month >= 2) {
+    const vs = m.last_month_full_gmv ? pct(m.projected_full_month_gmv, m.last_month_full_gmv) : null;
+    predictions.push({
+      label: `On pace for ~$${m.projected_full_month_gmv} this month`,
+      detail: `At the current run-rate (day ${m.day_of_month}/${m.days_in_month}, $${m.gmv} so far)${vs != null ? `, that's ${vs >= 0 ? 'up' : 'down'} ${Math.abs(vs)}% vs last month's $${m.last_month_full_gmv}` : ''}.`,
+      confidence: m.day_of_month >= 10 ? 'high' : 'medium',
+    });
+  }
+  for (const b of (d.boutique_movers?.growing || []).slice(0, 1)) {
+    predictions.push({ label: `${b.boutique} is accelerating`, detail: `Up ${b.wow_pct}% week over week ($${b.gmv_this_week}). Worth featuring or replicating what's working.`, confidence: 'medium' });
+  }
+  for (const b of (d.boutique_movers?.at_risk || []).slice(0, 1)) {
+    predictions.push({ label: `${b.boutique} is dropping off`, detail: `Down to $${b.gmv_this_week} from $${b.gmv_last_week} last week. Check inventory/hours before it churns.`, confidence: 'medium' });
+  }
+  if (!predictions.length) predictions.push({ label: 'Not enough trend data yet', detail: 'A few more weeks of orders will unlock run-rate and momentum forecasting.', confidence: 'low' });
+
   return {
-    headline: `${d.week.orders} orders and $${d.week.gmv} GMV this week — ${tasks.filter((t) => t.urgency === 'high').length} item(s) need attention.`,
-    trends, tasks, efficiency_tips: tips,
+    headline: `$${d.week.gmv} GMV this week (${d.week.wow_gmv_pct != null ? (d.week.wow_gmv_pct >= 0 ? '+' : '') + d.week.wow_gmv_pct + '% WoW' : `${d.week.orders} orders`}) · on pace for ~$${m.projected_full_month_gmv ?? '—'} this month — ${tasks.filter((t) => t.urgency === 'high').length} item(s) need attention.`,
+    trends, tasks, efficiency_tips: tips, predictions,
   };
 }
 
@@ -258,11 +380,16 @@ async function getDailyBriefing({ refresh = false } = {}) {
   const data = await gatherBriefingData();
 
   const ai = await askClaude({
+    maxTokens: 5000,
     system:
-      'You are the operations analyst for DapperDriver, a 3-sided fashion delivery marketplace (shoppers, independent boutiques, drivers) with try-on-at-home. ' +
-      'You write the founder\'s morning briefing. Be specific, cite the numbers given, and prioritize ruthlessly: what changed, what needs doing today, what would make operations more efficient. ' +
-      'Never invent numbers not present in the data. Keep every item to one or two sentences.',
-    prompt: `Today's data snapshot:\n${JSON.stringify(data, null, 1)}\n\nWrite today's briefing.`,
+      'You are the chief-of-staff analyst for the founder of DapperDriver, a 3-sided fashion delivery marketplace (shoppers, independent boutiques, drivers) with try-on-at-home. ' +
+      'You write the founder\'s morning briefing — a sharp, strategic read of the business, not a metrics dump. Do four things with the data: ' +
+      '(1) TRENDS — what changed and is it good or bad: week-over-week and month-over-month GMV/orders, the 4-week trajectory, keep-rate movement, new-shopper momentum, per-city performance. State the direction and WHY (volume vs basket size vs which city/boutique drove it). ' +
+      '(2) PREDICTIONS — be genuinely forward-looking: extrapolate the month-to-date run-rate to a month-end projection and compare it to last month; call out which cities/boutiques are accelerating vs at risk of churning and what that implies; flag any anomaly. Put these in the predictions field with a confidence level. ' +
+      '(3) TASKS — what needs the founder\'s attention today, most urgent first (stalled orders, failed payouts, pending approvals, support, queue demand). ' +
+      '(4) EFFICIENCY/GROWTH — concrete levers to grow GMV or run leaner, drawn from the patterns (e.g. a city outpacing supply, a demand gap nobody stocks, a boutique worth featuring). ' +
+      'Cross-reference signals — connect the dots between cities, boutiques, keep rate, and demand gaps rather than listing them. Cite exact numbers; NEVER invent any. Be concise but insightful; every item earns its place.',
+    prompt: `Today's full data snapshot (use every relevant block; compute comparisons and the run-rate projection from month_to_date):\n${JSON.stringify(data, null, 1)}\n\nWrite today's strategic briefing.`,
     schema: BRIEFING_SCHEMA,
   });
 
@@ -285,7 +412,7 @@ async function gatherBoutiqueData(boutiqueId) {
   const [boutiqueRes, ordersRes, itemsAllRes, productsRes, cityOrdersRes, tryOnItemsRes] =
     await Promise.all([
       supabaseAdmin.from('boutiques')
-        .select('id, name, email, owner_name, status, rating, review_count, commission_rate, city_id, created_at, cities(name)')
+        .select('id, name, email, owner_name, status, rating, review_count, commission_rate, follower_count, primary_category, price_tier, city_id, created_at, cities(name)')
         .eq('id', boutiqueId).single(),
       supabaseAdmin.from('orders')
         .select('id, status, total_amount, fulfillment_type, created_at, shopper_id')
@@ -312,7 +439,7 @@ async function gatherBoutiqueData(boutiqueId) {
   const productName = Object.fromEntries(products.map((p) => [p.id, p.name]));
 
   // Second wave — these need the product id list
-  const [interactionsRes, savedRes, searchRes, cartRes] = await Promise.all([
+  const [interactionsRes, savedRes, searchRes, cartRes, reviewsRes] = await Promise.all([
     productIds.length
       ? supabaseAdmin.from('shopper_interactions')
           .select('product_id, action, duration_seconds, created_at')
@@ -327,6 +454,11 @@ async function gatherBoutiqueData(boutiqueId) {
     productIds.length
       ? supabaseAdmin.from('cart_items').select('product_id, shopper_id, created_at')
           .in('product_id', productIds).gte('created_at', since30)
+      : Promise.resolve({ data: [] }),
+    productIds.length
+      ? supabaseAdmin.from('product_reviews')
+          .select('product_id, rating, comment, selected_size, created_at')
+          .in('product_id', productIds).order('created_at', { ascending: false }).limit(100)
       : Promise.resolve({ data: [] }),
   ]);
 
@@ -560,10 +692,79 @@ async function gatherBoutiqueData(boutiqueId) {
     .map((p) => ({ product: p.name, days_listed: Math.round((now - new Date(p.created_at).getTime()) / DAY_MS), price: parseFloat(p.price || 0) }))
     .sort((a, c) => c.days_listed - a.days_listed).slice(0, 6);
 
+  // ── Review sentiment + fit feedback (marketing/quality signal) ────────────
+  const reviews = reviewsRes.data || [];
+  const ratings = reviews.map((r) => parseFloat(r.rating)).filter((n) => Number.isFinite(n));
+  const avgRating = ratings.length ? Math.round(ratings.reduce((s, n) => s + n, 0) / ratings.length * 10) / 10 : null;
+  const lowReviews = reviews.filter((r) => parseFloat(r.rating) <= 3 && (r.comment || '').trim());
+  const reviewSummary = reviews.length ? {
+    count: reviews.length,
+    avg_rating: avgRating,
+    five_star_pct: Math.round(ratings.filter((n) => n >= 5).length / ratings.length * 100),
+    low_rated_count: ratings.filter((n) => n <= 3).length,
+    recent_negative_comments: lowReviews.slice(0, 5).map((r) => ({ rating: parseFloat(r.rating), comment: (r.comment || '').slice(0, 200), size: r.selected_size || null })),
+    recent_positive_comments: reviews.filter((r) => parseFloat(r.rating) >= 4 && (r.comment || '').trim()).slice(0, 3).map((r) => (r.comment || '').slice(0, 160)),
+  } : null;
+
+  // ── Hour-of-day demand (promo/staffing timing) ────────────────────────────
+  const hourBuckets = {};
+  for (const o of orders90) {
+    const h = new Date(o.created_at).getUTCHours();
+    hourBuckets[h] = (hourBuckets[h] || 0) + 1;
+  }
+  const peakHours = Object.entries(hourBuckets).sort((a, c) => c[1] - a[1]).slice(0, 3)
+    .map(([h, n]) => ({ hour_utc: parseInt(h), orders: n }));
+
+  // ── Customer concentration + repeat cadence (loyalty / whale risk) ────────
+  const revByShopper = {}, datesByShopper = {};
+  for (const o of orders90.filter(done)) {
+    if (!o.shopper_id) continue;
+    revByShopper[o.shopper_id] = (revByShopper[o.shopper_id] || 0) + parseFloat(o.total_amount || 0);
+    (datesByShopper[o.shopper_id] ||= []).push(new Date(o.created_at).getTime());
+  }
+  const shopperRevs = Object.values(revByShopper).sort((a, c) => c - a);
+  const totalRev = shopperRevs.reduce((s, v) => s + v, 0);
+  const intervals = [];
+  for (const dates of Object.values(datesByShopper)) {
+    if (dates.length < 2) continue;
+    dates.sort((a, c) => a - c);
+    for (let i = 1; i < dates.length; i++) intervals.push((dates[i] - dates[i - 1]) / DAY_MS);
+  }
+  const customerInsights = shopperRevs.length ? {
+    top_customer_pct_of_revenue: totalRev > 0 ? Math.round(shopperRevs[0] / totalRev * 100) : 0,
+    top_3_pct_of_revenue: totalRev > 0 ? Math.round(shopperRevs.slice(0, 3).reduce((s, v) => s + v, 0) / totalRev * 100) : 0,
+    avg_days_between_repeat_orders: intervals.length ? Math.round(intervals.reduce((s, n) => s + n, 0) / intervals.length) : null,
+  } : null;
+
+  // ── Overall storefront conversion (views -> orders) ───────────────────────
+  const totalViews = (interactionsRes.data || []).filter((e) => e.action === 'view').length;
+  const conversion = totalViews ? {
+    product_views_30d: totalViews,
+    completed_orders_30d: completed30,
+    view_to_order_pct: Math.round(completed30 / totalViews * 1000) / 10,
+  } : null;
+
+  // ── Cross-sell: products frequently bought in the same order ──────────────
+  const pairCounts = {};
+  const byOrder = {};
+  for (const i of items) (byOrder[i.order_id] ||= []).push(i.product_id);
+  for (const pids of Object.values(byOrder)) {
+    const uniq = [...new Set(pids)];
+    for (let a = 0; a < uniq.length; a++) for (let bI = a + 1; bI < uniq.length; bI++) {
+      const key = [uniq[a], uniq[bI]].sort().join('|');
+      pairCounts[key] = (pairCounts[key] || 0) + 1;
+    }
+  }
+  const crossSell = Object.entries(pairCounts).filter(([, n]) => n >= 2).sort((a, c) => c[1] - a[1]).slice(0, 4)
+    .map(([key, n]) => { const [p1, p2] = key.split('|'); return { pair: [productName[p1] || '?', productName[p2] || '?'], times_bought_together: n }; });
+
   return {
     boutique: {
       name: b.name, owner: b.owner_name, email: b.email, city: b.cities?.name || null,
       rating: b.rating, review_count: b.review_count,
+      followers: b.follower_count || 0,
+      primary_category: b.primary_category || null,
+      price_tier: b.price_tier || null,
       live_products: productsRes.count || 0,
       on_platform_since: (b.created_at || '').slice(0, 10),
     },
@@ -579,6 +780,11 @@ async function gatherBoutiqueData(boutiqueId) {
     },
     last_90_days: { orders: orders90.length, gmv: gmv(orders90) },
     momentum: trends,
+    reviews: reviewSummary,
+    customer_insights: customerInsights,
+    storefront_conversion_30d: conversion,
+    peak_order_hours_utc: peakHours,
+    cross_sell_pairs: crossSell,
     revenue_by_customer_type_30d: custType,
     competitive_position: competitive,
     price_tier_performance_90d: priceTiers,
@@ -748,6 +954,29 @@ function fallbackReport(d) {
     });
   }
 
+  if (d.reviews) {
+    const r = d.reviews;
+    let body = `${r.count} reviews, ${r.avg_rating}★ average (${r.five_star_pct}% five-star).`;
+    if (r.recent_negative_comments && r.recent_negative_comments.length) {
+      body += ` Recent low ratings mention: ${r.recent_negative_comments.map((c) => `"${c.comment}"`).slice(0, 2).join(' ')} — address these themes in listings or quality.`;
+    }
+    sections.push({ heading: 'What reviews are telling you', body });
+  }
+  if (d.customer_insights) {
+    const c = d.customer_insights;
+    const bits = [`Your top customer is ${c.top_customer_pct_of_revenue}% of revenue (top 3 = ${c.top_3_pct_of_revenue}%).`];
+    if (c.avg_days_between_repeat_orders != null) bits.push(`Repeat buyers come back about every ${c.avg_days_between_repeat_orders} days — time a follow-up around then.`);
+    if (c.top_3_pct_of_revenue >= 50) bits.push('You lean heavily on a few customers — broadening the base reduces risk.');
+    sections.push({ heading: 'Customer concentration & cadence', body: bits.join(' ') });
+  }
+  if (d.storefront_conversion_30d) {
+    const cv = d.storefront_conversion_30d;
+    sections.push({ heading: 'Browse-to-buy conversion', body: `${cv.product_views_30d} product views turned into ${cv.completed_orders_30d} orders (${cv.view_to_order_pct}% conversion) in 30 days. ${cv.view_to_order_pct < 2 ? 'Low — strengthen photos, pricing, and size info on your most-viewed items.' : 'Solid — keep your best items front and center.'}` });
+  }
+  if (d.cross_sell_pairs && d.cross_sell_pairs.length) {
+    sections.push({ heading: 'Bought together', body: d.cross_sell_pairs.map((p) => `${p.pair[0]} + ${p.pair[1]} (${p.times_bought_together}×)`).join('; ') + '. Bundle or cross-promote these pairs.' });
+  }
+
   const recommendations = [];
   for (const r of d.stock_out_risk.slice(0, 3)) {
     recommendations.push(`Restock ${r.product} in size ${r.size} — only ${r.units_left} left and that size sells.`);
@@ -810,22 +1039,12 @@ async function getBoutiqueReport(boutiqueId, { refresh = false } = {}) {
   const ai = await askClaude({
     maxTokens: 6000,
     system:
-      'You are a retail analyst writing an EXTENSIVE, data-rich performance report for an independent boutique owner on DapperDriver, a fashion delivery marketplace with try-on-at-home. ' +
-      'The report is emailed to the owner, so write TO them ("you", "your") in a warm but direct, expert tone. Be thorough — this is a full business review, not a summary. Aim for 7–10 substantive sections plus 5–8 recommendations when the data supports it. ' +
-      'Use EVERY relevant data block provided. Always weave in the actual numbers and what they mean. Every section must end in an implication or action. Cover, when data exists, in roughly this priority: ' +
-      '(1) Performance & momentum — GMV/orders/AOV, week-over-week and month-over-month trends, and what is driving the change (volume vs basket size); ' +
-      '(2) Competitive position — their rank/percentile among city peers and the gap to the top; ' +
-      '(3) Customer base — new vs returning revenue split, repeat rate, and what it implies for retention; ' +
-      '(4) Restocking — best-selling products and the size-demand curve, anything at stock-out risk (be specific: product + size + units left); ' +
-      '(5) Conversion & interest — most-viewed items, viewed-but-never-bought (price/photo/size-info fix), zero-view items (visibility), cart abandonment, wishlist conversion; ' +
-      '(6) Fit & quality — overall keep rate, return reasons + problem areas, and specific products that fail try-on, translated into listing/sizing guidance; ' +
-      '(7) Assortment strategy — price-tier performance (which range earns most) and category performance (what moves vs what sits); ' +
-      '(8) Dead stock — aged unsold listings to mark down or cut; ' +
-      '(9) Local demand they could capture — zero-result searches in their city; ' +
-      '(10) Operations — busiest day for staffing/prep, cancellations. ' +
-      'Cite exact numbers; NEVER invent data. Skip any section whose data block is empty/null rather than padding. ' +
-      'Recommendations must be concrete, numbered actions tied to their numbers ("Restock the Wide Leg Trouser in M — 2 left and M is your best size"; "Mark down the Linen Blazer — listed 73 days, zero sales"), never generic retail advice.',
-    prompt: `Boutique data (every non-null block should inform a section):\n${JSON.stringify(data, null, 1)}\n\nWrite the full performance report.`,
+      'You are a senior retail strategist writing a data-rich intelligence report for an independent boutique owner on DapperDriver (a fashion delivery marketplace with try-on-at-home). The report is emailed to the owner — write TO them ("you", "your") in a warm, expert, direct tone.\n\n' +
+      'Your job is NOT to recite metrics. It is to ANALYZE all of their shopper + boutique data together, find the PATTERNS and CORRELATIONS hiding in it, and turn them into insight that grows their sales — across marketing, merchandising, and operations.\n\n' +
+      'Actively hunt for cross-signal patterns, for example: which price tier / category / size / material correlates with the highest keep rate and repeat purchase, and which with returns and dead stock; whether high-view/low-buy items share a trait (price? photos? size gaps?); whether reviews explain a fit or quality problem the try-on data also shows; whether their busiest hours/days and peak demand align with when they could run promotions; whether local search demand matches or mismatches what they stock; whether revenue is dangerously concentrated in a few customers and how to broaden it; what the repeat-purchase cadence implies for timing a re-engagement push; which products to bundle based on what sells together. Synthesize — connect blocks to each other, don\'t report them in isolation.\n\n' +
+      'Structure: an executive summary (2-3 sentences naming the single biggest opportunity and biggest risk), then sections. Lead with the highest-leverage findings. Group naturally: Performance & momentum; Marketing & demand (audience, conversion, demand gaps, reviews, what to promote/bundle); Merchandising (what to restock/buy-deeper, price-tier and category strategy, dead stock to cut); Fit & quality (keep rate, returns, reviews, sizing); Customers (concentration, repeat cadence, new vs returning); Operations (peak times, cancellations). Skip any area with no data rather than padding. Be thorough — 7-10 sections when the data supports it.\n\n' +
+      'End with a prioritized, numbered action list: the specific marketing / merchandising / operations moves that will most improve their sales, each tied to the exact number that motivates it ("Restock the Wide Leg Trouser in M — 2 left, your #1 size"; "Bundle the Linen Set + Straw Tote — bought together 6×"; "Email past buyers ~day 28, your repeat cadence"). Cite exact numbers; NEVER invent data; every claim must trace to a value in the data.',
+    prompt: `This boutique's full shopper + boutique dataset. Analyze it holistically — find the patterns across blocks, not block-by-block:\n${JSON.stringify(data, null, 1)}\n\nWrite the intelligence report.`,
     schema: REPORT_SCHEMA,
   });
 
