@@ -113,15 +113,25 @@ async function askClaude({ system, prompt, schema, maxTokens = 4000 }) {
   const client = anthropicClient();
   if (!client) return null;
   try {
+    // Forced tool-use for structured output — works on the GA messages endpoint
+    // (output_config is beta-only in the installed SDK and gets rejected).
     const resp = await client.messages.create({
       model: MODEL,
       max_tokens: maxTokens,
       system,
       messages: [{ role: 'user', content: prompt }],
-      output_config: { format: { type: 'json_schema', schema } },
+      tools: [{ name: 'emit', description: 'Emit the structured report/briefing.', input_schema: schema }],
+      tool_choice: { type: 'tool', name: 'emit' },
     });
+    const toolUse = resp.content.find((b) => b.type === 'tool_use');
+    if (toolUse && toolUse.input) return toolUse.input;
+    // Fallback parse: some responses may put JSON in a text block
     const text = resp.content.find((b) => b.type === 'text')?.text;
-    return text ? JSON.parse(text) : null;
+    if (text) {
+      const m = text.match(/\{[\s\S]*\}/);
+      if (m) return JSON.parse(m[0]);
+    }
+    return null;
   } catch (e) {
     console.error('[AI INSIGHTS] Claude call failed, using fallback:', e.message);
     return null;
