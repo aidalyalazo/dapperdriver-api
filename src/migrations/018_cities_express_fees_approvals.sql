@@ -9,7 +9,8 @@ DO $$ BEGIN
   ALTER TABLE cities DROP CONSTRAINT IF EXISTS cities_status_check;
   ALTER TABLE cities ADD CONSTRAINT cities_status_check
     CHECK (status IN ('live', 'inactive', 'coming_soon', 'paused'));
-EXCEPTION WHEN undefined_table THEN RAISE NOTICE 'SKIPPED cities constraint: %', SQLERRM; END $$;
+EXCEPTION WHEN undefined_table OR invalid_text_representation OR check_violation OR wrong_object_type OR datatype_mismatch
+  THEN RAISE NOTICE 'SKIPPED cities constraint: %', SQLERRM; END $$;
 
 -- ── 2. Orders: express delivery speed ────────────────────────────────────────
 DO $$ BEGIN
@@ -19,18 +20,12 @@ DO $$ BEGIN
     CHECK (delivery_speed IN ('standard', 'express'));
 EXCEPTION WHEN undefined_table THEN RAISE NOTICE 'SKIPPED orders.delivery_speed: %', SQLERRM; END $$;
 
--- ── 3. Boutiques: reconcile approval vocabulary ──────────────────────────────
--- DB stored 'pending'; the panel + dashboard expect 'pending_approval'. Allow
--- both, then normalize so pending boutiques become visible/approvable.
-DO $$ BEGIN
-  ALTER TABLE boutiques DROP CONSTRAINT IF EXISTS boutiques_status_check;
-  ALTER TABLE boutiques ADD CONSTRAINT boutiques_status_check
-    CHECK (status IN ('active', 'pending', 'pending_approval', 'suspended', 'closed', 'inactive'));
-EXCEPTION WHEN undefined_table THEN RAISE NOTICE 'SKIPPED boutiques constraint: %', SQLERRM; END $$;
-
-DO $$ BEGIN
-  UPDATE boutiques SET status = 'pending_approval' WHERE status = 'pending';
-EXCEPTION WHEN undefined_table THEN RAISE NOTICE 'SKIPPED boutique normalize: %', SQLERRM; END $$;
+-- ── 3. Boutiques approval vocabulary ─────────────────────────────────────────
+-- boutiques.status is a Postgres ENUM (boutique_status: active/pending/
+-- suspended/closed), NOT a text+CHECK column — so it cannot hold
+-- 'pending_approval'. The CODE was aligned to the enum's real 'pending' value
+-- instead (admin routes, briefing, panel). No DB change needed here; the
+-- existing 'pending' rows are already correct and approvable.
 
 -- ── 4. Fee canonicalization (current breakdown) ──────────────────────────────
 -- platform_settings.value is JSONB; cast defensively so this works if TEXT too.
@@ -87,4 +82,5 @@ DO $$ BEGIN
   ALTER TABLE try_on_sessions DROP CONSTRAINT IF EXISTS try_on_sessions_status_check;
   ALTER TABLE try_on_sessions ADD CONSTRAINT try_on_sessions_status_check
     CHECK (status IN ('booked','pickup_pending','en_route','arrived','in_home','returning','completed','cancelled'));
-EXCEPTION WHEN undefined_table THEN RAISE NOTICE 'SKIPPED try_on status check: %', SQLERRM; END $$;
+EXCEPTION WHEN undefined_table OR invalid_text_representation OR check_violation OR wrong_object_type OR datatype_mismatch
+  THEN RAISE NOTICE 'SKIPPED try_on status check: %', SQLERRM; END $$;

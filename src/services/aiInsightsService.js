@@ -134,7 +134,7 @@ async function gatherBriefingData() {
         .eq('status', 'failed'),
       supabaseAdmin.from('boutiques')
         .select('id, name', { count: 'exact' })
-        .eq('status', 'pending_approval'),
+        .eq('status', 'pending'),
       supabaseAdmin.from('search_logs')
         .select('query, result_count')
         .gte('created_at', since7),

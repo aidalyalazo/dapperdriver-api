@@ -39,7 +39,7 @@ router.get(
       supabaseAdmin
         .from('boutiques')
         .select('id', { count: 'exact', head: true })
-        .eq('status', 'pending_approval'),
+        .eq('status', 'pending'),
     ]);
 
     const totalRevenue = (revenueRes.data || []).reduce((s, o) => s + o.total_amount, 0);
@@ -60,7 +60,7 @@ router.patch(
   '/boutiques/:id/status',
   [
     param('id').isUUID(),
-    body('status').isIn(['active', 'pending', 'pending_approval', 'suspended', 'closed', 'inactive']),
+    body('status').isIn(['active', 'pending', 'suspended', 'closed']),
     validate,
   ],
   asyncHandler(async (req, res) => {
