@@ -201,6 +201,23 @@ async function createOrderPaymentIntent({ order, shopperId }) {
  * or from the order delivered status transition.
  */
 async function transferToBoutique(order) {
+  // Claim the order BEFORE transferring (CAS on boutique_paid). If no row is
+  // updated, this order's boutique share was already paid — by a prior call
+  // here OR by the self-service withdraw path (cashOut), which also filters on
+  // boutique_paid=false. This is what prevents paying the boutique twice.
+  const { data: claimed, error: claimErr } = await supabaseAdmin
+    .from('orders')
+    .update({ boutique_paid: true })
+    .eq('id', order.id)
+    .eq('boutique_paid', false)
+    .select('id');
+
+  if (claimErr) throw new Error(claimErr.message);
+  if (!claimed || claimed.length === 0) {
+    console.warn(`[Stripe] Boutique transfer skipped — order ${order.id} already paid.`);
+    return null;
+  }
+
   // Fetch boutique's connected account
   const { data: boutique } = await supabaseAdmin
     .from('boutiques')
@@ -209,21 +226,34 @@ async function transferToBoutique(order) {
     .single();
 
   if (!boutique?.stripe_account_id) {
+    // Release the claim so a later run (once onboarding is done) can pay it.
+    await supabaseAdmin.from('orders').update({ boutique_paid: false }).eq('id', order.id);
     throw new Error(`Boutique ${order.boutique_id} has no Stripe account.`);
   }
 
   const boutiqueAmountCents = Math.round((order.boutique_earnings || 0) * 100);
 
-  const transfer = await stripe.transfers.create({
-    amount:      boutiqueAmountCents,
-    currency:    'usd',
-    destination: boutique.stripe_account_id,
-    metadata: {
-      order_id:    order.id,
-      boutique_id: order.boutique_id,
-    },
-    transfer_group: `order_${order.id}`,
-  });
+  let transfer;
+  try {
+    transfer = await stripe.transfers.create(
+      {
+        amount:      boutiqueAmountCents,
+        currency:    'usd',
+        destination: boutique.stripe_account_id,
+        metadata: {
+          order_id:    order.id,
+          boutique_id: order.boutique_id,
+        },
+        transfer_group: `order_${order.id}`,
+      },
+      // Idempotent: a retried call for the same order cannot double-transfer.
+      { idempotencyKey: `boutique_transfer_${order.id}` }
+    );
+  } catch (transferErr) {
+    // Transfer failed — release the claim so it can be retried.
+    await supabaseAdmin.from('orders').update({ boutique_paid: false }).eq('id', order.id);
+    throw transferErr;
+  }
 
   // Record the payout in DB
   await supabaseAdmin.from('payouts').insert({

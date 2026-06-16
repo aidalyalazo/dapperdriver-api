@@ -35,7 +35,11 @@ router.get(
 
     if (boutique_id) query = query.eq('boutique_id', boutique_id);
     if (category) query = query.ilike('category', `%${category}%`);
-    if (search) query = query.or(`name.ilike.%${search}%,category.ilike.%${search}%,description.ilike.%${search}%`);
+    if (search) {
+      // Strip PostgREST metacharacters to prevent .or() filter injection.
+      const safe = String(search).replace(/[^a-zA-Z0-9 &'\-]/g, '').trim();
+      if (safe) query = query.or(`name.ilike.%${safe}%,category.ilike.%${safe}%,description.ilike.%${safe}%`);
+    }
     if (source) query = query.eq('source', source);
 
     // Filter by city if provided (via boutique relationship)

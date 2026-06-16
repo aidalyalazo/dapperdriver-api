@@ -44,12 +44,10 @@ async function authenticate(req, res, next) {
  */
 function requireRole(...roles) {
   return (req, res, next) => {
-    const appRole = req.user?.app_metadata?.role;
-    // Admin (app_metadata only) passes every role gate — the admin's personal
-    // account keeps working in the shopper app.
-    if (appRole === 'admin') return next();
-    let userRole = appRole || req.user?.user_metadata?.role;
-    if (userRole === 'admin') userRole = null; // user_metadata admin is forgeable
+    const userRole = resolveRole(req);
+    // Admin passes every role gate — the admin's personal account keeps
+    // working in the shopper app.
+    if (userRole === 'admin') return next();
     if (!userRole || !roles.includes(userRole)) {
       return res.status(403).json({
         error: `Access denied. Required role(s): ${roles.join(', ')}.`,
@@ -59,4 +57,25 @@ function requireRole(...roles) {
   };
 }
 
-module.exports = { authenticate, requireRole };
+/**
+ * Canonical, trust-safe role for authorization decisions.
+ *
+ * app_metadata.role is authoritative (server-writable only). user_metadata is
+ * self-editable via the Supabase auth API, so a user_metadata role of 'admin'
+ * is IGNORED — otherwise any shopper could escalate to admin. Non-admin roles
+ * (shopper/boutique/driver) may come from user_metadata for legacy accounts.
+ *
+ * Always use this — never read req.user.user_metadata.role directly — when
+ * deciding what a request is allowed to do.
+ *
+ * @returns {'shopper'|'boutique'|'driver'|'admin'|null}
+ */
+function resolveRole(req) {
+  const appRole = req.user?.app_metadata?.role;
+  if (appRole) return appRole; // app_metadata authoritative (incl. admin)
+  const umRole = req.user?.user_metadata?.role;
+  if (umRole === 'admin') return null; // forgeable admin — never trusted
+  return umRole || null;
+}
+
+module.exports = { authenticate, requireRole, resolveRole };

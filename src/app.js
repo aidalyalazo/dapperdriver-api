@@ -45,6 +45,12 @@ const { errorHandler } = require('./middleware/errorHandler');
 
 const app = express();
 
+// Railway terminates TLS at a proxy, so the real client IP is in
+// X-Forwarded-For. Trust one proxy hop so req.ip is the actual client —
+// otherwise express-rate-limit keys every request on Railway's proxy IP and
+// the per-IP auth/order limits become a single shared (global) bucket.
+app.set('trust proxy', 1);
+
 // ── Security & Logging ─────────────────────────────────────────────────────
 app.use(helmet());
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));

@@ -12,22 +12,26 @@ const { supabaseAdmin } = require('../config/supabase');
 async function validatePromo({ code, boutiqueId, subtotal, shopperId }) {
   const now = new Date().toISOString();
 
+  // Column names must match the live schema (starts_at / expires_at /
+  // min_order_value). The old valid_from/valid_until/min_order_amount names
+  // don't exist → the query errored → every code was rejected at order time,
+  // so shoppers saw a discount in the UI but were charged full price.
   const { data: promo, error } = await supabaseAdmin
     .from('promos')
     .select('*')
     .eq('code', code.toUpperCase())
     .eq('is_active', true)
-    .lte('valid_from', now)
-    .gte('valid_until', now)
+    .lte('starts_at', now)
+    .gte('expires_at', now)
     .single();
 
   if (error || !promo) {
     throw Object.assign(new Error('Invalid or expired promo code'), { status: 422 });
   }
 
-  if (promo.min_order_amount && subtotal < promo.min_order_amount) {
+  if (promo.min_order_value && subtotal < promo.min_order_value) {
     throw Object.assign(
-      new Error(`Minimum order $${promo.min_order_amount} required`),
+      new Error(`Minimum order $${promo.min_order_value} required`),
       { status: 422 }
     );
   }
@@ -70,8 +74,14 @@ async function validatePromo({ code, boutiqueId, subtotal, shopperId }) {
 function calculateDiscount(promo, subtotal, deliveryFee) {
   switch (promo.type) {
     case 'percent':
-      return Math.round((subtotal * (promo.value / 100)) * 100) / 100;
+    case 'percentage': {
+      let d = Math.round((subtotal * (promo.value / 100)) * 100) / 100;
+      // Honor the optional max_discount cap on percentage promos.
+      if (promo.max_discount != null) d = Math.min(d, parseFloat(promo.max_discount));
+      return d;
+    }
     case 'flat':
+    case 'fixed':
       return Math.min(promo.value, subtotal);
     case 'free_delivery':
       return deliveryFee;

@@ -1,5 +1,6 @@
 const { body, param, query } = require('express-validator');
 const { asyncHandler } = require('../middleware/errorHandler');
+const { resolveRole } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const orderService = require('../services/orderService');
 const stripeService = require('../services/stripeService');
@@ -178,7 +179,12 @@ const createOrder = [
  * List orders — filters applied based on caller's role.
  */
 const listOrders = asyncHandler(async (req, res) => {
-  const role = req.user?.user_metadata?.role;
+  const role = resolveRole(req);
+  // Fail closed: only known roles get a scoped list. A forged/unknown role
+  // must never fall through to an unfiltered (all-orders) query.
+  if (!['shopper', 'boutique', 'driver', 'admin'].includes(role)) {
+    return res.status(403).json({ error: 'Access denied.' });
+  }
   let { status, page, limit } = req.query;
 
   // Canonical status alias: the apps query ?status=ready, the DB stores
@@ -212,7 +218,7 @@ const getOrder = asyncHandler(async (req, res) => {
   const order = await orderService.getOrder(req.params.id);
   if (!order) throw Object.assign(new Error('Order not found'), { status: 404 });
 
-  const role = req.user?.user_metadata?.role;
+  const role = resolveRole(req);
   if (role !== 'admin') {
     const { supabaseAdmin } = require('../config/supabase');
     const userId = req.userId;
@@ -251,7 +257,7 @@ const updateStatus = [
   asyncHandler(async (req, res) => {
     const { status } = req.body;
     const { id } = req.params;
-    const role = req.user?.user_metadata?.role;
+    const role = resolveRole(req);
 
     const { supabaseAdmin } = require('../config/supabase');
 
@@ -355,7 +361,7 @@ const cancelOrder = [
   validate,
   asyncHandler(async (req, res) => {
     const { supabaseAdmin } = require('../config/supabase');
-    const role = req.user?.user_metadata?.role;
+    const role = resolveRole(req);
     const orderId = req.params.id;
 
     const { data: orderRow } = await supabaseAdmin

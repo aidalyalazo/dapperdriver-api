@@ -145,6 +145,7 @@ router.get(
  */
 router.get(
   '/payouts',
+  requireRole('boutique', 'driver', 'admin'),
   asyncHandler(async (req, res) => {
     const { data, error } = await supabaseAdmin
       .from('payouts')

@@ -46,13 +46,19 @@ router.get(
     // category_tags.cs.{X} = "array contains X" (exact match, case-sensitive).
     // Works when tags are stored in consistent casing (e.g. "Dresses", "Tops").
     if (search) {
-      const capitalized = search.charAt(0).toUpperCase() + search.slice(1).toLowerCase();
-      q = q.or(
-        `name.ilike.%${search}%,description.ilike.%${search}%,` +
-        `primary_category.ilike.%${search}%,` +
-        `category_tags.cs.{${capitalized}},` +
-        `style_tags.cs.{${capitalized}}`
-      );
+      // Strip PostgREST metacharacters (commas, parens, dots) — without this a
+      // crafted search value injects extra .or() filter clauses (e.g. bypassing
+      // the status='active' constraint to read hidden rows).
+      const safe = String(search).replace(/[^a-zA-Z0-9 &'\-]/g, '').trim();
+      if (safe) {
+        const capitalized = safe.charAt(0).toUpperCase() + safe.slice(1).toLowerCase();
+        q = q.or(
+          `name.ilike.%${safe}%,description.ilike.%${safe}%,` +
+          `primary_category.ilike.%${safe}%,` +
+          `category_tags.cs.{${capitalized}},` +
+          `style_tags.cs.{${capitalized}}`
+        );
+      }
     }
     if (city) {
       // Filter strictly by city_id — all boutiques have city_id set.
