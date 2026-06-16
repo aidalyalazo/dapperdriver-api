@@ -534,4 +534,36 @@ router.put(
   })
 );
 
+/**
+ * GET /api/v1/boutiques/me/balance
+ * Withdrawable earnings (unpaid order earnings after commission).
+ */
+router.get(
+  '/me/balance',
+  requireRole('boutique'),
+  asyncHandler(async (req, res) => {
+    const { getAvailableBalance } = require('../services/payoutService');
+    res.json(await getAvailableBalance({ recipientId: req.userId, recipientType: 'boutique' }));
+  })
+);
+
+/**
+ * POST /api/v1/boutiques/me/withdraw
+ * Self-service cash out — transfers all available earnings to the boutique's
+ * connected Stripe account on demand.
+ */
+router.post(
+  '/me/withdraw',
+  requireRole('boutique'),
+  asyncHandler(async (req, res) => {
+    try {
+      const { cashOut } = require('../services/payoutService');
+      const result = await cashOut({ recipientId: req.userId, recipientType: 'boutique' });
+      res.json(result);
+    } catch (e) {
+      throw Object.assign(new Error(e.message), { status: e.status || 500 });
+    }
+  })
+);
+
 module.exports = router;

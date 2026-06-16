@@ -16,12 +16,13 @@ async function cashOut({ recipientId, recipientType }) {
   const paidCol = recipientType === 'boutique' ? 'boutique_paid' : 'driver_paid';
   const orderFilter = recipientType === 'boutique' ? 'boutique_id' : 'driver_id';
 
-  // Get Stripe account and table row ID (recipientId is the auth user_id)
-  const { data: recipient } = await supabaseAdmin
+  // Get Stripe account and table row ID (recipientId is the auth user_id).
+  // Supabase builders are thenable but have no .catch — wrap in Promise.resolve.
+  const { data: recipient } = await Promise.resolve(supabaseAdmin
     .from(table)
     .select('id, stripe_account_id')
     .eq('user_id', recipientId)
-    .single()
+    .single())
     .catch(() => ({ data: null }));
 
   if (!recipient?.stripe_account_id) {
@@ -32,12 +33,12 @@ async function cashOut({ recipientId, recipientType }) {
   const tableRowId = recipient.id;
 
   // Get unpaid orders
-  const { data: orders } = await supabaseAdmin
+  const { data: orders } = await Promise.resolve(supabaseAdmin
     .from('orders')
     .select(`id, ${earningsCol}, tip`)
     .eq(orderFilter, tableRowId)
     .in('status', ['delivered', 'completed'])
-    .eq(paidCol, false)
+    .eq(paidCol, false))
     .catch(() => ({ data: [] }));
 
   if (!orders || orders.length === 0) {
@@ -61,7 +62,7 @@ async function cashOut({ recipientId, recipientType }) {
   const amountCents = Math.round(total * 100);
 
   // Create payout record
-  const { data: payout } = await supabaseAdmin
+  const { data: payout, error: payoutErr } = await Promise.resolve(supabaseAdmin
     .from('payouts')
     .insert({
       recipient_id: recipientId,
@@ -70,12 +71,11 @@ async function cashOut({ recipientId, recipientType }) {
       status: 'processing',
     })
     .select()
-    .single()
-    .catch((e) => {
-      throw Object.assign(new Error(`Failed to create payout record: ${e.message}`), {
-        status: 500,
-      });
-    });
+    .single())
+    .catch((e) => ({ data: null, error: e }));
+  if (payoutErr || !payout) {
+    throw Object.assign(new Error(`Failed to create payout record: ${payoutErr?.message || 'unknown'}`), { status: 500 });
+  }
 
   try {
     // Create Stripe transfer
@@ -95,24 +95,24 @@ async function cashOut({ recipientId, recipientType }) {
     paidUpdate[paidCol] = true;
     paidUpdate.payout_id = payout.id;
 
-    await supabaseAdmin
+    await Promise.resolve(supabaseAdmin
       .from('orders')
       .update(paidUpdate)
       .in(
         'id',
         orders.map((o) => o.id)
-      )
+      ))
       .catch(() => {});
 
     // Update payout with transfer id
-    await supabaseAdmin
+    await Promise.resolve(supabaseAdmin
       .from('payouts')
       .update({ stripe_transfer_id: transfer.id, status: 'processing' })
-      .eq('id', payout.id)
+      .eq('id', payout.id))
       .catch(() => {});
 
     // Write notification
-    await supabaseAdmin
+    await Promise.resolve(supabaseAdmin
       .from('notifications')
       .insert({
         user_id: recipientId,
@@ -122,20 +122,63 @@ async function cashOut({ recipientId, recipientType }) {
         data: { payout_id: payout.id, amount: total },
         is_read: false,
         sent_push: false,
-      })
+      }))
       .catch(() => {});
 
     return { payout, amount: total, transfer_id: transfer.id };
   } catch (err) {
     // Clean up payout record on failure
-    await supabaseAdmin
+    await Promise.resolve(supabaseAdmin
       .from('payouts')
       .update({ status: 'failed' })
-      .eq('id', payout.id)
+      .eq('id', payout.id))
       .catch(() => {});
 
     throw Object.assign(new Error(`Stripe transfer failed: ${err.message}`), { status: 500 });
   }
 }
 
-module.exports = { cashOut };
+/**
+ * Available (withdrawable) balance for a boutique or driver — the sum of
+ * unpaid earnings on delivered/completed orders. Drives the self-service
+ * "Withdraw" UI; cashOut() transfers exactly this amount.
+ *
+ * @param {{ recipientId: string, recipientType: 'boutique'|'driver' }} params
+ * @returns {Promise<{ available: number, order_count: number, has_stripe_account: boolean }>}
+ */
+async function getAvailableBalance({ recipientId, recipientType }) {
+  const table = recipientType === 'boutique' ? 'boutiques' : 'drivers';
+  const earningsCol = recipientType === 'boutique' ? 'boutique_earnings' : 'driver_earnings';
+  const paidCol = recipientType === 'boutique' ? 'boutique_paid' : 'driver_paid';
+  const orderFilter = recipientType === 'boutique' ? 'boutique_id' : 'driver_id';
+
+  const { data: recipient } = await Promise.resolve(supabaseAdmin
+    .from(table)
+    .select('id, stripe_account_id')
+    .eq('user_id', recipientId)
+    .single())
+    .catch(() => ({ data: null }));
+
+  if (!recipient) return { available: 0, order_count: 0, has_stripe_account: false };
+
+  const { data: orders } = await Promise.resolve(supabaseAdmin
+    .from('orders')
+    .select(`${earningsCol}, tip`)
+    .eq(orderFilter, recipient.id)
+    .in('status', ['delivered', 'completed'])
+    .eq(paidCol, false))
+    .catch(() => ({ data: [] }));
+
+  let total = 0;
+  for (const o of orders || []) {
+    total += parseFloat(o[earningsCol] || 0);
+    if (recipientType === 'driver') total += parseFloat(o.tip || 0);
+  }
+  return {
+    available: Math.round(total * 100) / 100,
+    order_count: (orders || []).length,
+    has_stripe_account: !!recipient.stripe_account_id,
+  };
+}
+
+module.exports = { cashOut, getAvailableBalance };

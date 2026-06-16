@@ -465,4 +465,36 @@ router.post(
   })
 );
 
+/**
+ * GET /api/v1/drivers/me/balance
+ * Withdrawable earnings (unpaid delivery earnings + tips).
+ */
+router.get(
+  '/me/balance',
+  requireRole('driver'),
+  asyncHandler(async (req, res) => {
+    const { getAvailableBalance } = require('../services/payoutService');
+    res.json(await getAvailableBalance({ recipientId: req.userId, recipientType: 'driver' }));
+  })
+);
+
+/**
+ * POST /api/v1/drivers/me/withdraw
+ * Self-service cash out — transfers all available earnings to the driver's
+ * connected Stripe account on demand (no waiting for a scheduled payout).
+ */
+router.post(
+  '/me/withdraw',
+  requireRole('driver'),
+  asyncHandler(async (req, res) => {
+    try {
+      const { cashOut } = require('../services/payoutService');
+      const result = await cashOut({ recipientId: req.userId, recipientType: 'driver' });
+      res.json(result);
+    } catch (e) {
+      throw Object.assign(new Error(e.message), { status: e.status || 500 });
+    }
+  })
+);
+
 module.exports = router;
