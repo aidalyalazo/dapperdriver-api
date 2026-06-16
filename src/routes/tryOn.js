@@ -686,13 +686,13 @@ router.post(
     // Record photo if provided
     if (photo_url) {
       const checkpoint = status === 'returning' ? 'driver_return' : 'shopper_final';
-      await supabaseAdmin.from('try_on_photos').insert({
+      await Promise.resolve(supabaseAdmin.from('try_on_photos').insert({
         session_id:          req.params.id,
         uploaded_by_user_id: req.userId,
         uploaded_by_role:    'driver',
         checkpoint,
         image_url:           photo_url,
-      }).catch(() => {});
+      })).catch(() => {});
     }
 
     res.json(updated);

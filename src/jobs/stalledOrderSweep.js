@@ -69,13 +69,13 @@ async function sweepStalledOrders() {
           .single();
         if (!cancelled) continue;
 
-        await supabaseAdmin.from('order_timeline').insert({
+        await Promise.resolve(supabaseAdmin.from('order_timeline').insert({
           order_id: order.id,
           status: 'cancelled',
           notes: `Auto-cancelled: no driver found after ${Math.round(ageMinutes)} min (${restartCount} search restarts). Refund queued.`,
-        }).catch(() => {});
+        })).catch(() => {});
 
-        await supabaseAdmin.from('notifications').insert({
+        await Promise.resolve(supabaseAdmin.from('notifications').insert({
           user_id: order.shopper_id,
           type: 'order_cancelled',
           title: 'Order cancelled — full refund on the way',
@@ -83,7 +83,7 @@ async function sweepStalledOrders() {
           data: { order_id: order.id },
           is_read: false,
           sent_push: false,
-        }).catch(() => {});
+        })).catch(() => {});
 
         await notifyAdmins({
           type: 'order_stalled_cancelled',
@@ -97,11 +97,11 @@ async function sweepStalledOrders() {
       // ── Stalled: restart the driver search ──────────────────────────────
       if (chainInFlight) continue;
 
-      await supabaseAdmin.from('order_timeline').insert({
+      await Promise.resolve(supabaseAdmin.from('order_timeline').insert({
         order_id: order.id,
         status: 'driver_search_restarted',
         notes: `Driver search restarted by sweep (attempt ${restartCount + 1}/${RESTART_LIMIT}).`,
-      }).catch(() => {});
+      })).catch(() => {});
 
       if (restartCount === 0) {
         await notifyAdmins({

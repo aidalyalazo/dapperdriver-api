@@ -69,7 +69,7 @@ async function processTimedOutRefunds() {
         }
 
         // Notification table row
-        await supabaseAdmin.from('notifications').insert({
+        await Promise.resolve(supabaseAdmin.from('notifications').insert({
           user_id:   order.shopper_id,
           type:      'order_cancelled',
           title:     '❌ Order Cancelled',
@@ -77,7 +77,7 @@ async function processTimedOutRefunds() {
           data:      { order_id: order.id },
           is_read:   false,
           sent_push: !!token,
-        }).catch(() => {});
+        })).catch(() => {});
 
         console.log(`[TIMEOUT PROCESSOR] ✅ Refunded order ${order.id}`);
       } catch (err) {

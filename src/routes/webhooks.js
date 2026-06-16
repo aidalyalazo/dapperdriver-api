@@ -214,10 +214,10 @@ router.post(
           const pi = event.data.object;
           const orderId = pi.metadata?.order_id;
           if (!orderId) break;
-          await supabaseAdmin
+          await Promise.resolve(supabaseAdmin
             .from('orders')
             .update({ payment_status: 'cancelled' })
-            .eq('id', orderId)
+            .eq('id', orderId))
             .catch(() => {});
           // Decision A (additive): release holds so stock returns to available pool
           try {
@@ -235,18 +235,18 @@ router.post(
           const payoutId = payout.metadata?.payout_id;
           if (payoutId) {
             // Idempotent: only the first delivery advances + notifies
-            const { data: advanced } = await supabaseAdmin
+            const { data: advanced } = await Promise.resolve(supabaseAdmin
               .from('payouts')
               .update({ status: 'paid', stripe_transfer_id: payout.id })
               .eq('id', payoutId)
               .neq('status', 'paid')
               .select('recipient_id, recipient_type, amount')
-              .single()
+              .single())
               .catch(() => ({ data: null }));
 
             const payoutRecord = advanced;
             if (payoutRecord) {
-              await supabaseAdmin
+              await Promise.resolve(supabaseAdmin
                 .from('notifications')
                 .insert({
                   user_id: payoutRecord.recipient_id,
@@ -256,7 +256,7 @@ router.post(
                   data: { payout_id: payoutId },
                   is_read: false,
                   sent_push: false,
-                })
+                }))
                 .catch(() => {});
             }
           }
@@ -268,10 +268,10 @@ router.post(
           const payout = event.data.object;
           const payoutId = payout.metadata?.payout_id;
           if (payoutId) {
-            await supabaseAdmin
+            await Promise.resolve(supabaseAdmin
               .from('payouts')
               .update({ status: 'failed' })
-              .eq('id', payoutId)
+              .eq('id', payoutId))
               .catch(() => {});
           }
           console.error('[WEBHOOK] ⚠️ Payout FAILED:', payout.id, 'Payout record:', payoutId);
@@ -356,7 +356,7 @@ async function handleTryOnWebhook(event, meta) {
 
       // Dispute filed — flag the shopper silently for admin review
       case 'charge.dispute.created': {
-        await supabaseAdmin
+        await Promise.resolve(supabaseAdmin
           .from('try_on_shopper_flags')
           .insert({
             shopper_id:  meta.shopper_id,
@@ -364,7 +364,7 @@ async function handleTryOnWebhook(event, meta) {
             flag_type:   'dispute',
             severity:    'critical',
             notes:       `Stripe dispute on ${meta.type} PI — session ${sessionId}`,
-          })
+          }))
           .catch(() => {});
         console.warn(`[WEBHOOK/TryOn] Dispute filed for session ${sessionId}`);
         break;

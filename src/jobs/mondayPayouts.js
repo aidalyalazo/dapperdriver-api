@@ -108,14 +108,14 @@ async function runMondayPayouts() {
         results.failed++;
 
         // Record the failure for manual review
-        await supabaseAdmin.from('payout_failures').insert({
+        await Promise.resolve(supabaseAdmin.from('payout_failures').insert({
           recipient_id:   driverId,
           recipient_type: 'driver',
           amount:         total,
           order_ids:      orderIds,
           error_message:  err.message,
           attempted_at:   new Date().toISOString(),
-        }).catch(() => {}); // don't let logging failure crash the loop
+        })).catch(() => {}); // don't let logging failure crash the loop
 
         // payout_failures rows used to sit unseen — tell a human
         const { notifyAdmins } = require('../utils/adminAlerts');

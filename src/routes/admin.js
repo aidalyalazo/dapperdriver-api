@@ -88,7 +88,9 @@ router.patch(
     // Notify the boutique owner (notifications keyed by auth user id)
     if (data?.user_id && (status === 'active' || status === 'suspended')) {
       const approved = status === 'active';
-      await supabaseAdmin.from('notifications').insert({
+      // Supabase query builders are thenable but have no .catch(); wrap in
+      // Promise.resolve so a failed notification never aborts the approval.
+      await Promise.resolve(supabaseAdmin.from('notifications').insert({
         user_id: data.user_id,
         type: approved ? 'boutique_approved' : 'boutique_suspended',
         title: approved ? '🎉 You\'re approved!' : 'Account suspended',
@@ -98,7 +100,7 @@ router.patch(
         data: { boutique_id: data.id },
         is_read: false,
         sent_push: false,
-      }).catch(() => {});
+      })).catch(() => {});
     }
 
     res.json(data);
@@ -164,7 +166,7 @@ router.patch(
     if (error) throw new Error(error.message);
 
     if (data?.user_id) {
-      await supabaseAdmin.from('notifications').insert({
+      await Promise.resolve(supabaseAdmin.from('notifications').insert({
         user_id: data.user_id,
         type: 'driver_approved',
         title: '🚗 You\'re approved to drive!',
@@ -172,7 +174,7 @@ router.patch(
         data: { driver_id: data.id },
         is_read: false,
         sent_push: false,
-      }).catch(() => {});
+      })).catch(() => {});
     }
     res.json(data);
   })
@@ -228,7 +230,7 @@ router.patch(
 
     if (notifyUserId && (status === 'valid' || status === 'rejected')) {
       const approved = status === 'valid';
-      await supabaseAdmin
+      await Promise.resolve(supabaseAdmin
         .from('notifications')
         .insert({
           user_id: notifyUserId,
@@ -240,7 +242,7 @@ router.patch(
           data: { document_id: data.id },
           is_read: false,
           sent_push: false,
-        })
+        }))
         .catch(() => {});
     }
 
@@ -1289,11 +1291,11 @@ router.post(
       .single();
     if (error) throw new Error(error.message);
 
-    await supabaseAdmin.from('order_timeline').insert({
+    await Promise.resolve(supabaseAdmin.from('order_timeline').insert({
       order_id: orderId,
       status:   'driver_assigned',
       notes:    `Manually assigned to ${driver.full_name || driverId} by admin${force ? ' (capacity override)' : ''}`,
-    }).catch(() => {});
+    })).catch(() => {});
 
     res.json(updated);
   })
@@ -1341,13 +1343,13 @@ router.post(
       .select('id');
     if (ordErr) throw new Error(ordErr.message);
 
-    await supabaseAdmin.from('order_timeline').insert(
+    await Promise.resolve(supabaseAdmin.from('order_timeline').insert(
       (orders || []).map((o) => ({
         order_id: o.id,
         status:   'driver_assigned',
         notes:    `Batched to ${driver.full_name || driverId} (batch ${batch.id.slice(0, 8)}) by admin`,
       }))
-    ).catch(() => {});
+    )).catch(() => {});
 
     res.status(201).json({ batch, assigned_orders: (orders || []).map((o) => o.id) });
   })

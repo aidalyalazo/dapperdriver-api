@@ -67,11 +67,11 @@ async function findAndAssignDriver(orderId, retryCount = 0) {
   const MAX_RETRIES = 5; // 5 retries × 2min = 10 minutes total
 
   try {
-    const { data: order } = await supabaseAdmin
+    const { data: order } = await Promise.resolve(supabaseAdmin
       .from('orders')
       .select('id, status, city_id, boutiques(lat, lng, fcm_token, name)')
       .eq('id', orderId)
-      .single()
+      .single())
       .catch(() => ({ data: null }));
 
     if (!order || order.status !== 'ready_for_pickup') {
@@ -82,11 +82,11 @@ async function findAndAssignDriver(orderId, retryCount = 0) {
     const boutiqueLng = order.boutiques?.lng;
 
     // ── Check if only one driver exists in the city ──────────────────────
-    const { data: allCityDrivers } = await supabaseAdmin
+    const { data: allCityDrivers } = await Promise.resolve(supabaseAdmin
       .from('drivers')
       .select('id, current_lat, current_lng, push_token, status, max_active_orders')
       .eq('city_id', order.city_id)
-      .eq('is_approved', true)
+      .eq('is_approved', true))
       .catch(() => ({ data: [] }));
 
     // Single-driver shortcut: assign them regardless of online status
@@ -146,13 +146,13 @@ async function findAndAssignDriver(orderId, retryCount = 0) {
       );
       // Column is `notes` — the old insert used `note`/`created_by` and
       // silently failed, leaving no trace of dead-ended orders.
-      await supabaseAdmin
+      await Promise.resolve(supabaseAdmin
         .from('order_timeline')
         .insert({
           order_id: orderId,
           status: 'no_driver_found',
           notes: 'No available drivers after 10 minutes of broadcasting',
-        })
+        }))
         .catch(() => {});
 
       const { notifyAdmins } = require('../utils/adminAlerts');
@@ -210,14 +210,14 @@ async function assignDriverToOrder(order, driver, boutiqueLat, boutiqueLng) {
   }
 
   const now = new Date().toISOString();
-  await supabaseAdmin
+  await Promise.resolve(supabaseAdmin
     .from('orders')
     .update({
       driver_id: driver.id,
       status: 'driver_assigned',
       driver_assigned_at: now,
     })
-    .eq('id', orderId)
+    .eq('id', orderId))
     .catch(() => {});
 
   // NOTE: we intentionally no longer flip the driver to 'busy'. Capacity is
@@ -225,14 +225,14 @@ async function assignDriverToOrder(order, driver, boutiqueLat, boutiqueLng) {
   // so 'online'/'offline' stays the driver's own availability toggle and one
   // driver can carry up to max_active_orders deliveries at once.
 
-  await supabaseAdmin
+  await Promise.resolve(supabaseAdmin
     .from('order_timeline')
     .insert({
       order_id: orderId,
       status: 'driver_assigned',
       note: `Driver assigned (${dist.toFixed(1)} miles away)`,
       created_by: 'system',
-    })
+    }))
     .catch(() => {});
 
   // Notify driver
@@ -256,11 +256,11 @@ async function assignDriverToOrder(order, driver, boutiqueLat, boutiqueLng) {
  */
 async function broadcastToAllDrivers(orderId, cityId) {
   // Look up city name for fcmService (it queries by city name)
-  const { data: city } = await supabaseAdmin
+  const { data: city } = await Promise.resolve(supabaseAdmin
     .from('cities')
     .select('name')
     .eq('id', cityId)
-    .single()
+    .single())
     .catch(() => ({ data: null }));
 
   if (city?.name) {
@@ -268,12 +268,12 @@ async function broadcastToAllDrivers(orderId, cityId) {
   }
 
   // Also send push directly to ALL drivers in city (online + offline) using push_token
-  const { data: drivers } = await supabaseAdmin
+  const { data: drivers } = await Promise.resolve(supabaseAdmin
     .from('drivers')
     .select('push_token')
     .eq('city_id', cityId)
     .eq('is_approved', true)
-    .not('push_token', 'is', null)
+    .not('push_token', 'is', null))
     .catch(() => ({ data: [] }));
 
   if (drivers && drivers.length > 0) {

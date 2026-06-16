@@ -110,11 +110,11 @@ async function _cancelAndRefund(session, reason, notificationMsg) {
 }
 
 async function _notify(userId, sessionId, title, body) {
-  await supabaseAdmin.from('notifications').insert({
+  await Promise.resolve(supabaseAdmin.from('notifications').insert({
     user_id: userId, type: 'try_on_session_update',
     title, body, data: { session_id: sessionId },
     is_read: false, sent_push: false,
-  }).catch(() => {});
+  })).catch(() => {});
 }
 
 cron.schedule('* * * * *', () => { processSessionTimeouts(); });

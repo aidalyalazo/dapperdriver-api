@@ -39,7 +39,7 @@ async function processReminders() {
         if (sent[window.key]) continue; // already sent this reminder
 
         // Send in-app notification
-        await supabaseAdmin.from('notifications').insert({
+        await Promise.resolve(supabaseAdmin.from('notifications').insert({
           user_id:   s.shopper_id,
           type:      'try_on_reminder',
           title:     window.title,
@@ -47,7 +47,7 @@ async function processReminders() {
           data:      { session_id: s.id },
           is_read:   false,
           sent_push: false,
-        }).catch(() => {});
+        })).catch(() => {});
 
         // Mark reminder as sent
         sent[window.key] = true;
