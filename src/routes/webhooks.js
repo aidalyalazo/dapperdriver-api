@@ -3,6 +3,7 @@ const { stripe } = require('../config/stripe');
 const stripeService = require('../services/stripeService');
 const { supabaseAdmin } = require('../config/supabase');
 const orderService = require('../services/orderService');
+const { notifyAdmins } = require('../utils/adminAlerts');
 
 /**
  * Stripe requires the raw request body to verify webhook signatures.
@@ -278,11 +279,48 @@ router.post(
           break;
         }
 
-        // ── Transfer reversed (refund/reversal) ───────────────────────────
+        // ── Chargeback / dispute filed on an ORDER charge ──────────────────
+        // The biggest silent money-loss hole: the cardholder's bank claws back
+        // funds, but the boutique/driver may already have been paid. We can't
+        // safely auto-reverse payouts here (transfer→order mapping isn't 1:1 for
+        // weekly driver batches), so surface it to ops IMMEDIATELY so they can
+        // respond in Stripe before the deadline.
+        case 'charge.dispute.created': {
+          const dispute = event.data.object;
+          const piId = dispute.payment_intent;
+          if (!piId) break;
+          const { data: order } = await supabaseAdmin
+            .from('orders')
+            .select('id, total_amount, boutique_paid, driver_paid, boutique_id')
+            .eq('stripe_payment_intent_id', piId)
+            .maybeSingle();
+          if (!order) break; // not an order PI
+          await notifyAdmins({
+            type: 'chargeback',
+            title: '⚠️ Chargeback filed',
+            body: `Dispute on order ${order.id} for $${Number(order.total_amount).toFixed(2)}. ` +
+                  `Boutique paid: ${order.boutique_paid}, driver paid: ${order.driver_paid}. ` +
+                  `Submit evidence in the Stripe dashboard before the response deadline.`,
+            data: { order_id: order.id, dispute_id: dispute.id, amount: dispute.amount, reason: dispute.reason },
+          });
+          await Promise.resolve(supabaseAdmin.from('order_timeline').insert({
+            order_id: order.id, status: 'disputed', timestamp: new Date().toISOString(),
+          })).catch(() => {});
+          console.warn(`[WEBHOOK] Chargeback on order ${order.id} — dispute ${dispute.id}`);
+          break;
+        }
+
+        // ── Transfer reversed (boutique/driver payout clawed back) ─────────
         case 'transfer.reversed': {
           const transfer = event.data.object;
-          console.log('[WEBHOOK] Transfer reversed:', transfer.id, 'Amount reversed:', transfer.amount_reversed);
-          // Log for manual review — reversals are rare and handled case-by-case
+          console.warn('[WEBHOOK] Transfer reversed:', transfer.id, 'amount:', transfer.amount_reversed);
+          await notifyAdmins({
+            type: 'transfer_reversed',
+            title: '⚠️ Payout transfer reversed',
+            body: `Stripe transfer ${transfer.id} was reversed ($${(transfer.amount_reversed / 100).toFixed(2)}). ` +
+                  `Review the linked payout/order — the recipient may still show as paid.`,
+            data: { transfer_id: transfer.id, amount_reversed: transfer.amount_reversed, destination: transfer.destination },
+          });
           break;
         }
 

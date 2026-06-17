@@ -106,6 +106,20 @@ async function recordRedemption({ promoId, orderId, shopperId, discountAmount })
   if (error) {
     throw new Error(`Failed to record promo redemption: ${error.message}`);
   }
+
+  // Bump the global usage counter so max_uses is actually enforced. Without this
+  // uses_count stays 0 forever and the cap in validatePromo is a no-op (any
+  // number of distinct shoppers could redeem a capped code). Read-modify-write
+  // is fine here — the per-user UNIQUE(promo_id, shopper_id) is the real abuse
+  // guard; this counter is an approximate global budget.
+  try {
+    const { data: cur } = await supabaseAdmin
+      .from('promos').select('uses_count').eq('id', promoId).single();
+    await supabaseAdmin
+      .from('promos').update({ uses_count: (cur?.uses_count || 0) + 1 }).eq('id', promoId);
+  } catch (e) {
+    console.warn('[PROMO] uses_count increment failed:', e.message);
+  }
 }
 
 module.exports = { validatePromo, calculateDiscount, recordRedemption };

@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node src/app.js",
     "dev": "nodemon src/app.js",
-    "lint": "eslint src/**/*.js"
+    "lint": "eslint src/**/*.js",
+    "test": "node src/tests/driver_capacity.test.js && node src/tests/inventory_holds_concurrency.test.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.104.1",

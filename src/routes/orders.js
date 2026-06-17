@@ -1,12 +1,26 @@
 const router = require('express').Router();
+const rateLimit = require('express-rate-limit');
 const { authenticate, requireRole } = require('../middleware/auth');
 const ctrl = require('../controllers/orderController');
 
 // All order routes require authentication
 router.use(authenticate);
 
+// Per-user limiter on order creation — blunts order spam, promo farming, and
+// the cost/DoS of spinning up a Stripe PI per request. Keyed on the auth user
+// (set by authenticate), falling back to IP. Idempotency-key replays are cheap
+// server-side, so a modest cap is plenty for a real shopper.
+const createOrderLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => req.userId || req.ip,
+  message: { error: 'Too many orders in a short window. Please wait a few minutes.' },
+});
+
 // POST   /api/v1/orders                    — Shopper places an order
-router.post('/', requireRole('shopper'), ctrl.createOrder);
+router.post('/', requireRole('shopper'), createOrderLimiter, ctrl.createOrder);
 
 // GET    /api/v1/orders                    — List orders (filtered by role)
 router.get('/', requireRole('shopper', 'boutique', 'driver', 'admin'), ctrl.listOrders);
@@ -194,7 +208,7 @@ router.post(
     // Fetch order and verify ownership + driver assignment
     const { data: order } = await supabaseAdmin
       .from('orders')
-      .select('shopper_id, driver_id, notes')
+      .select('shopper_id, driver_id, status, notes')
       .eq('id', orderId)
       .single();
 
@@ -205,9 +219,18 @@ router.post(
     if (!order.driver_id) {
       throw Object.assign(new Error('Order has no assigned driver'), { status: 400 });
     }
+    // Only after the delivery is complete — and only ONCE. Without these guards a
+    // shopper could rate before delivery and repeatedly hammer 1-star to tank a
+    // driver's average.
+    if (!['delivered', 'completed'].includes(order.status)) {
+      throw Object.assign(new Error('You can rate the driver once the order is delivered'), { status: 422 });
+    }
 
     // Store driver rating on the order (in notes JSON)
     const existingNotes = order.notes ? (typeof order.notes === 'string' ? (() => { try { return JSON.parse(order.notes); } catch { return { text: order.notes }; } })() : order.notes) : {};
+    if (existingNotes.driver_rating != null) {
+      throw Object.assign(new Error('You have already rated this delivery'), { status: 409 });
+    }
     const updatedNotes = {
       ...existingNotes,
       driver_rating: rating,

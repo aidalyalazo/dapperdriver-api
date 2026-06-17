@@ -803,6 +803,15 @@ async function updateOrderStatus({ orderId, newStatus, actorId, driverId }) {
  * We resolve the drivers table PK (drivers.id) since orders.driver_id FK → drivers(id).
  */
 async function assignDriver({ orderId, driverId }) {
+  // Block self-dealing: a driver cannot accept/deliver their own order (they'd
+  // pay themselves the delivery fee + self-tip and cash it out). driverId here
+  // is the driver's auth user id, same namespace as orders.shopper_id.
+  const { data: ord } = await supabaseAdmin
+    .from('orders').select('shopper_id').eq('id', orderId).single();
+  if (ord && ord.shopper_id === driverId) {
+    throw Object.assign(new Error('You cannot accept your own order'), { status: 403 });
+  }
+
   // Resolve drivers.id from drivers.user_id (auth UUID)
   const { data: driverRow } = await supabaseAdmin
     .from('drivers')
