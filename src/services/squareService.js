@@ -150,7 +150,8 @@ async function syncProducts(integrationId) {
 
   if (!integration) throw new Error('Integration not found');
 
-  const { access_token, location_id, boutique_id } = integration;
+  const { location_id, boutique_id } = integration;
+  const access_token = require('../utils/tokenCrypto').decrypt(integration.access_token);
   let imported = 0, skipped = 0, errors = 0;
   let cursor = null;
 
@@ -284,7 +285,8 @@ async function decrementStock(dapperProductId, quantity = 1) {
 
   if (!mapping?.external_variant_id) return;
 
-  const { access_token, location_id } = mapping.boutique_integrations;
+  const { location_id } = mapping.boutique_integrations;
+  const access_token = require('../utils/tokenCrypto').decrypt(mapping.boutique_integrations.access_token);
   if (!location_id) return;
 
   const idempotencyKey = `dd-${dapperProductId}-${Date.now()}`;

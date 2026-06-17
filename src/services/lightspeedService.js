@@ -91,7 +91,7 @@ async function refreshAccessToken(integrationId) {
   const { body } = await lsRequest(LS_AUTH_BASE, '/oauth/token', 'POST', {
     client_id:     clientId,
     client_secret: clientSecret,
-    refresh_token: integration.refresh_token,
+    refresh_token: require('../utils/tokenCrypto').decrypt(integration.refresh_token),
     grant_type:    'refresh_token',
   }, {});
 
@@ -101,8 +101,12 @@ async function refreshAccessToken(integrationId) {
   await supabaseAdmin
     .from('boutique_integrations')
     .update({
-      access_token:     body.access_token,
-      refresh_token:    body.refresh_token || integration.refresh_token,
+      access_token:     require('../utils/tokenCrypto').encrypt(body.access_token),
+      // body.refresh_token is fresh plaintext; integration.refresh_token is
+      // already encrypted from the DB — encrypt only the new one.
+      refresh_token:    body.refresh_token
+        ? require('../utils/tokenCrypto').encrypt(body.refresh_token)
+        : integration.refresh_token,
       token_expires_at: new Date(Date.now() + (body.expires_in || 3600) * 1000).toISOString(),
       updated_at:       new Date().toISOString(),
     })
@@ -127,7 +131,7 @@ async function getValidToken(integrationId) {
     return refreshAccessToken(integrationId);
   }
 
-  return integration.access_token;
+  return require('../utils/tokenCrypto').decrypt(integration.access_token);
 }
 
 // ── Lightspeed API helpers ─────────────────────────────────────────────────────

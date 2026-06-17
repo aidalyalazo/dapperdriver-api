@@ -145,7 +145,8 @@ async function syncProducts(integrationId) {
 
   if (!integration) throw new Error('Integration not found');
 
-  const { shop_domain, access_token, boutique_id } = integration;
+  const { shop_domain, boutique_id } = integration;
+  const access_token = require('../utils/tokenCrypto').decrypt(integration.access_token);
 
   let page = 1;
   let imported = 0, skipped = 0, errors = 0;
@@ -264,7 +265,8 @@ async function getLiveStock(dapperProductId) {
 
   if (!mapping) return null;
 
-  const { shop_domain, access_token } = mapping.boutique_integrations;
+  const { shop_domain } = mapping.boutique_integrations;
+  const access_token = require('../utils/tokenCrypto').decrypt(mapping.boutique_integrations.access_token);
   const result = await shopifyGet(shop_domain, access_token,
     `/products/${mapping.external_product_id}.json?fields=id,variants`);
 
@@ -293,7 +295,8 @@ async function decrementStock(dapperProductId, quantity = 1) {
 
   if (!mapping?.external_variant_id) return;
 
-  const { shop_domain, access_token } = mapping.boutique_integrations;
+  const { shop_domain } = mapping.boutique_integrations;
+  const access_token = require('../utils/tokenCrypto').decrypt(mapping.boutique_integrations.access_token);
 
   // Get current inventory item ID
   const variantResult = await shopifyGet(shop_domain, access_token,

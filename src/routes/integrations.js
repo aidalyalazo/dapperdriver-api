@@ -20,6 +20,7 @@ const shopify    = require('../services/shopifyService');
 const square     = require('../services/squareService');
 const lightspeed = require('../services/lightspeedService');
 const { verifyState, verifyShopifyHmac } = require('../utils/oauthState');
+const { encrypt } = require('../utils/tokenCrypto');
 
 // Resolve boutique ID for current authenticated boutique owner
 async function getBoutiqueId(userId) {
@@ -92,7 +93,7 @@ router.get(
         boutique_id:  boutiqueId,
         platform:     'shopify',
         status:       'connected',
-        access_token: tokenData.access_token,
+        access_token: encrypt(tokenData.access_token),
         shop_domain:  shop,
         updated_at:   new Date().toISOString(),
       }, { onConflict: 'boutique_id,platform' })
@@ -159,8 +160,8 @@ router.get(
         boutique_id:   boutiqueId,
         platform:      'square',
         status:        'connected',
-        access_token:  tokenData.access_token,
-        refresh_token: tokenData.refresh_token || null,
+        access_token:  encrypt(tokenData.access_token),
+        refresh_token: tokenData.refresh_token ? encrypt(tokenData.refresh_token) : null,
         token_expires_at: tokenData.expires_at ? new Date(tokenData.expires_at).toISOString() : null,
         merchant_id:   tokenData.merchant_id || null,
         location_id:   locationId,
@@ -259,8 +260,8 @@ router.get(
         boutique_id:     boutiqueId,
         platform:        'lightspeed',
         status:          'connected',
-        access_token:    tokenData.access_token,
-        refresh_token:   tokenData.refresh_token || null,
+        access_token:    encrypt(tokenData.access_token),
+        refresh_token:   tokenData.refresh_token ? encrypt(tokenData.refresh_token) : null,
         token_expires_at: expiresAt,
         merchant_id:     accountId ? String(accountId) : null, // accountId stored in merchant_id
         updated_at:      new Date().toISOString(),
