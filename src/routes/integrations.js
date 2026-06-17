@@ -304,7 +304,16 @@ router.get(
       .eq('boutique_id', boutiqueId)
       .order('created_at');
 
-    res.json({ integrations: data || [] });
+    // Which platforms are actually configured (server has API credentials).
+    // The app uses this to only offer connectable platforms — so e.g.
+    // Lightspeed appears the moment its keys are added, no app update needed.
+    const available = {
+      shopify:    !!(process.env.SHOPIFY_API_KEY && process.env.SHOPIFY_API_SECRET),
+      square:     !!(process.env.SQUARE_APP_ID && process.env.SQUARE_APP_SECRET),
+      lightspeed: !!(process.env.LIGHTSPEED_CLIENT_ID && process.env.LIGHTSPEED_CLIENT_SECRET),
+    };
+
+    res.json({ integrations: data || [], available });
   })
 );
 
