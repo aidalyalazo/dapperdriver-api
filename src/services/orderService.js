@@ -234,7 +234,7 @@ async function createOrder({
     // Server-side prices — never trust client-submitted unit_price.
     // Products table stores images as an array column named 'images', not 'image_url'.
     supabaseAdmin.from('products')
-      .select('id, name, price, images, sizes')
+      .select('id, name, price, images, sizes, stock, variant_stock')
       .in('id', productIds)
       .then((r) => {
         if (r.error) console.error('[ORDER] Products query failed:', r.error.message);
@@ -364,6 +364,32 @@ async function createOrder({
     throw Object.assign(
       new Error(`Please select a size for: ${names}`),
       { status: 422, code: 'SIZE_REQUIRED' }
+    );
+  }
+
+  // Stock guard — never let an order exceed what's in inventory (prevents the
+  // "qty 2 of a size with only 1 in stock" oversell). Per-size variant_stock
+  // wins when present; otherwise fall back to the product's total stock.
+  const overStock = validatedItems.filter((i) => {
+    const p = trustedProductsMap[i.product_id];
+    if (!p) return false;
+    let available = (typeof p.stock === 'number') ? p.stock : null;
+    if (p.variant_stock && i.selected_size && p.variant_stock[i.selected_size] != null) {
+      available = parseInt(p.variant_stock[i.selected_size], 10);
+    }
+    return available != null && i.quantity > available;
+  });
+  if (overStock.length) {
+    const detail = overStock.map((i) => {
+      const p = trustedProductsMap[i.product_id];
+      const avail = (p.variant_stock && i.selected_size && p.variant_stock[i.selected_size] != null)
+        ? p.variant_stock[i.selected_size] : p.stock;
+      const sz = i.selected_size ? ` (size ${i.selected_size})` : '';
+      return `${p.name}${sz}: only ${avail} left`;
+    }).join('; ');
+    throw Object.assign(
+      new Error(`Not enough stock — ${detail}.`),
+      { status: 409, code: 'INSUFFICIENT_STOCK' }
     );
   }
 
@@ -538,9 +564,9 @@ async function createOrder({
   }
 
   // Notify boutique (non-critical — don't await)
-  supabaseAdmin.from('boutiques').select('fcm_token, push_token').eq('id', boutiqueId).single()
+  supabaseAdmin.from('boutiques').select('fcm_token').eq('id', boutiqueId).single()
     .then(({ data: boutiqueFcm }) => {
-      const tokens = [boutiqueFcm?.fcm_token, boutiqueFcm?.push_token].filter(Boolean);
+      const tokens = [boutiqueFcm?.fcm_token].filter(Boolean);
       if (tokens.length > 0) {
         sendOrderNotification({
           tokens,
@@ -589,10 +615,10 @@ async function updateOrderStatus({ orderId, newStatus, actorId, driverId }) {
 
   // Fetch push tokens separately (each table has its own FK structure)
   const [shopperRow, boutiqueRow, driverRow] = await Promise.all([
-    supabaseAdmin.from('shoppers').select('push_token').eq('user_id', order.shopper_id).single().then(r => r.data),
-    supabaseAdmin.from('boutiques').select('push_token, fcm_token').eq('id', order.boutique_id).single().then(r => r.data),
+    supabaseAdmin.from('shoppers').select('fcm_token').eq('user_id', order.shopper_id).single().then(r => r.data),
+    supabaseAdmin.from('boutiques').select('fcm_token').eq('id', order.boutique_id).single().then(r => r.data),
     order.driver_id
-      ? supabaseAdmin.from('drivers').select('push_token').eq('user_id', order.driver_id).single().then(r => r.data)
+      ? supabaseAdmin.from('drivers').select('fcm_token').eq('user_id', order.driver_id).single().then(r => r.data)
       : Promise.resolve(null),
   ]);
   order.shoppers  = shopperRow  || {};
@@ -648,7 +674,14 @@ async function updateOrderStatus({ orderId, newStatus, actorId, driverId }) {
         // Only capture if PI is still in requires_capture state; skip if already captured.
         const pi = await stripe.paymentIntents.retrieve(order.stripe_payment_intent_id);
         if (pi.status === 'requires_capture') {
-          await stripe.paymentIntents.capture(order.stripe_payment_intent_id);
+          // Capture the current order total (which may have shrunk if a boutique
+          // marked an item unavailable) rather than the full authorization, so
+          // the unused hold on a removed item is released, not charged.
+          const captureCents = Math.round(Number(order.total_amount) * 100);
+          await stripe.paymentIntents.capture(
+            order.stripe_payment_intent_id,
+            captureCents > 0 ? { amount_to_capture: captureCents } : undefined
+          );
         } else {
           console.info(`[ORDER] PI ${pi.id} already in state '${pi.status}' — skipping capture`);
         }
@@ -686,9 +719,9 @@ async function updateOrderStatus({ orderId, newStatus, actorId, driverId }) {
   }
   if (notif) {
     const tokens = [
-      order.shoppers?.push_token,
-      order.boutiques?.push_token || order.boutiques?.fcm_token,
-      order.drivers?.push_token,
+      order.shoppers?.fcm_token,
+      order.boutiques?.fcm_token,
+      order.drivers?.fcm_token,
     ].filter(Boolean);
 
     if (tokens.length > 0) {

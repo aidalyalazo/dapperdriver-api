@@ -23,6 +23,9 @@ router.post('/:id/assign-driver', requireRole('driver'), ctrl.assignDriver);
 // POST   /api/v1/orders/:id/cancel         — Shopper or boutique cancels
 router.post('/:id/cancel', requireRole('shopper', 'boutique', 'admin'), ctrl.cancelOrder);
 
+// POST   /api/v1/orders/:id/items/:itemId/unavailable — Boutique marks an item out of stock
+router.post('/:id/items/:itemId/unavailable', requireRole('boutique', 'admin'), ctrl.markItemUnavailable);
+
 // POST   /api/v1/orders/:id/refund         — Admin: refund order
 const { asyncHandler } = require('../middleware/errorHandler');
 const { body } = require('express-validator');

@@ -94,12 +94,18 @@ const createOrder = [
           req.get('Idempotency-Key') || req.body.idempotency_key || null,
       });
     } catch (orderErr) {
-      // 409 = inventory hold failed (Decision A). Order already cancelled by DB.
+      // 409 = inventory hold failed (Decision A) or insufficient stock.
+      // Surface the specific message (e.g. "only 1 left") when we have one.
       if (orderErr.status === 409) {
         return res.status(409).json({
-          error: 'One or more items are no longer available',
+          error: orderErr.message || 'One or more items are no longer available',
+          code: orderErr.code || undefined,
           unavailable_product_ids: orderErr.unavailableProductIds || [],
         });
+      }
+      // Size-required (422) should surface its message too, not a generic 500.
+      if (orderErr.status === 422) {
+        return res.status(422).json({ error: orderErr.message, code: orderErr.code });
       }
       throw orderErr; // re-throw everything else to the global handler
     }
@@ -446,4 +452,171 @@ const cancelOrder = [
   }),
 ];
 
-module.exports = { createOrder, listOrders, getOrder, updateStatus, assignDriver, cancelOrder };
+/**
+ * POST /api/v1/orders/:id/items/:itemId/unavailable
+ * B4: boutique marks a single order item out of stock (e.g. the last one sold
+ * in-store before the app refreshed). The item is flagged, the order total /
+ * commission / earnings are recomputed from the remaining items, the shopper is
+ * refunded the difference (immediately if the charge was already captured;
+ * otherwise the deferred capture simply charges the reduced total), and the
+ * shopper is notified. If it was the only remaining item the whole order is
+ * cancelled and fully refunded. Only allowed before a driver is involved.
+ */
+const STOCK_EDITABLE_STATUSES = ['pending', 'confirmed', 'preparing'];
+
+async function notifyShopperItemGone({ order, itemName, refundAmount = 0, cancelled }) {
+  const { supabaseAdmin } = require('../config/supabase');
+  const { sendOrderNotification } = require('../services/fcmService');
+  try {
+    const { data: shopper } = await supabaseAdmin
+      .from('shoppers').select('fcm_token').eq('user_id', order.shopper_id).single();
+    const title = cancelled ? '❌ Order Cancelled' : '⚠️ Item Unavailable';
+    const body = cancelled
+      ? `Sorry — "${itemName}" sold out and was the only item. Your order was cancelled and fully refunded.`
+      : `Sorry — "${itemName}" just sold out. We refunded $${Number(refundAmount).toFixed(2)} and the rest of your order is still on the way.`;
+    if (shopper?.fcm_token) {
+      await sendOrderNotification({ tokens: [shopper.fcm_token], title, body, orderId: order.id }).catch(() => {});
+    }
+    await Promise.resolve(supabaseAdmin.from('notifications').insert({
+      user_id:   order.shopper_id,
+      type:      cancelled ? 'order_cancelled' : 'order_item_unavailable',
+      title,
+      body,
+      data:      { order_id: order.id },
+      is_read:   false,
+      sent_push: !!shopper?.fcm_token,
+    })).catch(() => {});
+  } catch (_) { /* notification is non-critical */ }
+}
+
+const markItemUnavailable = [
+  param('id').isUUID().withMessage('id must be a UUID'),
+  param('itemId').isUUID().withMessage('itemId must be a UUID'),
+  validate,
+  asyncHandler(async (req, res) => {
+    const { supabaseAdmin } = require('../config/supabase');
+    const { stripe } = require('../config/stripe');
+    const role = resolveRole(req);
+
+    if (role !== 'boutique' && role !== 'admin') {
+      return res.status(403).json({ error: 'Only the boutique can mark items unavailable' });
+    }
+
+    const orderId = req.params.id;
+    const itemId = req.params.itemId;
+
+    const { data: order } = await supabaseAdmin
+      .from('orders')
+      .select('id, shopper_id, boutique_id, status, stripe_payment_intent_id, subtotal, tax, delivery_fee, service_fee, tip, promo_discount, total_amount, dd_commission_amount, boutique_earnings')
+      .eq('id', orderId)
+      .single();
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+
+    if (role === 'boutique') {
+      const { data: boutique } = await supabaseAdmin
+        .from('boutiques').select('id').eq('user_id', req.userId).single();
+      if (!boutique || boutique.id !== order.boutique_id) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+    }
+
+    if (!STOCK_EDITABLE_STATUSES.includes(order.status)) {
+      return res.status(422).json({
+        error: `Items can only be marked unavailable before a driver is involved (current status: ${order.status}).`,
+        status: order.status,
+      });
+    }
+
+    const { data: items } = await supabaseAdmin
+      .from('order_items').select('*').eq('order_id', orderId);
+    const target = (items || []).find((i) => i.id === itemId);
+    if (!target) return res.status(404).json({ error: 'Order item not found' });
+    if (target.unavailable) return res.status(409).json({ error: 'Item already marked unavailable' });
+
+    const activeItems = (items || []).filter((i) => !i.unavailable);
+    const lineQty = target.quantity ?? target.qty ?? 1;
+    const lineAmount = Math.round(Number(target.unit_price ?? target.price ?? 0) * lineQty * 100) / 100;
+    const remainingAfter = activeItems.filter((i) => i.id !== itemId);
+
+    // Last remaining item → cancel the whole order + full refund.
+    if (remainingAfter.length === 0) {
+      if (order.stripe_payment_intent_id) {
+        try {
+          const pi = await stripe.paymentIntents.retrieve(order.stripe_payment_intent_id);
+          if (pi.status === 'succeeded') {
+            await stripeService.refundPaymentIntent(pi.id);
+          } else if (pi.status !== 'canceled') {
+            await stripe.paymentIntents.cancel(pi.id).catch(() => {});
+          }
+        } catch (e) {
+          console.error('[ORDER] Item-unavailable full-cancel refund failed:', orderId, e.message);
+          return res.status(502).json({ error: 'Could not refund the payment. Please try again or contact support.' });
+        }
+      }
+      await supabaseAdmin.from('order_items')
+        .update({ unavailable: true, unavailable_at: new Date().toISOString() })
+        .eq('id', itemId);
+      const updated = await orderService.updateOrderStatus({ orderId, newStatus: 'cancelled', actorId: req.userId });
+      await notifyShopperItemGone({ order, itemName: target.name, cancelled: true });
+      return res.json({ order: updated, cancelled: true });
+    }
+
+    // Recompute money from the remaining items. Effective tax/commission rates
+    // are derived from the stored order so we never re-read platform settings.
+    const oldSubtotal = Number(order.subtotal ?? 0);
+    const newSubtotal = Math.round((oldSubtotal - lineAmount) * 100) / 100;
+    const deliveryFee = Number(order.delivery_fee ?? 0);
+    const serviceFee = Number(order.service_fee ?? 0);
+    const tip = Number(order.tip ?? 0);
+    const promoDiscount = Number(order.promo_discount ?? 0);
+
+    const taxableBase = oldSubtotal + deliveryFee - promoDiscount;
+    const taxRate = taxableBase > 0 ? Number(order.tax ?? 0) / taxableBase : 0;
+    const commissionRate = oldSubtotal > 0 ? Number(order.dd_commission_amount ?? 0) / oldSubtotal : 0;
+
+    const newTaxableBase = newSubtotal + deliveryFee - promoDiscount;
+    const newTax = Math.round(newTaxableBase * taxRate * 100) / 100;
+    const newCommission = Math.round(newSubtotal * commissionRate * 100) / 100;
+    const newBoutiqueEarnings = Math.round((newSubtotal - newCommission) * 100) / 100;
+    const newTotal = Math.round(
+      (newSubtotal + deliveryFee + serviceFee + newTax + tip - promoDiscount) * 100
+    ) / 100;
+    const refundAmount = Math.round((Number(order.total_amount ?? 0) - newTotal) * 100) / 100;
+
+    if (order.stripe_payment_intent_id && refundAmount > 0) {
+      try {
+        const pi = await stripe.paymentIntents.retrieve(order.stripe_payment_intent_id);
+        if (pi.status === 'succeeded') {
+          await stripeService.refundPaymentIntent(pi.id, Math.round(refundAmount * 100));
+        }
+        // requires_capture → no action; the deferred capture uses the new total.
+      } catch (e) {
+        console.error('[ORDER] Item-unavailable partial refund failed:', orderId, e.message);
+        return res.status(502).json({ error: 'Could not adjust the payment. Please try again or contact support.' });
+      }
+    }
+
+    await supabaseAdmin.from('order_items')
+      .update({ unavailable: true, unavailable_at: new Date().toISOString() })
+      .eq('id', itemId);
+
+    const { data: updatedOrder } = await supabaseAdmin.from('orders')
+      .update({
+        subtotal:             newSubtotal,
+        tax:                  newTax,
+        dd_commission_amount: newCommission,
+        boutique_earnings:    newBoutiqueEarnings,
+        total_amount:         newTotal,
+        updated_at:           new Date().toISOString(),
+      })
+      .eq('id', orderId)
+      .select()
+      .single();
+
+    await notifyShopperItemGone({ order, itemName: target.name, refundAmount, cancelled: false });
+
+    return res.json({ order: updatedOrder, cancelled: false, refunded: refundAmount });
+  }),
+];
+
+module.exports = { createOrder, listOrders, getOrder, updateStatus, assignDriver, cancelOrder, markItemUnavailable };

@@ -84,7 +84,7 @@ async function findAndAssignDriver(orderId, retryCount = 0) {
     // ── Check if only one driver exists in the city ──────────────────────
     const { data: allCityDrivers } = await Promise.resolve(supabaseAdmin
       .from('drivers')
-      .select('id, current_lat, current_lng, push_token, status, max_active_orders')
+      .select('id, current_lat, current_lng, fcm_token, status, max_active_orders')
       .eq('city_id', order.city_id)
       .eq('is_approved', true))
       .catch(() => ({ data: [] }));
@@ -246,9 +246,9 @@ async function assignDriverToOrder(order, driver, boutiqueLat, boutiqueLng) {
     .catch(() => {});
 
   // Notify driver
-  if (driver.push_token) {
+  if (driver.fcm_token) {
     await sendOrderNotification({
-      tokens: [driver.push_token],
+      tokens: [driver.fcm_token],
       title: '🚗 New Delivery!',
       body: `New delivery from ${order.boutiques?.name}. ${dist.toFixed(1)} miles away.`,
       orderId,
@@ -278,17 +278,17 @@ async function broadcastToAllDrivers(orderId, cityId) {
     await notifyAvailableDrivers({ orderId, cityId });
   }
 
-  // Also send push directly to ALL drivers in city (online + offline) using push_token
+  // Also send push directly to ALL drivers in city (online + offline) using fcm_token
   const { data: drivers } = await Promise.resolve(supabaseAdmin
     .from('drivers')
-    .select('push_token')
+    .select('fcm_token')
     .eq('city_id', cityId)
     .eq('is_approved', true)
-    .not('push_token', 'is', null))
+    .not('fcm_token', 'is', null))
     .catch(() => ({ data: [] }));
 
   if (drivers && drivers.length > 0) {
-    const tokens = drivers.map((d) => d.push_token).filter(Boolean);
+    const tokens = drivers.map((d) => d.fcm_token).filter(Boolean);
     if (tokens.length > 0) {
       await sendOrderNotification({
         tokens,

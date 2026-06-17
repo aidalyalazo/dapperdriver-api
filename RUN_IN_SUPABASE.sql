@@ -315,7 +315,148 @@ EXCEPTION
 END $run$;
 
 
--- ── J. RLS security hardening ─────────────────────────────────────────────
+-- ── J. Migration 018 — cities, express fees, approvals ────────────────────
+
+DO $run$ BEGIN
+  EXECUTE $stmt$DO $$ BEGIN
+  ALTER TABLE cities DROP CONSTRAINT IF EXISTS cities_status_check;
+  ALTER TABLE cities ADD CONSTRAINT cities_status_check
+    CHECK (status IN ('live', 'inactive', 'coming_soon', 'paused'));
+EXCEPTION WHEN undefined_table OR invalid_text_representation OR check_violation OR wrong_object_type OR datatype_mismatch
+  THEN RAISE NOTICE 'SKIPPED cities constraint: %', SQLERRM; END $$$stmt$;
+EXCEPTION
+  WHEN undefined_column OR undefined_table OR undefined_object
+    OR duplicate_object OR duplicate_table OR duplicate_column THEN
+    RAISE NOTICE 'SKIPPED: %', SQLERRM;
+END $run$;
+
+DO $run$ BEGIN
+  EXECUTE $stmt$DO $$ BEGIN
+  ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_speed TEXT NOT NULL DEFAULT 'standard';
+  ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_delivery_speed_check;
+  ALTER TABLE orders ADD CONSTRAINT orders_delivery_speed_check
+    CHECK (delivery_speed IN ('standard', 'express'));
+EXCEPTION WHEN undefined_table THEN RAISE NOTICE 'SKIPPED orders.delivery_speed: %', SQLERRM; END $$$stmt$;
+EXCEPTION
+  WHEN undefined_column OR undefined_table OR undefined_object
+    OR duplicate_object OR duplicate_table OR duplicate_column THEN
+    RAISE NOTICE 'SKIPPED: %', SQLERRM;
+END $run$;
+
+DO $run$ BEGIN
+  EXECUTE $stmt$DO $$ BEGIN
+  UPDATE platform_settings
+  SET value = jsonb_set(value::jsonb, '{default}', '20'::jsonb)
+  WHERE key = 'commission_rate';
+EXCEPTION WHEN undefined_table OR undefined_column THEN RAISE NOTICE 'SKIPPED commission_rate: %', SQLERRM; END $$$stmt$;
+EXCEPTION
+  WHEN undefined_column OR undefined_table OR undefined_object
+    OR duplicate_object OR duplicate_table OR duplicate_column THEN
+    RAISE NOTICE 'SKIPPED: %', SQLERRM;
+END $run$;
+
+DO $run$ BEGIN
+  EXECUTE $stmt$DO $$ BEGIN
+  UPDATE platform_settings
+  SET value = value::jsonb || '{"delivery_fee_cut": 100, "tip_cut": 100}'::jsonb
+  WHERE key = 'driver_payout_rate';
+EXCEPTION WHEN undefined_table OR undefined_column THEN RAISE NOTICE 'SKIPPED driver_payout_rate: %', SQLERRM; END $$$stmt$;
+EXCEPTION
+  WHEN undefined_column OR undefined_table OR undefined_object
+    OR duplicate_object OR duplicate_table OR duplicate_column THEN
+    RAISE NOTICE 'SKIPPED: %', SQLERRM;
+END $run$;
+
+DO $run$ BEGIN
+  EXECUTE $stmt$DO $$ BEGIN
+  UPDATE platform_settings
+  SET value = jsonb_build_object('base', COALESCE((value::jsonb->>'amount')::numeric, (value::jsonb->>'base')::numeric, 0), 'label', 'Service fee')
+  WHERE key = 'service_fee';
+EXCEPTION WHEN undefined_table OR undefined_column THEN RAISE NOTICE 'SKIPPED service_fee: %', SQLERRM; END $$$stmt$;
+EXCEPTION
+  WHEN undefined_column OR undefined_table OR undefined_object
+    OR duplicate_object OR duplicate_table OR duplicate_column THEN
+    RAISE NOTICE 'SKIPPED: %', SQLERRM;
+END $run$;
+
+DO $run$ BEGIN
+  EXECUTE $stmt$DO $$ BEGIN
+  INSERT INTO platform_settings (key, value)
+  VALUES ('express_delivery_fee', '{"premium": 8.00, "driver_cut_pct": 0, "max_minutes": 120}'::jsonb)
+  ON CONFLICT (key) DO NOTHING;
+EXCEPTION WHEN undefined_table THEN RAISE NOTICE 'SKIPPED express_delivery_fee: %', SQLERRM; END $$$stmt$;
+EXCEPTION
+  WHEN undefined_column OR undefined_table OR undefined_object
+    OR duplicate_object OR duplicate_table OR duplicate_column THEN
+    RAISE NOTICE 'SKIPPED: %', SQLERRM;
+END $run$;
+
+DO $run$ BEGIN
+  EXECUTE $stmt$DO $$ BEGIN
+  UPDATE platform_settings
+  SET value = (value::jsonb #>> '{}')::jsonb
+  WHERE key IN ('orders_holds_enabled', 'try_on_enabled_cities')
+    AND jsonb_typeof(value::jsonb) = 'string';
+EXCEPTION WHEN undefined_table OR undefined_column OR invalid_text_representation
+  THEN RAISE NOTICE 'SKIPPED settings normalize: %', SQLERRM; END $$$stmt$;
+EXCEPTION
+  WHEN undefined_column OR undefined_table OR undefined_object
+    OR duplicate_object OR duplicate_table OR duplicate_column THEN
+    RAISE NOTICE 'SKIPPED: %', SQLERRM;
+END $run$;
+
+DO $run$ BEGIN
+  EXECUTE $stmt$DO $$ BEGIN
+  ALTER TABLE boutiques ADD COLUMN IF NOT EXISTS campaign_image_fit JSONB NOT NULL DEFAULT '{}'::jsonb;
+EXCEPTION WHEN undefined_table THEN RAISE NOTICE 'SKIPPED campaign_image_fit: %', SQLERRM; END $$$stmt$;
+EXCEPTION
+  WHEN undefined_column OR undefined_table OR undefined_object
+    OR duplicate_object OR duplicate_table OR duplicate_column THEN
+    RAISE NOTICE 'SKIPPED: %', SQLERRM;
+END $run$;
+
+DO $run$ BEGIN
+  EXECUTE $stmt$DO $$ BEGIN
+  ALTER TABLE try_on_sessions DROP CONSTRAINT IF EXISTS try_on_sessions_status_check;
+  ALTER TABLE try_on_sessions ADD CONSTRAINT try_on_sessions_status_check
+    CHECK (status IN ('booked','pickup_pending','en_route','arrived','in_home','returning','completed','cancelled'));
+EXCEPTION WHEN undefined_table OR invalid_text_representation OR check_violation OR wrong_object_type OR datatype_mismatch
+  THEN RAISE NOTICE 'SKIPPED try_on status check: %', SQLERRM; END $$$stmt$;
+EXCEPTION
+  WHEN undefined_column OR undefined_table OR undefined_object
+    OR duplicate_object OR duplicate_table OR duplicate_column THEN
+    RAISE NOTICE 'SKIPPED: %', SQLERRM;
+END $run$;
+
+
+-- ── K. Migration 019 — order item unavailable (out of stock) ──────────────
+
+DO $run$ BEGIN
+  EXECUTE $stmt$ALTER TABLE order_items ADD COLUMN IF NOT EXISTS unavailable BOOLEAN NOT NULL DEFAULT false$stmt$;
+EXCEPTION
+  WHEN undefined_column OR undefined_table OR undefined_object
+    OR duplicate_object OR duplicate_table OR duplicate_column THEN
+    RAISE NOTICE 'SKIPPED: %', SQLERRM;
+END $run$;
+
+DO $run$ BEGIN
+  EXECUTE $stmt$ALTER TABLE order_items ADD COLUMN IF NOT EXISTS unavailable_at TIMESTAMPTZ$stmt$;
+EXCEPTION
+  WHEN undefined_column OR undefined_table OR undefined_object
+    OR duplicate_object OR duplicate_table OR duplicate_column THEN
+    RAISE NOTICE 'SKIPPED: %', SQLERRM;
+END $run$;
+
+DO $run$ BEGIN
+  EXECUTE $stmt$CREATE INDEX IF NOT EXISTS idx_order_items_unavailable ON order_items (order_id) WHERE unavailable = true$stmt$;
+EXCEPTION
+  WHEN undefined_column OR undefined_table OR undefined_object
+    OR duplicate_object OR duplicate_table OR duplicate_column THEN
+    RAISE NOTICE 'SKIPPED: %', SQLERRM;
+END $run$;
+
+
+-- ── L. RLS security hardening ─────────────────────────────────────────────
 
 DO $run$ BEGIN
   EXECUTE $stmt$ALTER TABLE orders                ENABLE ROW LEVEL SECURITY$stmt$;

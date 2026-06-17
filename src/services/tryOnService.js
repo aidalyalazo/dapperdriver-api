@@ -230,11 +230,11 @@ async function bookSession({
   try {
     const { data: boutique } = await supabaseAdmin
       .from('boutiques')
-      .select('push_token, fcm_token, name')
+      .select('fcm_token, name')
       .eq('id', boutiqueId)
       .single();
 
-    const token = boutique?.fcm_token || boutique?.push_token;
+    const token = boutique?.fcm_token;
     if (token) {
       await sendOrderNotification({
         tokens: [token],

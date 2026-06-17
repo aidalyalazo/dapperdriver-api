@@ -1,5 +1,5 @@
 const router = require('express').Router();
-const { authenticate } = require('../middleware/auth');
+const { authenticate, resolveRole } = require('../middleware/auth');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { body } = require('express-validator');
 const { validate } = require('../middleware/validate');
@@ -71,19 +71,18 @@ router.put(
   [body('fcm_token').notEmpty().withMessage('fcm_token is required'), validate],
   asyncHandler(async (req, res) => {
     const { fcm_token } = req.body;
-    const role = req.user?.user_metadata?.role;
+    const role = resolveRole(req);
 
     const table =
       role === 'boutique' ? 'boutiques' :
       role === 'driver'   ? 'drivers'   :
       'shoppers';
 
-    // Shoppers table links to auth via user_id; boutiques & drivers use id directly.
-    const idField = role === 'shopper' ? 'user_id' : 'id';
+    // All three role tables link to auth via user_id (id is the row uuid).
     const { error } = await supabaseAdmin
       .from(table)
       .update({ fcm_token })
-      .eq(idField, req.userId);
+      .eq('user_id', req.userId);
 
     if (error) throw new Error(error.message);
     res.json({ message: 'FCM token updated.' });
@@ -97,14 +96,13 @@ router.put(
 router.delete(
   '/token',
   asyncHandler(async (req, res) => {
-    const role = req.user?.user_metadata?.role;
+    const role = resolveRole(req);
     const table =
       role === 'boutique' ? 'boutiques' :
       role === 'driver'   ? 'drivers'   :
       'shoppers';
 
-    const idFieldDel = role === 'shopper' ? 'user_id' : 'id';
-    await supabaseAdmin.from(table).update({ fcm_token: null }).eq(idFieldDel, req.userId);
+    await supabaseAdmin.from(table).update({ fcm_token: null }).eq('user_id', req.userId);
     res.json({ message: 'FCM token removed.' });
   })
 );

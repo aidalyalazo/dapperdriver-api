@@ -272,11 +272,16 @@ async function transferToBoutique(order) {
 /**
  * Refund a PaymentIntent (full refund on cancellation).
  */
-async function refundPaymentIntent(paymentIntentId) {
-  const refund = await stripe.refunds.create({
+async function refundPaymentIntent(paymentIntentId, amountCents) {
+  const params = {
     payment_intent: paymentIntentId,
     reason:         'requested_by_customer',
-  });
+  };
+  // Partial refund when a positive amount is supplied; omit for a full refund.
+  if (typeof amountCents === 'number' && amountCents > 0) {
+    params.amount = Math.round(amountCents);
+  }
+  const refund = await stripe.refunds.create(params);
   return refund;
 }
 
