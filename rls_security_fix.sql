@@ -46,14 +46,18 @@ ALTER TABLE IF EXISTS delivery_batches ENABLE ROW LEVEL SECURITY;
 -- RLS is ROW-level only — it can't hide columns. Without this, the anon key
 -- (shipped in the app) can pull owner PII + Stripe ids + confidential financials
 -- straight from PostgREST (select=*), bypassing the API's column allow-list.
--- Revoke the sensitive columns from anon; the safe browse columns stay readable.
+--
+-- NOTE: a column-level REVOKE does NOT work while a TABLE-level SELECT grant
+-- exists (the table grant covers all columns). So we revoke the blanket table
+-- grant from anon, then re-grant SELECT on ONLY the safe browse columns.
 -- (authenticated/admin keep full access via the API + admin JWT.)
-REVOKE SELECT (
-  user_id, owner_name, email, phone,
-  stripe_account_id, stripe_onboarded, fcm_token,
-  total_revenue, dd_take, commission_rate, pickup_commission_rate,
-  approved_by, suspended_at, suspension_reason
-) ON boutiques FROM anon;
+REVOKE SELECT ON boutiques FROM anon;
+GRANT SELECT (
+  id, name, slug, description, logo_url, logo_initials, logo_bg, campaign_images,
+  address, state, city_id, lat, lng, rating, review_count, follower_count,
+  primary_category, category_tags, style_tags, price_tier, status,
+  try_on_enabled, founding_partner, accepts_returns, return_policy
+) ON boutiques TO anon;
 
 -- ── 2. Drop any existing stale policies before re-creating ───────────────────
 -- (prevents duplicate policy errors if this runs more than once)

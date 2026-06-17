@@ -820,12 +820,20 @@ EXCEPTION
 END $run$;
 
 DO $run$ BEGIN
-  EXECUTE $stmt$REVOKE SELECT (
-  user_id, owner_name, email, phone,
-  stripe_account_id, stripe_onboarded, fcm_token,
-  total_revenue, dd_take, commission_rate, pickup_commission_rate,
-  approved_by, suspended_at, suspension_reason
-) ON boutiques FROM anon$stmt$;
+  EXECUTE $stmt$REVOKE SELECT ON boutiques FROM anon$stmt$;
+EXCEPTION
+  WHEN undefined_column OR undefined_table OR undefined_object
+    OR duplicate_object OR duplicate_table OR duplicate_column THEN
+    RAISE NOTICE 'SKIPPED: %', SQLERRM;
+END $run$;
+
+DO $run$ BEGIN
+  EXECUTE $stmt$GRANT SELECT (
+  id, name, slug, description, logo_url, logo_initials, logo_bg, campaign_images,
+  address, state, city_id, lat, lng, rating, review_count, follower_count,
+  primary_category, category_tags, style_tags, price_tier, status,
+  try_on_enabled, founding_partner, accepts_returns, return_policy
+) ON boutiques TO anon$stmt$;
 EXCEPTION
   WHEN undefined_column OR undefined_table OR undefined_object
     OR duplicate_object OR duplicate_table OR duplicate_column THEN
