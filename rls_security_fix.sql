@@ -41,6 +41,20 @@ ALTER TABLE collection_items      ENABLE ROW LEVEL SECURITY;
 -- (closes the linter's CRITICAL "RLS Disabled in Public" finding).
 ALTER TABLE IF EXISTS delivery_batches ENABLE ROW LEVEL SECURITY;
 
+-- ── 1b. Column-level lockdown on the publicly-browsable boutiques table ───────
+-- boutiques is intentionally readable by anon (public storefront browsing), but
+-- RLS is ROW-level only — it can't hide columns. Without this, the anon key
+-- (shipped in the app) can pull owner PII + Stripe ids + confidential financials
+-- straight from PostgREST (select=*), bypassing the API's column allow-list.
+-- Revoke the sensitive columns from anon; the safe browse columns stay readable.
+-- (authenticated/admin keep full access via the API + admin JWT.)
+REVOKE SELECT (
+  user_id, owner_name, email, phone,
+  stripe_account_id, stripe_onboarded, fcm_token,
+  total_revenue, dd_take, commission_rate, pickup_commission_rate,
+  approved_by, suspended_at, suspension_reason
+) ON boutiques FROM anon;
+
 -- ── 2. Drop any existing stale policies before re-creating ───────────────────
 -- (prevents duplicate policy errors if this runs more than once)
 

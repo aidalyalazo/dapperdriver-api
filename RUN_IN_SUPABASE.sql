@@ -801,6 +801,19 @@ EXCEPTION
 END $run$;
 
 DO $run$ BEGIN
+  EXECUTE $stmt$REVOKE SELECT (
+  user_id, owner_name, email, phone,
+  stripe_account_id, stripe_onboarded, fcm_token,
+  total_revenue, dd_take, commission_rate, pickup_commission_rate,
+  approved_by, suspended_at, suspension_reason
+) ON boutiques FROM anon$stmt$;
+EXCEPTION
+  WHEN undefined_column OR undefined_table OR undefined_object
+    OR duplicate_object OR duplicate_table OR duplicate_column THEN
+    RAISE NOTICE 'SKIPPED: %', SQLERRM;
+END $run$;
+
+DO $run$ BEGIN
   EXECUTE $stmt$DO $$ DECLARE
   r RECORD;
 BEGIN
