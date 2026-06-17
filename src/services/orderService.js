@@ -542,11 +542,11 @@ async function createOrder({
       'fn_apply_order_stock', { p_items: stockItems }
     );
     if (stockErr) {
-      // Roll back the just-created order so we never leave a paid-but-unstocked ghost.
-      await supabaseAdmin.from('orders').update({ status: 'cancelled', cancelled_at: new Date().toISOString() }).eq('id', orderId);
-      throw Object.assign(new Error(stockErr.message), { status: 500 });
-    }
-    if (stockResult && stockResult.success === false) {
+      // Fail OPEN: if the RPC itself errors (e.g. migration 020 not yet run on
+      // this environment), don't break checkout — log and proceed without the
+      // atomic decrement (same as pre-fix behavior). Sold-out is handled below.
+      console.error('[ORDER] fn_apply_order_stock unavailable — skipping atomic decrement:', stockErr.message);
+    } else if (stockResult && stockResult.success === false) {
       await supabaseAdmin.from('orders').update({ status: 'cancelled', cancelled_at: new Date().toISOString() }).eq('id', orderId);
       const unavailableIds = (stockResult.failures || []).map((f) => f.product_id);
       throw Object.assign(
