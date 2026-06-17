@@ -375,6 +375,65 @@ router.delete(
 );
 
 /**
+ * GET /api/v1/integrations/duplicates
+ * Possible-duplicate product groups for this boutique (same name) — for the
+ * owner to review/merge anything the sync-time auto-adopt didn't catch.
+ */
+router.get(
+  '/duplicates',
+  authenticate,
+  requireRole('boutique'),
+  asyncHandler(async (req, res) => {
+    const boutiqueId = await getBoutiqueId(req.userId);
+    if (!boutiqueId) return res.status(404).json({ error: 'Boutique not found' });
+    const { findDuplicateGroups } = require('../services/integrationProducts');
+    res.json({ groups: await findDuplicateGroups(boutiqueId) });
+  })
+);
+
+/**
+ * POST /api/v1/integrations/duplicates/merge
+ * Body: { keep_product_id, remove_product_id }
+ * Keep one listing, hide the other (status=inactive). Past orders are
+ * unaffected (order_items snapshot name/price at purchase).
+ */
+router.post(
+  '/duplicates/merge',
+  authenticate,
+  requireRole('boutique'),
+  [body('keep_product_id').isUUID(), body('remove_product_id').isUUID()],
+  validate,
+  asyncHandler(async (req, res) => {
+    const boutiqueId = await getBoutiqueId(req.userId);
+    if (!boutiqueId) return res.status(404).json({ error: 'Boutique not found' });
+    const { keep_product_id, remove_product_id } = req.body;
+    if (keep_product_id === remove_product_id) {
+      return res.status(422).json({ error: 'keep and remove must differ' });
+    }
+
+    // Both products must belong to this boutique.
+    const { data: rows } = await supabaseAdmin
+      .from('products')
+      .select('id')
+      .eq('boutique_id', boutiqueId)
+      .in('id', [keep_product_id, remove_product_id]);
+    if (!rows || rows.length !== 2) {
+      return res.status(404).json({ error: 'Products not found for this boutique' });
+    }
+
+    // Hide the removed listing and drop any integration mapping pointing at it
+    // so future syncs don't resurrect it.
+    await supabaseAdmin.from('products')
+      .update({ status: 'inactive', updated_at: new Date().toISOString() })
+      .eq('id', remove_product_id).eq('boutique_id', boutiqueId);
+    await supabaseAdmin.from('integration_product_map')
+      .delete().eq('dapper_product_id', remove_product_id);
+
+    res.json({ merged: true, kept: keep_product_id, removed: remove_product_id });
+  })
+);
+
+/**
  * GET /api/v1/integrations/products/:productId/stock
  * Get live stock count from the integrated platform for a product.
  * Used when shopper views a product to show real-time availability.

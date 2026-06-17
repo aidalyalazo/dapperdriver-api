@@ -199,40 +199,33 @@ async function syncProducts(integrationId) {
 
           skipped++;
         } else {
-          // New product — insert into DapperDriver
-          const { data: newProduct, error: prodErr } = await supabaseAdmin
-            .from('products')
-            .insert({
-              boutique_id:   boutique_id,
-              name:          sp.title,
-              description:   sp.body_html?.replace(/<[^>]*>/g, '') || null,
-              price:         price || 0.01,
-              compare_price: comparePrice,
-              category:      mapShopifyCategory(sp.product_type),
-              images,
-              sizes,
-              stock:         totalStock,
-              tags:          sp.tags ? sp.tags.split(',').map(t => t.trim()) : [],
-              status:        'active',
-              source:        'shopify',
-            })
-            .select('id')
-            .single();
-
-          if (prodErr) { console.error('[Shopify sync] Product insert error:', prodErr.message); errors++; continue; }
-
-          // Record the mapping
-          await supabaseAdmin
-            .from('integration_product_map')
-            .insert({
-              integration_id:     integrationId,
-              dapper_product_id:  newProduct.id,
-              external_product_id: String(sp.id),
-              external_variant_id: String(variant.id || ''),
-              last_stock_sync:    new Date().toISOString(),
+          // New to this integration — adopt a matching manual product if one
+          // exists (by SKU/name), else insert. Prevents duplicate listings.
+          const { importSyncedProduct } = require('./integrationProducts');
+          try {
+            const { adopted } = await importSyncedProduct({
+              boutiqueId: boutique_id,
+              integrationId,
+              source: 'shopify',
+              externalProductId: String(sp.id),
+              externalVariantId: String(variant.id || ''),
+              sku: variant.sku || null,
+              stock: totalStock,
+              fields: {
+                name:          sp.title,
+                description:   sp.body_html?.replace(/<[^>]*>/g, '') || null,
+                price:         price || 0.01,
+                compare_price: comparePrice,
+                category:      mapShopifyCategory(sp.product_type),
+                images,
+                sizes,
+                tags:          sp.tags ? sp.tags.split(',').map(t => t.trim()) : [],
+              },
             });
-
-          imported++;
+            if (adopted) skipped++; else imported++;
+          } catch (e) {
+            console.error('[Shopify sync] Import error:', e.message); errors++; continue;
+          }
         }
       } catch (e) {
         console.error('[Shopify sync] Product error:', sp.id, e.message);

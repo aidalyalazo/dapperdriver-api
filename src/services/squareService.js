@@ -225,36 +225,30 @@ async function syncProducts(integrationId) {
             .eq('external_product_id', item.id);
           skipped++;
         } else {
-          const { data: newProduct, error: prodErr } = await supabaseAdmin
-            .from('products')
-            .insert({
-              boutique_id:  boutique_id,
-              name:         itemData.name || 'Untitled',
-              description:  itemData.description || null,
-              price:        price || 0.01,
-              category,
-              images,
-              sizes,
-              stock:        stockCount,
-              status:       'active',
-              source:       'square',
-            })
-            .select('id')
-            .single();
-
-          if (prodErr) { errors++; continue; }
-
-          await supabaseAdmin
-            .from('integration_product_map')
-            .insert({
-              integration_id:     integrationId,
-              dapper_product_id:  newProduct.id,
-              external_product_id: item.id,
-              external_variant_id: variations[0]?.id || null,
-              last_stock_sync:    new Date().toISOString(),
+          // Adopt a matching manual product if one exists, else insert.
+          const { importSyncedProduct } = require('./integrationProducts');
+          try {
+            const { adopted } = await importSyncedProduct({
+              boutiqueId: boutique_id,
+              integrationId,
+              source: 'square',
+              externalProductId: item.id,
+              externalVariantId: variations[0]?.id || null,
+              sku: variations[0]?.item_variation_data?.sku || null,
+              stock: stockCount,
+              fields: {
+                name:        itemData.name || 'Untitled',
+                description: itemData.description || null,
+                price:       price || 0.01,
+                category,
+                images,
+                sizes,
+              },
             });
-
-          imported++;
+            if (adopted) skipped++; else imported++;
+          } catch (e) {
+            console.error('[Square sync] Import error:', e.message); errors++; continue;
+          }
         }
       } catch (e) {
         console.error('[Square sync] Item error:', item.id, e.message);

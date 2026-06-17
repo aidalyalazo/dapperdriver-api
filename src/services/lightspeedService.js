@@ -261,37 +261,32 @@ async function syncProducts(integrationId) {
             .eq('external_product_id', String(item.itemID));
           skipped++;
         } else {
-          const { data: newProduct, error: prodErr } = await supabaseAdmin
-            .from('products')
-            .insert({
-              boutique_id:   integration.boutique_id,
-              name:          item.description || item.systemSku || 'Untitled',
-              description:   item.longDescription || null,
-              price:         price || 0.01,
-              compare_price: comparePrice && comparePrice > price ? comparePrice : null,
-              category,
-              images,
-              sizes,
-              stock:         totalStock,
-              tags:          item.tags ? item.tags.split(',').map(t => t.trim()) : [],
-              status:        'active',
-              source:        'lightspeed',
-            })
-            .select('id')
-            .single();
-
-          if (prodErr) { console.error('[Lightspeed] Insert error:', prodErr.message); errors++; continue; }
-
-          await supabaseAdmin
-            .from('integration_product_map')
-            .insert({
-              integration_id:     integrationId,
-              dapper_product_id:  newProduct.id,
-              external_product_id: String(item.itemID),
-              last_stock_sync:    new Date().toISOString(),
+          // Adopt a matching manual product if one exists, else insert.
+          const { importSyncedProduct } = require('./integrationProducts');
+          try {
+            const { adopted } = await importSyncedProduct({
+              boutiqueId: integration.boutique_id,
+              integrationId,
+              source: 'lightspeed',
+              externalProductId: String(item.itemID),
+              externalVariantId: null,
+              sku: item.customSku || item.systemSku || null,
+              stock: totalStock,
+              fields: {
+                name:          item.description || item.systemSku || 'Untitled',
+                description:   item.longDescription || null,
+                price:         price || 0.01,
+                compare_price: comparePrice && comparePrice > price ? comparePrice : null,
+                category,
+                images,
+                sizes,
+                tags:          item.tags ? item.tags.split(',').map(t => t.trim()) : [],
+              },
             });
-
-          imported++;
+            if (adopted) skipped++; else imported++;
+          } catch (e) {
+            console.error('[Lightspeed] Import error:', e.message); errors++; continue;
+          }
         }
       } catch (e) {
         console.error('[Lightspeed] Item error:', item.itemID, e.message);
