@@ -210,15 +210,25 @@ async function assignDriverToOrder(order, driver, boutiqueLat, boutiqueLng) {
   }
 
   const now = new Date().toISOString();
-  await Promise.resolve(supabaseAdmin
+  // Compare-and-swap: only claim the order if it's STILL ready_for_pickup with
+  // no driver. If a concurrent auto-assign / retry / admin assignment already
+  // grabbed it, no row updates and we bail — preventing a double-assignment.
+  const { data: claimed, error: claimErr } = await supabaseAdmin
     .from('orders')
     .update({
       driver_id: driver.id,
       status: 'driver_assigned',
       driver_assigned_at: now,
     })
-    .eq('id', orderId))
-    .catch(() => {});
+    .eq('id', orderId)
+    .eq('status', 'ready_for_pickup')
+    .is('driver_id', null)
+    .select('id');
+
+  if (claimErr || !claimed || claimed.length === 0) {
+    console.log(`[DRIVER ASSIGN] Order ${orderId} already claimed — skipping ${driver.id}`);
+    return false;
+  }
 
   // NOTE: we intentionally no longer flip the driver to 'busy'. Capacity is
   // now derived from their live active-order count (getDriverActiveOrderCount),
@@ -248,6 +258,7 @@ async function assignDriverToOrder(order, driver, boutiqueLat, boutiqueLng) {
   console.log(
     `[DRIVER ASSIGN] Assigned driver ${driver.id} to order ${orderId} (${dist.toFixed(1)} miles)`
   );
+  return true;
 }
 
 /**

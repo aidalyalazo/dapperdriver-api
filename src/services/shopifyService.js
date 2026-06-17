@@ -26,7 +26,8 @@ const SHOPIFY_SCOPE = 'read_products,read_inventory,write_inventory';
 function buildInstallUrl(shopDomain, boutiqueId) {
   const apiKey = process.env.SHOPIFY_API_KEY;
   const redirectUri = encodeURIComponent(`${process.env.API_BASE_URL}/api/v1/integrations/shopify/callback`);
-  const state = Buffer.from(JSON.stringify({ boutique_id: boutiqueId })).toString('base64');
+  const { signState } = require('../utils/oauthState');
+  const state = signState({ boutique_id: boutiqueId });
   const scope = encodeURIComponent(SHOPIFY_SCOPE);
   return `https://${shopDomain}/admin/oauth/authorize?client_id=${apiKey}&scope=${scope}&redirect_uri=${redirectUri}&state=${state}`;
 }

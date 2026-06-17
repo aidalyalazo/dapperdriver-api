@@ -127,19 +127,25 @@ router.post(
 
     const oldTip = parseFloat(order.tip || 0);
     const newTip = oldTip + amount;
+    const tipCents = Math.round(amount * 100);
 
-    // The original PaymentIntent is already captured at delivery.
-    // Tips are billed as a separate charge on the customer's saved payment method.
+    // The original PaymentIntent is already captured at delivery; tips are a
+    // separate off-session charge on the customer's saved card. We must charge
+    // FIRST and only persist the tip if the charge succeeds — otherwise the
+    // driver would be paid a tip the platform never collected.
+    const originalPi = await stripe.paymentIntents.retrieve(order.stripe_payment_intent_id);
+    const paymentMethod = originalPi.payment_method;
+    const customerId = originalPi.customer;
+
+    if (!paymentMethod || !customerId) {
+      return res.status(402).json({
+        error: 'No saved payment method to charge the tip. Please contact support.',
+      });
+    }
+
     try {
-      const tipCents = Math.round(amount * 100);
-
-      // Retrieve original PI to get the payment method used for this order.
-      const originalPi = await stripe.paymentIntents.retrieve(order.stripe_payment_intent_id);
-      const paymentMethod = originalPi.payment_method;
-      const customerId = originalPi.customer;
-
-      if (paymentMethod && customerId) {
-        await stripe.paymentIntents.create({
+      await stripe.paymentIntents.create(
+        {
           amount: tipCents,
           currency: 'usd',
           customer: customerId,
@@ -148,16 +154,17 @@ router.post(
           off_session: true,
           description: `Tip for DapperDriver order ${orderId}`,
           metadata: { order_id: orderId, type: 'tip' },
-        });
-      } else {
-        console.warn('[ORDER] Tip: no payment method on original PI, skipping Stripe charge');
-      }
+        },
+        // Keyed on the order + tip state so a double-tap of the same tip can't
+        // charge twice, while a genuinely separate later tip still goes through.
+        { idempotencyKey: `tip_${orderId}_${oldTip.toFixed(2)}_${amount.toFixed(2)}` }
+      );
     } catch (e) {
       console.warn('[ORDER] Tip charge failed:', e.message);
-      // Record tip in DB regardless — reconcile in next payout cycle.
+      return res.status(402).json({ error: 'Could not charge the tip. Please try again.' });
     }
 
-    // Update order record with cumulative tip
+    // Charge succeeded — now persist the cumulative tip.
     await supabaseAdmin
       .from('orders')
       .update({ tip: newTip })

@@ -19,6 +19,7 @@ const { supabaseAdmin } = require('../config/supabase');
 const shopify    = require('../services/shopifyService');
 const square     = require('../services/squareService');
 const lightspeed = require('../services/lightspeedService');
+const { verifyState, verifyShopifyHmac } = require('../utils/oauthState');
 
 // Resolve boutique ID for current authenticated boutique owner
 async function getBoutiqueId(userId) {
@@ -66,10 +67,14 @@ router.get(
     const { code, shop, state } = req.query;
     if (!code || !shop) return res.status(400).send('Missing code or shop');
 
+    // Verify Shopify's request HMAC, then our signed state — an unsigned/forged
+    // state could bind an attacker's store token to a victim boutique.
+    if (!verifyShopifyHmac(req.query)) {
+      return res.status(400).send('Invalid request signature');
+    }
     let boutiqueId;
     try {
-      const parsed = JSON.parse(Buffer.from(state, 'base64').toString());
-      boutiqueId = parsed.boutique_id;
+      boutiqueId = verifyState(state).boutique_id;
     } catch {
       return res.status(400).send('Invalid state parameter');
     }
@@ -133,7 +138,7 @@ router.get(
 
     let boutiqueId;
     try {
-      boutiqueId = JSON.parse(Buffer.from(state, 'base64').toString()).boutique_id;
+      boutiqueId = verifyState(state).boutique_id;
     } catch {
       return res.status(400).send('Invalid state');
     }
@@ -225,7 +230,7 @@ router.get(
 
     let boutiqueId;
     try {
-      boutiqueId = JSON.parse(Buffer.from(state, 'base64').toString()).boutique_id;
+      boutiqueId = verifyState(state).boutique_id;
     } catch {
       return res.status(400).send('Invalid state parameter');
     }

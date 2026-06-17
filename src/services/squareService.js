@@ -22,7 +22,8 @@ const SQUARE_API_VERSION = '2024-01-17';
 function buildInstallUrl(boutiqueId) {
   const clientId = process.env.SQUARE_APP_ID;
   const redirectUri = encodeURIComponent(`${process.env.API_BASE_URL}/api/v1/integrations/square/callback`);
-  const state = Buffer.from(JSON.stringify({ boutique_id: boutiqueId })).toString('base64');
+  const { signState } = require('../utils/oauthState');
+  const state = signState({ boutique_id: boutiqueId });
   const scope = 'ITEMS_READ INVENTORY_READ INVENTORY_WRITE MERCHANT_PROFILE_READ';
   return `https://connect.squareup.com/oauth2/authorize?client_id=${clientId}&scope=${scope}&redirect_uri=${redirectUri}&state=${state}&session=false`;
 }
