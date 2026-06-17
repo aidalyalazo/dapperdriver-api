@@ -550,7 +550,26 @@ EXCEPTION
 END $run$;
 
 
--- ── M. RLS security hardening ─────────────────────────────────────────────
+-- ── M. Migration 021 — boutique return policy ─────────────────────────────
+
+DO $run$ BEGIN
+  EXECUTE $stmt$ALTER TABLE boutiques ADD COLUMN IF NOT EXISTS accepts_returns BOOLEAN NOT NULL DEFAULT false$stmt$;
+EXCEPTION
+  WHEN undefined_column OR undefined_table OR undefined_object
+    OR duplicate_object OR duplicate_table OR duplicate_column THEN
+    RAISE NOTICE 'SKIPPED: %', SQLERRM;
+END $run$;
+
+DO $run$ BEGIN
+  EXECUTE $stmt$ALTER TABLE boutiques ADD COLUMN IF NOT EXISTS return_policy TEXT$stmt$;
+EXCEPTION
+  WHEN undefined_column OR undefined_table OR undefined_object
+    OR duplicate_object OR duplicate_table OR duplicate_column THEN
+    RAISE NOTICE 'SKIPPED: %', SQLERRM;
+END $run$;
+
+
+-- ── N. RLS security hardening ─────────────────────────────────────────────
 
 DO $run$ BEGIN
   EXECUTE $stmt$ALTER TABLE orders                ENABLE ROW LEVEL SECURITY$stmt$;

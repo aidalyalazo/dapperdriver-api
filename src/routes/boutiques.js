@@ -36,7 +36,7 @@ router.get(
       // column would 500 the whole browse if the (additive) migration 017
       // hasn't run yet. The detail route below uses select('*'), which returns
       // it safely once the column exists.
-      .select('id, name, slug, description, logo_url, logo_initials, logo_bg, campaign_images, address, state, city_id, rating, review_count, follower_count, primary_category, category_tags, style_tags, price_tier, status, try_on_enabled', { count: 'exact' })
+      .select('id, name, slug, description, logo_url, logo_initials, logo_bg, campaign_images, address, state, city_id, rating, review_count, follower_count, primary_category, category_tags, style_tags, price_tier, status, try_on_enabled, accepts_returns, return_policy', { count: 'exact' })
       .order('rating', { ascending: false })
       .range((page - 1) * limit, page * limit - 1);
 
@@ -92,7 +92,7 @@ router.get(
     // to unauthenticated callers. Mirror the public list route's columns.
     const { data, error } = await supabaseAdmin
       .from('boutiques')
-      .select('id, name, slug, description, logo_url, logo_initials, logo_bg, campaign_images, address, state, city_id, rating, review_count, follower_count, primary_category, category_tags, style_tags, price_tier, status, try_on_enabled')
+      .select('id, name, slug, description, logo_url, logo_initials, logo_bg, campaign_images, address, state, city_id, rating, review_count, follower_count, primary_category, category_tags, style_tags, price_tier, status, try_on_enabled, accepts_returns, return_policy')
       .eq('id', req.params.id)
       .single();
 
@@ -199,7 +199,8 @@ router.patch(
     // when a fit selector ships.
     const allowed = ['name', 'description', 'phone', 'address', 'logo_url', 'logo_initials', 'logo_bg',
                      'campaign_images', 'style_tags', 'category_tags',
-                     'primary_category', 'price_tier', 'email', 'website', 'slug', 'owner_name'];
+                     'primary_category', 'price_tier', 'email', 'website', 'slug', 'owner_name',
+                     'accepts_returns', 'return_policy'];
 
     // Map client field names to DB column names
     const fieldMap = { bio: 'description', tags: 'style_tags', banner_url: 'logo_bg' };

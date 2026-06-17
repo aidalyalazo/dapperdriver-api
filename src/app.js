@@ -40,6 +40,7 @@ require('./jobs/tryOnCircuitBreakerJob');
 // Ops recovery jobs
 require('./jobs/stalledOrderSweep');
 require('./jobs/payoutReconciliationJob');
+require('./jobs/moneyReconciliationJob');
 
 const { errorHandler } = require('./middleware/errorHandler');
 
