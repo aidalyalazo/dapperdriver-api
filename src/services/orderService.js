@@ -61,6 +61,29 @@ const STATUS_NOTIFICATIONS = {
  *  - If the boutique is currently closed, the clock starts at next opening time.
  *  - Returns { estimatedAt: Date, isOutsideHours: bool, nextOpenTime: string|null, queueDepth: number }
  */
+/**
+ * Find the next time a boutique opens, on or after the day AFTER `dayOfWeek`.
+ * @returns {{ at: Date, label: string } | null} null when no day is ever open.
+ */
+function findNextOpen(hoursRows, dayOfWeek, now) {
+  const sorted = (hoursRows || [])
+    .filter((r) => !r.is_closed && r.open_time)
+    .sort((a, b) => {
+      const da = (a.day_of_week - dayOfWeek + 7) % 7 || 7;
+      const db = (b.day_of_week - dayOfWeek + 7) % 7 || 7;
+      return da - db;
+    });
+  if (sorted.length === 0) return null;
+  const next = sorted[0];
+  const daysAhead = (next.day_of_week - dayOfWeek + 7) % 7 || 7;
+  const at = new Date(now);
+  at.setDate(at.getDate() + daysAhead);
+  const [nh, nm] = next.open_time.split(':').map(Number);
+  at.setHours(nh, nm, 0, 0);
+  const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  return { at, label: `${dayNames[next.day_of_week]} at ${next.open_time.slice(0, 5)}` };
+}
+
 async function calculateEstimatedDelivery(boutiqueId) {
   const BASE_MINUTES   = 45;  // minimum delivery time in minutes
   const PER_ORDER_MINS = 15;  // extra minutes per queued order
@@ -98,72 +121,57 @@ async function calculateEstimatedDelivery(boutiqueId) {
 
   let isOutsideHours = false;
   let nextOpenTime   = null;
+  let nextOpenAt     = null; // Date when the boutique next opens (null = open now)
   let clockStart     = new Date(now); // when the delivery clock starts ticking
 
-  if (!isClosedToday) {
+  // A boutique with NO configured open hours has no schedule to be "closed"
+  // against — treat it as open now (deliver in the base window). Without this
+  // guard, an unconfigured boutique fell through every branch with
+  // clockStart=now but isOutsideHours=true → "closed, but delivering in 2h
+  // today", which is nonsense.
+  const hasOpenHours = (hoursRows || [])
+    .some((r) => !r.is_closed && r.open_time && r.close_time);
+
+  if (hasOpenHours && !isClosedToday) {
     const openTime  = todayAt(todayHours.open_time);
     const closeTime = todayAt(todayHours.close_time);
 
     if (now < openTime) {
-      // Too early — order queues for opening time
+      // Too early today — order queues for today's opening time (same day)
       isOutsideHours = true;
       clockStart     = openTime;
+      nextOpenAt     = openTime;
       nextOpenTime   = todayHours.open_time.slice(0, 5); // "HH:MM"
     } else if (now >= closeTime) {
-      // After close — find next open day
+      // After close — order is delivered the NEXT day the boutique opens
       isOutsideHours = true;
-      const sorted = (hoursRows || [])
-        .filter((r) => !r.is_closed && r.open_time)
-        .sort((a, b) => {
-          const da = (a.day_of_week - dayOfWeek + 7) % 7 || 7;
-          const db = (b.day_of_week - dayOfWeek + 7) % 7 || 7;
-          return da - db;
-        });
-      if (sorted.length > 0) {
-        const next       = sorted[0];
-        const daysAhead  = (next.day_of_week - dayOfWeek + 7) % 7 || 7;
-        clockStart       = new Date(now);
-        clockStart.setDate(clockStart.getDate() + daysAhead);
-        const [nh, nm]   = next.open_time.split(':').map(Number);
-        clockStart.setHours(nh, nm, 0, 0);
-        const dayNames   = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-        nextOpenTime     = `${dayNames[next.day_of_week]} at ${next.open_time.slice(0, 5)}`;
-      }
+      const next = findNextOpen(hoursRows, dayOfWeek, now);
+      if (next) { clockStart = next.at; nextOpenAt = next.at; nextOpenTime = next.label; }
     }
     // else: currently open — clockStart stays as now
-  } else {
-    // Boutique closed all day today — find next open day
+  } else if (hasOpenHours) {
+    // Closed all day today — find the next open day
     isOutsideHours = true;
-    const sorted = (hoursRows || [])
-      .filter((r) => !r.is_closed && r.open_time)
-      .sort((a, b) => {
-        const da = (a.day_of_week - dayOfWeek + 7) % 7 || 7;
-        const db = (b.day_of_week - dayOfWeek + 7) % 7 || 7;
-        return da - db;
-      });
-    if (sorted.length > 0) {
-      const next      = sorted[0];
-      const daysAhead = (next.day_of_week - dayOfWeek + 7) % 7 || 7;
-      clockStart      = new Date(now);
-      clockStart.setDate(clockStart.getDate() + daysAhead);
-      const [nh, nm]  = next.open_time.split(':').map(Number);
-      clockStart.setHours(nh, nm, 0, 0);
-      const dayNames  = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-      nextOpenTime    = `${dayNames[next.day_of_week]} at ${next.open_time.slice(0, 5)}`;
-    }
+    const next = findNextOpen(hoursRows, dayOfWeek, now);
+    if (next) { clockStart = next.at; nextOpenAt = next.at; nextOpenTime = next.label; }
   }
+  // else (no hasOpenHours): no schedule configured → open now, defaults stand.
 
-  // Same-day delivery. After-hours orders are delivered the same day the
-  // boutique reopens; the offset from opening is capped at 120 min so the
-  // estimate timestamp stays realistic. (Rush sub-2h delivery is a
-  // surcharge add-on requested per order, handled separately.)
+  // Delivery window. When open, base + queue. When queued for a future opening,
+  // the offset from opening is capped at 120 min so the timestamp stays tidy —
+  // but the clock starts at the real next-open time, so a Tuesday-night order
+  // for a shop that reopens Wednesday lands Wednesday, not the same night.
   const deliveryOffsetMins = isOutsideHours
     ? Math.min(BASE_MINUTES + totalExtraMinutes, 120)
     : BASE_MINUTES + totalExtraMinutes;
 
   const estimatedAt = new Date(clockStart.getTime() + deliveryOffsetMins * 60 * 1000);
 
-  return { estimatedAt, isOutsideHours, nextOpenTime, queueDepth: depth };
+  // True only when the order will actually be delivered on a later calendar day.
+  const isNextDay = nextOpenAt != null &&
+    estimatedAt.toDateString() !== now.toDateString();
+
+  return { estimatedAt, isOutsideHours, isNextDay, nextOpenTime, queueDepth: depth };
 }
 
 /**

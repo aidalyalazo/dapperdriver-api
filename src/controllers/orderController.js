@@ -168,6 +168,7 @@ const createOrder = [
       // Delivery timing — used by Flutter to show estimated window + outside-hours warning
       estimated_delivery_at: estimate.estimatedAt?.toISOString() || null,
       is_outside_hours: estimate.isOutsideHours || false,
+      is_next_day: estimate.isNextDay || false,
       next_open_time: estimate.nextOpenTime || null,
       queue_depth: estimate.queueDepth ?? 0,
     });
