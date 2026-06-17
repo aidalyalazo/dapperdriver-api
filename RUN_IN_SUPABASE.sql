@@ -793,6 +793,14 @@ EXCEPTION
 END $run$;
 
 DO $run$ BEGIN
+  EXECUTE $stmt$ALTER TABLE IF EXISTS delivery_batches ENABLE ROW LEVEL SECURITY$stmt$;
+EXCEPTION
+  WHEN undefined_column OR undefined_table OR undefined_object
+    OR duplicate_object OR duplicate_table OR duplicate_column THEN
+    RAISE NOTICE 'SKIPPED: %', SQLERRM;
+END $run$;
+
+DO $run$ BEGIN
   EXECUTE $stmt$DO $$ DECLARE
   r RECORD;
 BEGIN

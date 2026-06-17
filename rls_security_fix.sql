@@ -36,6 +36,10 @@ ALTER TABLE shopper_interactions  ENABLE ROW LEVEL SECURITY;
 ALTER TABLE search_logs           ENABLE ROW LEVEL SECURITY;
 ALTER TABLE collections           ENABLE ROW LEVEL SECURITY;
 ALTER TABLE collection_items      ENABLE ROW LEVEL SECURITY;
+-- delivery_batches (migration 015) — API-only table accessed via the service
+-- role, which bypasses RLS. Enabling RLS with no policy denies anon-key access
+-- (closes the linter's CRITICAL "RLS Disabled in Public" finding).
+ALTER TABLE IF EXISTS delivery_batches ENABLE ROW LEVEL SECURITY;
 
 -- ── 2. Drop any existing stale policies before re-creating ───────────────────
 -- (prevents duplicate policy errors if this runs more than once)
