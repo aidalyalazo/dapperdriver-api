@@ -44,11 +44,15 @@ are set, its "Connect" button just fails gracefully — nothing breaks.
   navy") shows up under **Boutique portal → Integrations → Review Duplicates**,
   where the owner taps "Keep this" on one and the rest are hidden.
 
-## Recommended hardening before heavy use (not blocking)
-- **Encrypt access tokens at rest.** Integration access/refresh tokens are
-  currently stored in plaintext in `boutique_integrations`. For production at
-  scale, add column encryption (e.g. AES-256 with a `TOKEN_ENC_KEY`, encrypt on
-  write in the callbacks, decrypt where the sync reads them). Functional without
-  it; this is defense-in-depth for a DB compromise.
-- **Webhook-based stock** (vs. polling `Sync Now`) for near-real-time stock —
-  a later enhancement.
+## Token encryption at rest — DONE ✅
+Integration access/refresh tokens are encrypted with **AES-256-GCM**
+(`utils/tokenCrypto.js`) on write and decrypted on read. The key derives from
+`TOKEN_ENC_KEY` if set, else the service-role key. Legacy plaintext tokens keep
+working and re-encrypt on next write (no migration needed).
+- **Recommended:** set a dedicated `TOKEN_ENC_KEY` (any long random string) in
+  Railway so token encryption doesn't depend on the service-role key. If you set
+  it AFTER tokens already exist, reconnect those integrations once so they
+  re-encrypt under the new key.
+
+## Later enhancement (not blocking)
+- **Webhook-based stock** (vs. polling `Sync Now`) for near-real-time updates.
