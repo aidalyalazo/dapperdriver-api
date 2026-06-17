@@ -527,19 +527,45 @@ const markItemUnavailable = [
       });
     }
 
-    const { data: items } = await supabaseAdmin
-      .from('order_items').select('*').eq('order_id', orderId);
-    const target = (items || []).find((i) => i.id === itemId);
-    if (!target) return res.status(404).json({ error: 'Order item not found' });
-    if (target.unavailable) return res.status(409).json({ error: 'Item already marked unavailable' });
+    // ── Atomically CLAIM the item (false→true) so two concurrent calls can't
+    // both refund the same line. The conditional update IS the lock.
+    const { data: claimedRows } = await supabaseAdmin.from('order_items')
+      .update({ unavailable: true, unavailable_at: new Date().toISOString() })
+      .eq('id', itemId)
+      .eq('order_id', orderId)
+      .eq('unavailable', false)
+      .select();
+    const target = (claimedRows || [])[0];
+    if (!target) {
+      // Either the item doesn't exist on this order, or it was already claimed.
+      const { data: exists } = await supabaseAdmin
+        .from('order_items').select('id').eq('id', itemId).eq('order_id', orderId).maybeSingle();
+      return exists
+        ? res.status(409).json({ error: 'Item already marked unavailable' })
+        : res.status(404).json({ error: 'Order item not found' });
+    }
 
-    const activeItems = (items || []).filter((i) => !i.unavailable);
     const lineQty = target.quantity ?? target.qty ?? 1;
     const lineAmount = Math.round(Number(target.unit_price ?? target.price ?? 0) * lineQty * 100) / 100;
-    const remainingAfter = activeItems.filter((i) => i.id !== itemId);
 
-    // Last remaining item → cancel the whole order + full refund.
-    if (remainingAfter.length === 0) {
+    // Effective rates from the stored order (the ratio is stable across removals).
+    const deliveryFee = Number(order.delivery_fee ?? 0);
+    const serviceFee = Number(order.service_fee ?? 0);
+    const tip = Number(order.tip ?? 0);
+    const promoDiscount = Number(order.promo_discount ?? 0);
+    const baseSubtotal = Number(order.subtotal ?? 0);
+    const taxableBase = baseSubtotal + deliveryFee - promoDiscount;
+    const taxRate = taxableBase > 0 ? Number(order.tax ?? 0) / taxableBase : 0;
+    const commissionRate = baseSubtotal > 0 ? Number(order.dd_commission_amount ?? 0) / baseSubtotal : 0;
+
+    // Re-read the LIVE remaining items AFTER claiming, so concurrent removals each
+    // recompute the order total from the true current state (no stale subtotal).
+    const { data: liveItems } = await supabaseAdmin
+      .from('order_items').select('unit_price, price, quantity, qty, unavailable').eq('order_id', orderId);
+    const remaining = (liveItems || []).filter((i) => !i.unavailable);
+
+    // Last item gone → cancel + full refund.
+    if (remaining.length === 0) {
       if (order.stripe_payment_intent_id) {
         try {
           const pi = await stripe.paymentIntents.retrieve(order.stripe_payment_intent_id);
@@ -553,35 +579,15 @@ const markItemUnavailable = [
           return res.status(502).json({ error: 'Could not refund the payment. Please try again or contact support.' });
         }
       }
-      await supabaseAdmin.from('order_items')
-        .update({ unavailable: true, unavailable_at: new Date().toISOString() })
-        .eq('id', itemId);
       const updated = await orderService.updateOrderStatus({ orderId, newStatus: 'cancelled', actorId: req.userId });
       await notifyShopperItemGone({ order, itemName: target.name, cancelled: true });
       return res.json({ order: updated, cancelled: true });
     }
 
-    // Recompute money from the remaining items. Effective tax/commission rates
-    // are derived from the stored order so we never re-read platform settings.
-    const oldSubtotal = Number(order.subtotal ?? 0);
-    const newSubtotal = Math.round((oldSubtotal - lineAmount) * 100) / 100;
-    const deliveryFee = Number(order.delivery_fee ?? 0);
-    const serviceFee = Number(order.service_fee ?? 0);
-    const tip = Number(order.tip ?? 0);
-    const promoDiscount = Number(order.promo_discount ?? 0);
-
-    const taxableBase = oldSubtotal + deliveryFee - promoDiscount;
-    const taxRate = taxableBase > 0 ? Number(order.tax ?? 0) / taxableBase : 0;
-    const commissionRate = oldSubtotal > 0 ? Number(order.dd_commission_amount ?? 0) / oldSubtotal : 0;
-
-    const newTaxableBase = newSubtotal + deliveryFee - promoDiscount;
-    const newTax = Math.round(newTaxableBase * taxRate * 100) / 100;
-    const newCommission = Math.round(newSubtotal * commissionRate * 100) / 100;
-    const newBoutiqueEarnings = Math.round((newSubtotal - newCommission) * 100) / 100;
-    const newTotal = Math.round(
-      (newSubtotal + deliveryFee + serviceFee + newTax + tip - promoDiscount) * 100
-    ) / 100;
-    const refundAmount = Math.round((Number(order.total_amount ?? 0) - newTotal) * 100) / 100;
+    // Refund for THIS line = its price + its tax share (concurrency-safe: each
+    // line is claimed exactly once, so it's refunded exactly once).
+    const lineTax = Math.round(lineAmount * taxRate * 100) / 100;
+    const refundAmount = Math.round((lineAmount + lineTax) * 100) / 100;
 
     if (order.stripe_payment_intent_id && refundAmount > 0) {
       try {
@@ -596,9 +602,16 @@ const markItemUnavailable = [
       }
     }
 
-    await supabaseAdmin.from('order_items')
-      .update({ unavailable: true, unavailable_at: new Date().toISOString() })
-      .eq('id', itemId);
+    // Recompute order money from the LIVE remaining items.
+    const newSubtotal = Math.round(
+      remaining.reduce((s, i) => s + Number(i.unit_price ?? i.price ?? 0) * (i.quantity ?? i.qty ?? 1), 0) * 100
+    ) / 100;
+    const newTax = Math.round((newSubtotal + deliveryFee - promoDiscount) * taxRate * 100) / 100;
+    const newCommission = Math.round(newSubtotal * commissionRate * 100) / 100;
+    const newBoutiqueEarnings = Math.round((newSubtotal - newCommission) * 100) / 100;
+    const newTotal = Math.round(
+      (newSubtotal + deliveryFee + serviceFee + newTax + tip - promoDiscount) * 100
+    ) / 100;
 
     const { data: updatedOrder } = await supabaseAdmin.from('orders')
       .update({

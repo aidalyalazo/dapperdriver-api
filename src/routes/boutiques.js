@@ -87,9 +87,12 @@ router.get(
   '/:id',
   asyncHandler(async (req, res, next) => {
     if (req.params.id === 'me') return next('route');
+    // Public endpoint — explicit allow-list only. NEVER select('*') here: that
+    // leaked owner email, phone, auth user_id, fcm_token and stripe_account_id
+    // to unauthenticated callers. Mirror the public list route's columns.
     const { data, error } = await supabaseAdmin
       .from('boutiques')
-      .select('*')
+      .select('id, name, slug, description, logo_url, logo_initials, logo_bg, campaign_images, address, state, city_id, rating, review_count, follower_count, primary_category, category_tags, style_tags, price_tier, status, try_on_enabled')
       .eq('id', req.params.id)
       .single();
 

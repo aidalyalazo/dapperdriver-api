@@ -32,42 +32,14 @@ async function cashOut({ recipientId, recipientType }) {
   // Use the table row ID for order lookups (orders reference driver.id / boutique.id, not user_id)
   const tableRowId = recipient.id;
 
-  // Get unpaid orders
-  const { data: orders } = await Promise.resolve(supabaseAdmin
-    .from('orders')
-    .select(`id, ${earningsCol}, tip`)
-    .eq(orderFilter, tableRowId)
-    .in('status', ['delivered', 'completed'])
-    .eq(paidCol, false))
-    .catch(() => ({ data: [] }));
-
-  if (!orders || orders.length === 0) {
-    throw Object.assign(new Error('No unpaid earnings available'), { status: 400 });
-  }
-
-  // Calculate total earnings
-  let total = 0;
-  for (const o of orders) {
-    total += parseFloat(o[earningsCol] || 0);
-    // For drivers, also add tips
-    if (recipientType === 'driver') {
-      total += parseFloat(o.tip || 0);
-    }
-  }
-
-  if (total <= 0) {
-    throw Object.assign(new Error('Nothing to pay out'), { status: 400 });
-  }
-
-  const amountCents = Math.round(total * 100);
-
-  // Create payout record
+  // Create the payout record first so we can stamp its id onto the orders we
+  // claim. Amount is finalized after the atomic claim below.
   const { data: payout, error: payoutErr } = await Promise.resolve(supabaseAdmin
     .from('payouts')
     .insert({
       recipient_id: recipientId,
       recipient_type: recipientType,
-      amount: total,
+      amount: 0,
       status: 'processing',
     })
     .select()
@@ -77,8 +49,56 @@ async function cashOut({ recipientId, recipientType }) {
     throw Object.assign(new Error(`Failed to create payout record: ${payoutErr?.message || 'unknown'}`), { status: 500 });
   }
 
+  // ── Atomic claim: flip paidCol false→true and stamp payout_id in ONE update,
+  // returning only the rows THIS call claimed. Two concurrent cashouts therefore
+  // partition the unpaid orders — neither can pay an order the other already took.
+  const paidUpdate = {};
+  paidUpdate[paidCol] = true;
+  paidUpdate.payout_id = payout.id;
+
+  const { data: claimed } = await Promise.resolve(supabaseAdmin
+    .from('orders')
+    .update(paidUpdate)
+    .eq(orderFilter, tableRowId)
+    .in('status', ['delivered', 'completed'])
+    .eq(paidCol, false)
+    .select(`id, ${earningsCol}, tip`))
+    .catch(() => ({ data: [] }));
+
+  // Helper to release any rows we claimed (used when we bail out / transfer fails).
+  const releaseClaim = async () => {
+    const release = {};
+    release[paidCol] = false;
+    release.payout_id = null;
+    await Promise.resolve(supabaseAdmin
+      .from('orders').update(release).eq('payout_id', payout.id)).catch(() => {});
+  };
+
+  if (!claimed || claimed.length === 0) {
+    await releaseClaim();
+    await Promise.resolve(supabaseAdmin.from('payouts').update({ status: 'failed' }).eq('id', payout.id)).catch(() => {});
+    throw Object.assign(new Error('No unpaid earnings available'), { status: 400 });
+  }
+
+  // Total the claimed rows (drivers also receive tips).
+  let total = 0;
+  for (const o of claimed) {
+    total += parseFloat(o[earningsCol] || 0);
+    if (recipientType === 'driver') total += parseFloat(o.tip || 0);
+  }
+
+  if (total <= 0) {
+    await releaseClaim();
+    await Promise.resolve(supabaseAdmin.from('payouts').update({ status: 'failed' }).eq('id', payout.id)).catch(() => {});
+    throw Object.assign(new Error('Nothing to pay out'), { status: 400 });
+  }
+
+  const amountCents = Math.round(total * 100);
+  await Promise.resolve(supabaseAdmin.from('payouts').update({ amount: total }).eq('id', payout.id)).catch(() => {});
+
   try {
-    // Create Stripe transfer
+    // Idempotency key tied to this payout — a retried request can never create a
+    // second transfer for the same claim.
     const transfer = await stripe.transfers.create({
       amount: amountCents,
       currency: 'usd',
@@ -88,21 +108,7 @@ async function cashOut({ recipientId, recipientType }) {
         recipient_id: recipientId,
         recipient_type: recipientType,
       },
-    });
-
-    // Mark orders as paid and link to payout
-    const paidUpdate = {};
-    paidUpdate[paidCol] = true;
-    paidUpdate.payout_id = payout.id;
-
-    await Promise.resolve(supabaseAdmin
-      .from('orders')
-      .update(paidUpdate)
-      .in(
-        'id',
-        orders.map((o) => o.id)
-      ))
-      .catch(() => {});
+    }, { idempotencyKey: `payout_${payout.id}` });
 
     // Update payout with transfer id
     await Promise.resolve(supabaseAdmin
@@ -127,7 +133,9 @@ async function cashOut({ recipientId, recipientType }) {
 
     return { payout, amount: total, transfer_id: transfer.id };
   } catch (err) {
-    // Clean up payout record on failure
+    // Transfer failed — release the claimed orders back to unpaid so the balance
+    // is withdrawable again, and mark the payout failed.
+    await releaseClaim();
     await Promise.resolve(supabaseAdmin
       .from('payouts')
       .update({ status: 'failed' })

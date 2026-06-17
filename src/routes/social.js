@@ -1,7 +1,7 @@
 const router = require('express').Router();
 const { authenticate, requireRole } = require('../middleware/auth');
 const { asyncHandler } = require('../middleware/errorHandler');
-const { body } = require('express-validator');
+const { body, param } = require('express-validator');
 const { validate } = require('../middleware/validate');
 const { supabaseAdmin } = require('../config/supabase');
 
@@ -493,6 +493,7 @@ router.post(
 router.post(
   '/users/:id/block',
   requireRole('shopper'),
+  [param('id').isUUID().withMessage('id must be a UUID'), validate],
   asyncHandler(async (req, res) => {
     const blockedId = req.params.id;
     if (blockedId === req.userId) {
@@ -522,6 +523,7 @@ router.post(
 router.delete(
   '/users/:id/block',
   requireRole('shopper'),
+  [param('id').isUUID().withMessage('id must be a UUID'), validate],
   asyncHandler(async (req, res) => {
     const { error } = await supabaseAdmin
       .from('user_blocks')

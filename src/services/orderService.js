@@ -527,6 +527,35 @@ async function createOrder({
     }
   }
 
+  // ── Atomic stock decrement (the decrement IS the guard) ───────────────────
+  // When inventory holds are NOT enabled, decrement stock atomically here so two
+  // shoppers racing for the last unit can't both succeed (the earlier in-memory
+  // guard only compares — it can't prevent the race). Holds path already reserves
+  // atomically above, so skip to avoid double-decrement.
+  if (!holdsEnabled) {
+    const stockItems = validatedItems.map((i) => ({
+      product_id: i.product_id,
+      qty: i.quantity,
+      size: i.selected_size || null,
+    }));
+    const { data: stockResult, error: stockErr } = await supabaseAdmin.rpc(
+      'fn_apply_order_stock', { p_items: stockItems }
+    );
+    if (stockErr) {
+      // Roll back the just-created order so we never leave a paid-but-unstocked ghost.
+      await supabaseAdmin.from('orders').update({ status: 'cancelled', cancelled_at: new Date().toISOString() }).eq('id', orderId);
+      throw Object.assign(new Error(stockErr.message), { status: 500 });
+    }
+    if (stockResult && stockResult.success === false) {
+      await supabaseAdmin.from('orders').update({ status: 'cancelled', cancelled_at: new Date().toISOString() }).eq('id', orderId);
+      const unavailableIds = (stockResult.failures || []).map((f) => f.product_id);
+      throw Object.assign(
+        new Error('One or more items just sold out'),
+        { status: 409, code: 'INSUFFICIENT_STOCK', unavailableProductIds: unavailableIds }
+      );
+    }
+  }
+
   // Attach delivery estimate metadata to the order object for the controller
   order._deliveryEstimate = deliveryEstimate;
 
@@ -647,14 +676,36 @@ async function updateOrderStatus({ orderId, newStatus, actorId, driverId }) {
   if (newStatus === 'completed') updatePayload.completed_at = new Date().toISOString();
   if (newStatus === 'cancelled') updatePayload.cancelled_at = new Date().toISOString();
 
-  const { data: updated, error: updateErr } = await supabaseAdmin
-    .from('orders')
-    .update(updatePayload)
-    .eq('id', orderId)
-    .select()
-    .single();
+  // Compare-and-swap when a driver claims an order: only succeed if it's still
+  // ready_for_pickup with no driver yet. Prevents two drivers from both
+  // "winning" the same order in a concurrent accept (the second is rejected).
+  let updateQuery = supabaseAdmin.from('orders').update(updatePayload).eq('id', orderId);
+  if (newStatus === 'driver_assigned' && driverId) {
+    updateQuery = updateQuery.eq('status', 'ready_for_pickup').is('driver_id', null);
+  }
+  const { data: updated, error: updateErr } = await updateQuery.select().maybeSingle();
 
   if (updateErr) throw Object.assign(new Error(updateErr.message), { status: 400 });
+  if (!updated) {
+    // No row matched the CAS guard → another driver already took it.
+    if (newStatus === 'driver_assigned' && driverId) {
+      throw Object.assign(new Error('This order was just assigned to another driver'), { status: 409 });
+    }
+    throw Object.assign(new Error('Order not found'), { status: 404 });
+  }
+
+  // Restore inventory when an order is cancelled — but only when we decremented
+  // at creation (holds disabled). Skips items already flagged unavailable.
+  if (newStatus === 'cancelled') {
+    try {
+      const holds = await getPlatformSettingJson('orders_holds_enabled', { enabled: false });
+      if (holds.enabled !== true) {
+        await supabaseAdmin.rpc('fn_restore_order_stock', { p_order_id: orderId });
+      }
+    } catch (e) {
+      console.warn('[ORDER] stock restore on cancel failed:', orderId, e.message);
+    }
+  }
 
   // Log to order_timeline (fire-and-forget, non-critical)
   supabaseAdmin
@@ -667,35 +718,47 @@ async function updateOrderStatus({ orderId, newStatus, actorId, driverId }) {
     })
     .then(() => {}, () => {});
 
-  // If delivered or completed (pickup): capture payment and transfer to boutique
+  // If delivered or completed (pickup): capture payment, THEN transfer to boutique.
   if (newStatus === 'delivered' || newStatus === 'completed') {
     try {
+      // Only pay the boutique once the shopper's money is actually captured —
+      // otherwise the platform would transfer its own funds with no offsetting
+      // charge (e.g. an abandoned/canceled PI that was force-advanced).
+      let paymentSettled = !order.stripe_payment_intent_id; // no PI (e.g. $0/test) → nothing to capture
       if (order.stripe_payment_intent_id) {
-        // Only capture if PI is still in requires_capture state; skip if already captured.
         const pi = await stripe.paymentIntents.retrieve(order.stripe_payment_intent_id);
         if (pi.status === 'requires_capture') {
           // Capture the current order total (which may have shrunk if a boutique
           // marked an item unavailable) rather than the full authorization, so
           // the unused hold on a removed item is released, not charged.
           const captureCents = Math.round(Number(order.total_amount) * 100);
-          await stripe.paymentIntents.capture(
+          const captured = await stripe.paymentIntents.capture(
             order.stripe_payment_intent_id,
             captureCents > 0 ? { amount_to_capture: captureCents } : undefined
           );
+          paymentSettled = captured.status === 'succeeded';
+        } else if (pi.status === 'succeeded') {
+          paymentSettled = true; // already captured earlier
         } else {
-          console.info(`[ORDER] PI ${pi.id} already in state '${pi.status}' — skipping capture`);
+          console.warn(`[ORDER] PI ${pi.id} in non-capturable state '${pi.status}' — NOT transferring to boutique`, { orderId: order.id });
         }
       }
 
-      const { transferToBoutique } = require('./stripeService');
-      await transferToBoutique(order).catch((err) => {
-        // Log failure so ops team can manually trigger the payout — never silently drop.
-        console.error('[ORDER] transferToBoutique failed — MANUAL PAYOUT REQUIRED', {
-          orderId:    order.id,
-          boutiqueId: order.boutique_id,
-          error:      err.message,
+      if (paymentSettled) {
+        const { transferToBoutique } = require('./stripeService');
+        await transferToBoutique(order).catch((err) => {
+          // Log failure so ops team can manually trigger the payout — never silently drop.
+          console.error('[ORDER] transferToBoutique failed — MANUAL PAYOUT REQUIRED', {
+            orderId:    order.id,
+            boutiqueId: order.boutique_id,
+            error:      err.message,
+          });
         });
-      });
+      } else {
+        console.error('[ORDER] Payment not captured — boutique transfer SKIPPED, manual review needed', {
+          orderId: order.id, boutiqueId: order.boutique_id,
+        });
+      }
     } catch (e) {
       console.warn('[ORDER] Payment capture on delivery/completion failed:', e.message);
     }

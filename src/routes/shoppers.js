@@ -352,7 +352,17 @@ router.delete(
   '/me/collections/:id',
   requireRole('shopper'),
   asyncHandler(async (req, res) => {
-    // Delete collection items first
+    // Verify the collection belongs to the caller BEFORE touching its items —
+    // otherwise a shopper could wipe another user's collection_items by id.
+    const { data: owned } = await supabaseAdmin
+      .from('collections')
+      .select('id')
+      .eq('id', req.params.id)
+      .eq('shopper_id', req.userId)
+      .maybeSingle();
+    if (!owned) return res.status(404).json({ error: 'Collection not found' });
+
+    // Delete collection items first (now confirmed owned)
     await supabaseAdmin
       .from('collection_items')
       .delete()
