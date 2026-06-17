@@ -203,7 +203,14 @@ const listOrders = asyncHandler(async (req, res) => {
       .single();
     if (boutique) filters.boutiqueId = boutique.id;
   }
-  if (role === 'driver')   filters.driverId = req.userId;
+  if (role === 'driver') {
+    // orders.driver_id stores drivers.id (not the auth user id) — resolve it.
+    const { supabaseAdmin } = require('../config/supabase');
+    const { data: driver } = await supabaseAdmin
+      .from('drivers').select('id').eq('user_id', req.userId).maybeSingle();
+    if (!driver) return res.json({ orders: [], total: 0, page: filters.page, limit: filters.limit });
+    filters.driverId = driver.id;
+  }
 
   const result = await orderService.listOrders(filters);
   res.json(result);
@@ -231,7 +238,10 @@ const getOrder = asyncHandler(async (req, res) => {
         .from('boutiques').select('id').eq('user_id', userId).maybeSingle();
       authorized = boutique && order.boutique_id === boutique.id;
     } else if (role === 'driver') {
-      authorized = order.driver_id === userId;
+      // orders.driver_id stores drivers.id, not the auth user id.
+      const { data: driver } = await supabaseAdmin
+        .from('drivers').select('id').eq('user_id', userId).maybeSingle();
+      authorized = driver && order.driver_id === driver.id;
     }
 
     if (!authorized) {
