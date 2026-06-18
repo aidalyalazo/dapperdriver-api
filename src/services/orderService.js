@@ -668,6 +668,21 @@ async function updateOrderStatus({ orderId, newStatus, actorId, driverId }) {
     throw Object.assign(new Error('Order not found'), { status: 404 });
   }
 
+  // ── Payment gate ──────────────────────────────────────────────────────────
+  // An order cannot leave 'pending' (i.e. be processed by the boutique/driver)
+  // until its payment is actually authorized or captured. Only cancellation is
+  // allowed while unpaid. This stops abandoned checkouts (order created, payment
+  // sheet dismissed) from reaching the boutique and being fulfilled unpaid.
+  if (order.status === 'pending' && newStatus !== 'cancelled') {
+    const paid = ['authorized', 'paid'].includes(order.payment_status);
+    if (!paid) {
+      throw Object.assign(
+        new Error('This order has not been paid yet and cannot be processed.'),
+        { status: 422, code: 'PAYMENT_NOT_COMPLETED' }
+      );
+    }
+  }
+
   // Fetch push tokens separately (each table has its own FK structure)
   const [shopperRow, boutiqueRow, driverRow] = await Promise.all([
     supabaseAdmin.from('shoppers').select('fcm_token').eq('user_id', order.shopper_id).single().then(r => r.data),
