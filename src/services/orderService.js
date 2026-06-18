@@ -790,13 +790,16 @@ async function updateOrderStatus({ orderId, newStatus, actorId, driverId }) {
     }
   }
 
-  // If ready_for_pickup: trigger driver assignment (delivery orders only)
+  // If ready_for_pickup: NOTIFY drivers the order is available (manual accept).
+  // We intentionally do NOT auto-assign — a driver must tap Accept so we know a
+  // human saw it and is working it. The order stays unassigned in the available
+  // feed until then; stalledOrderSweep escalates if nobody accepts.
   if (newStatus === 'ready_for_pickup' && !isPickup) {
     try {
-      const { findAndAssignDriver } = require('./driverAssignmentService');
-      findAndAssignDriver(orderId); // Fire and forget
+      const { broadcastAvailableOrder } = require('./driverAssignmentService');
+      broadcastAvailableOrder(orderId); // Fire and forget
     } catch (e) {
-      console.warn('[ORDER] Driver assignment failed:', e.message);
+      console.warn('[ORDER] Driver broadcast failed:', e.message);
     }
   }
 

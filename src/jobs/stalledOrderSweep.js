@@ -112,9 +112,11 @@ async function sweepStalledOrders() {
         });
       }
 
-      const { findAndAssignDriver } = require('../services/driverAssignmentService');
-      findAndAssignDriver(order.id, 0).catch((e) =>
-        console.error('[STALLED SWEEP] Restart failed:', order.id, e.message)
+      // Manual-accept mode: re-broadcast availability to drivers rather than
+      // auto-assigning, so a driver still has to tap Accept.
+      const { broadcastAvailableOrder } = require('../services/driverAssignmentService');
+      Promise.resolve(broadcastAvailableOrder(order.id)).catch((e) =>
+        console.error('[STALLED SWEEP] Re-broadcast failed:', order.id, e.message)
       );
     }
   } catch (err) {

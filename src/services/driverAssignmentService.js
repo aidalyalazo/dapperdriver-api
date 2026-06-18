@@ -300,8 +300,31 @@ async function broadcastToAllDrivers(orderId, cityId) {
   }
 }
 
+/**
+ * Manual-accept mode: notify drivers an order is ready WITHOUT assigning it.
+ * The order stays ready_for_pickup / driver_id NULL so it appears in the driver
+ * "available deliveries" feed; a driver must tap Accept (assignDriver, which is
+ * CAS-guarded) to take it — guaranteeing a human saw and accepted it rather than
+ * the system silently auto-assigning.
+ */
+async function broadcastAvailableOrder(orderId) {
+  try {
+    const { data: order } = await Promise.resolve(supabaseAdmin
+      .from('orders')
+      .select('id, status, city_id')
+      .eq('id', orderId)
+      .single())
+      .catch(() => ({ data: null }));
+    if (!order || order.status !== 'ready_for_pickup' || !order.city_id) return;
+    await broadcastToAllDrivers(orderId, order.city_id);
+  } catch (e) {
+    console.warn('[DRIVER ASSIGN] broadcastAvailableOrder failed:', e.message);
+  }
+}
+
 module.exports = {
   findAndAssignDriver,
+  broadcastAvailableOrder,
   getDriverActiveOrderCount,
   driverHasCapacity,
   ACTIVE_ORDER_STATUSES,
