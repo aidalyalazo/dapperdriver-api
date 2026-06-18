@@ -1080,6 +1080,113 @@ router.get(
   })
 );
 
+// ── Out-of-Stock / Unavailable-Item Analytics ────────────────────────────────
+
+/**
+ * GET /api/v1/admin/analytics/unavailable?days=90
+ * Read-only analysis of items boutiques marked unavailable on an ACTIVE order
+ * (the "mark out of stock" flow writes order_items.unavailable + unavailable_at).
+ * Surfaces who's doing it, how often, repeat-offender boutiques, repeatedly-hit
+ * shoppers, and the products that keep going out of stock — so inventory
+ * accuracy problems and shopper-frustration risk are visible.
+ */
+router.get(
+  '/analytics/unavailable',
+  asyncHandler(async (req, res) => {
+    const days = Math.min(parseInt(req.query.days) || 90, 365);
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+
+    // Unavailable line items (the feature sets unavailable=true + unavailable_at)
+    const { data: flagged, error: fErr } = await supabaseAdmin
+      .from('order_items')
+      .select('id, order_id, product_id, name, quantity, unavailable_at')
+      .eq('unavailable', true);
+    if (fErr) {
+      // Feature/column not deployed yet — return an empty, well-formed payload.
+      return res.json({ available: false, message: 'Out-of-stock tracking not active yet.', summary: {}, by_boutique: [], by_shopper: [], by_product: [], recent: [] });
+    }
+    const items = (flagged || []).filter((i) => !i.unavailable_at || i.unavailable_at >= since);
+
+    if (!items.length) {
+      return res.json({ available: true, summary: { total: 0, last_30d: 0, affected_orders: 0, affected_shoppers: 0, affected_boutiques: 0 }, by_boutique: [], by_shopper: [], by_product: [], recent: [] });
+    }
+
+    const orderIds = [...new Set(items.map((i) => i.order_id))];
+    const { data: orders } = await supabaseAdmin
+      .from('orders')
+      .select('id, order_number, boutique_id, shopper_id, status, created_at')
+      .in('id', orderIds);
+    const orderById = Object.fromEntries((orders || []).map((o) => [o.id, o]));
+
+    const boutiqueIds = [...new Set((orders || []).map((o) => o.boutique_id).filter(Boolean))];
+    const shopperIds = [...new Set((orders || []).map((o) => o.shopper_id).filter(Boolean))];
+
+    // Names + per-boutique total orders (for an unavailable RATE, not just count)
+    const [{ data: bts }, { data: shoppers }, { data: boutiqueOrderCounts }] = await Promise.all([
+      boutiqueIds.length ? supabaseAdmin.from('boutiques').select('id, name').in('id', boutiqueIds) : Promise.resolve({ data: [] }),
+      shopperIds.length ? supabaseAdmin.from('shoppers').select('user_id, display_name, full_name, email').in('user_id', shopperIds) : Promise.resolve({ data: [] }),
+      boutiqueIds.length ? supabaseAdmin.from('orders').select('boutique_id').in('boutique_id', boutiqueIds).gte('created_at', since) : Promise.resolve({ data: [] }),
+    ]);
+    const bName = Object.fromEntries((bts || []).map((b) => [b.id, b.name]));
+    const sName = Object.fromEntries((shoppers || []).map((s) => [s.user_id, s.display_name || s.full_name || s.email || 'Shopper']));
+    const totalOrdersByBoutique = {};
+    for (const o of (boutiqueOrderCounts || [])) totalOrdersByBoutique[o.boutique_id] = (totalOrdersByBoutique[o.boutique_id] || 0) + 1;
+
+    const now = Date.now();
+    const DAY = 86400000;
+    const byBoutique = {}, byShopper = {}, byProduct = {};
+    let last30 = 0;
+    const recent = [];
+    for (const it of items) {
+      const o = orderById[it.order_id] || {};
+      if (it.unavailable_at && new Date(it.unavailable_at).getTime() >= now - 30 * DAY) last30 += 1;
+      if (o.boutique_id) byBoutique[o.boutique_id] = (byBoutique[o.boutique_id] || 0) + 1;
+      if (o.shopper_id) byShopper[o.shopper_id] = (byShopper[o.shopper_id] || 0) + 1;
+      if (it.product_id) {
+        byProduct[it.product_id] = byProduct[it.product_id] || { name: it.name, count: 0 };
+        byProduct[it.product_id].count += 1;
+      }
+      recent.push({
+        order_number: o.order_number || it.order_id?.slice(0, 8),
+        order_id: it.order_id,
+        item: it.name,
+        boutique: bName[o.boutique_id] || '—',
+        customer: sName[o.shopper_id] || '—',
+        order_status: o.status || '—',
+        at: it.unavailable_at || null,
+      });
+    }
+    recent.sort((a, b) => (b.at || '').localeCompare(a.at || ''));
+
+    const byBoutiqueArr = Object.entries(byBoutique).map(([id, count]) => {
+      const totalOrders = totalOrdersByBoutique[id] || 0;
+      const ratePct = totalOrders ? Math.round((count / totalOrders) * 100) : null;
+      return { boutique: bName[id] || 'Unknown', count, total_orders: totalOrders, rate_pct: ratePct, flag: (count >= 5 || (ratePct != null && ratePct >= 15)) };
+    }).sort((a, b) => b.count - a.count);
+
+    const byShopperArr = Object.entries(byShopper).map(([id, count]) => ({
+      customer: sName[id] || 'Shopper', count, flag: count >= 3,
+    })).sort((a, b) => b.count - a.count);
+
+    const byProductArr = Object.values(byProduct).map((p) => ({ ...p, flag: p.count >= 3 })).sort((a, b) => b.count - a.count).slice(0, 20);
+
+    res.json({
+      available: true,
+      summary: {
+        total: items.length,
+        last_30d: last30,
+        affected_orders: orderIds.length,
+        affected_shoppers: shopperIds.length,
+        affected_boutiques: boutiqueIds.length,
+      },
+      by_boutique: byBoutiqueArr,
+      by_shopper: byShopperArr,
+      by_product: byProductArr,
+      recent: recent.slice(0, 100),
+    });
+  })
+);
+
 // ── Data Intelligence ─────────────────────────────────────────────────────────
 
 /**
