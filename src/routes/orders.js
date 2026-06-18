@@ -242,23 +242,29 @@ router.post(
       .update({ notes: JSON.stringify(updatedNotes) })
       .eq('id', orderId);
 
-    // Update driver's average rating
-    // Fetch current driver stats
+    // Update the driver's average rating AND review count. The count was never
+    // incremented before, so the profile always showed "no reviews"; the average
+    // was also (incorrectly) weighted by total_deliveries instead of #reviews.
     const { data: driver } = await supabaseAdmin
       .from('drivers')
-      .select('rating, total_deliveries')
+      .select('rating, review_count')
       .eq('id', order.driver_id)
       .single();
 
     if (driver) {
-      const currentRating = parseFloat(driver.rating || 5);
-      const deliveries = parseInt(driver.total_deliveries || 0) || 1;
-      // Weighted average: include this new rating
-      const newRating = ((currentRating * deliveries) + rating) / (deliveries + 1);
+      const reviews = parseInt(driver.review_count || 0, 10) || 0;
+      const currentRating = parseFloat(driver.rating || 0);
+      // Proper running average over the actual number of reviews.
+      const newRating = reviews > 0
+        ? ((currentRating * reviews) + rating) / (reviews + 1)
+        : rating;
 
       await supabaseAdmin
         .from('drivers')
-        .update({ rating: parseFloat(newRating.toFixed(2)) })
+        .update({
+          rating:       parseFloat(newRating.toFixed(2)),
+          review_count: reviews + 1,
+        })
         .eq('id', order.driver_id);
     }
 
