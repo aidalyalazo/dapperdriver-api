@@ -464,16 +464,24 @@ const cancelOrder = [
  */
 const STOCK_EDITABLE_STATUSES = ['pending', 'confirmed', 'preparing'];
 
-async function notifyShopperItemGone({ order, itemName, refundAmount = 0, cancelled }) {
+async function notifyShopperItemGone({ order, itemName, refundAmount = 0, cancelled, removedQty = 0, lineQty = 0, message = null }) {
   const { supabaseAdmin } = require('../config/supabase');
   const { sendOrderNotification } = require('../services/fcmService');
   try {
     const { data: shopper } = await supabaseAdmin
       .from('shoppers').select('fcm_token').eq('user_id', order.shopper_id).single();
+    const partial = !cancelled && removedQty > 0 && removedQty < lineQty;
     const title = cancelled ? '❌ Order Cancelled' : '⚠️ Item Unavailable';
-    const body = cancelled
-      ? `Sorry — "${itemName}" sold out and was the only item. Your order was cancelled and fully refunded.`
-      : `Sorry — "${itemName}" just sold out. We refunded $${Number(refundAmount).toFixed(2)} and the rest of your order is still on the way.`;
+    let body;
+    if (cancelled) {
+      body = `Sorry — "${itemName}" sold out and was the only item. Your order was cancelled and fully refunded.`;
+    } else if (partial) {
+      body = `Heads up — only part of your "${itemName}" order is available. We refunded $${Number(refundAmount).toFixed(2)} for ${removedQty} unit${removedQty === 1 ? '' : 's'}; the rest is still on the way.`;
+    } else {
+      body = `Sorry — "${itemName}" just sold out. We refunded $${Number(refundAmount).toFixed(2)} and the rest of your order is still on the way.`;
+    }
+    // Optional note the boutique wants to pass to the shopper.
+    if (message && message.trim()) body += `\n\nFrom the boutique: "${message.trim()}"`;
     if (shopper?.fcm_token) {
       await sendOrderNotification({ tokens: [shopper.fcm_token], title, body, orderId: order.id }).catch(() => {});
     }
@@ -482,7 +490,7 @@ async function notifyShopperItemGone({ order, itemName, refundAmount = 0, cancel
       type:      cancelled ? 'order_cancelled' : 'order_item_unavailable',
       title,
       body,
-      data:      { order_id: order.id },
+      data:      { order_id: order.id, boutique_message: message || undefined },
       is_read:   false,
       sent_push: !!shopper?.fcm_token,
     })).catch(() => {});
@@ -492,6 +500,8 @@ async function notifyShopperItemGone({ order, itemName, refundAmount = 0, cancel
 const markItemUnavailable = [
   param('id').isUUID().withMessage('id must be a UUID'),
   param('itemId').isUUID().withMessage('itemId must be a UUID'),
+  body('quantity').optional().isInt({ min: 1 }).withMessage('quantity must be ≥ 1'),
+  body('message').optional().isString().isLength({ max: 300 }),
   validate,
   asyncHandler(async (req, res) => {
     const { supabaseAdmin } = require('../config/supabase');
@@ -504,6 +514,8 @@ const markItemUnavailable = [
 
     const orderId = req.params.id;
     const itemId = req.params.itemId;
+    const message = (req.body.message || '').toString().trim() || null;
+    const reqQty = req.body.quantity ? parseInt(req.body.quantity, 10) : null;
 
     const { data: order } = await supabaseAdmin
       .from('orders')
@@ -527,28 +539,41 @@ const markItemUnavailable = [
       });
     }
 
-    // ── Atomically CLAIM the item (false→true) so two concurrent calls can't
-    // both refund the same line. The conditional update IS the lock.
-    const { data: claimedRows } = await supabaseAdmin.from('order_items')
-      .update({ unavailable: true, unavailable_at: new Date().toISOString() })
-      .eq('id', itemId)
-      .eq('order_id', orderId)
-      .eq('unavailable', false)
-      .select();
-    const target = (claimedRows || [])[0];
+    // Look up the target line (must still be available).
+    const { data: targetRow } = await supabaseAdmin
+      .from('order_items').select('*').eq('id', itemId).eq('order_id', orderId).maybeSingle();
+    if (!targetRow) return res.status(404).json({ error: 'Order item not found' });
+    if (targetRow.unavailable) return res.status(409).json({ error: 'Item already marked unavailable' });
+
+    const lineQty = targetRow.quantity ?? targetRow.qty ?? 1;
+    const unitPrice = Number(targetRow.unit_price ?? targetRow.price ?? 0);
+    // How many units are out of stock — default to the whole line.
+    const removedQty = Math.min(reqQty && reqQty > 0 ? reqQty : lineQty, lineQty);
+    const isPartial = removedQty < lineQty;
+
+    // ── Atomically CLAIM. Full line → flip unavailable false→true. Partial →
+    // conditionally decrement the quantity. Either is the concurrency lock.
+    let target;
+    if (isPartial) {
+      const newQty = lineQty - removedQty;
+      const { data: rows } = await supabaseAdmin.from('order_items')
+        .update({ quantity: newQty, qty: newQty })
+        .eq('id', itemId).eq('order_id', orderId).eq('unavailable', false)
+        .gte('quantity', removedQty)
+        .select();
+      target = (rows || [])[0];
+    } else {
+      const { data: rows } = await supabaseAdmin.from('order_items')
+        .update({ unavailable: true, unavailable_at: new Date().toISOString() })
+        .eq('id', itemId).eq('order_id', orderId).eq('unavailable', false)
+        .select();
+      target = (rows || [])[0];
+    }
     if (!target) {
-      // Either the item doesn't exist on this order, or it was already claimed.
-      const { data: exists } = await supabaseAdmin
-        .from('order_items').select('id').eq('id', itemId).eq('order_id', orderId).maybeSingle();
-      return exists
-        ? res.status(409).json({ error: 'Item already marked unavailable' })
-        : res.status(404).json({ error: 'Order item not found' });
+      return res.status(409).json({ error: 'Item changed before this update — please refresh and retry' });
     }
 
-    const lineQty = target.quantity ?? target.qty ?? 1;
-    const lineAmount = Math.round(Number(target.unit_price ?? target.price ?? 0) * lineQty * 100) / 100;
-
-    // Effective rates from the stored order (the ratio is stable across removals).
+    // Effective rates from the stored order (ratio stable across removals).
     const deliveryFee = Number(order.delivery_fee ?? 0);
     const serviceFee = Number(order.service_fee ?? 0);
     const tip = Number(order.tip ?? 0);
@@ -558,14 +583,15 @@ const markItemUnavailable = [
     const taxRate = taxableBase > 0 ? Number(order.tax ?? 0) / taxableBase : 0;
     const commissionRate = baseSubtotal > 0 ? Number(order.dd_commission_amount ?? 0) / baseSubtotal : 0;
 
-    // Re-read the LIVE remaining items AFTER claiming, so concurrent removals each
-    // recompute the order total from the true current state (no stale subtotal).
+    // LIVE remaining units AFTER the claim (full removals excluded; partial lines
+    // already reflect the reduced quantity).
     const { data: liveItems } = await supabaseAdmin
       .from('order_items').select('unit_price, price, quantity, qty, unavailable').eq('order_id', orderId);
     const remaining = (liveItems || []).filter((i) => !i.unavailable);
+    const remainingUnits = remaining.reduce((s, i) => s + (i.quantity ?? i.qty ?? 1), 0);
 
-    // Last item gone → cancel + full refund.
-    if (remaining.length === 0) {
+    // Last unit gone → cancel + full refund.
+    if (remainingUnits === 0) {
       if (order.stripe_payment_intent_id) {
         try {
           const pi = await stripe.paymentIntents.retrieve(order.stripe_payment_intent_id);
@@ -580,14 +606,14 @@ const markItemUnavailable = [
         }
       }
       const updated = await orderService.updateOrderStatus({ orderId, newStatus: 'cancelled', actorId: req.userId });
-      await notifyShopperItemGone({ order, itemName: target.name, cancelled: true });
+      await notifyShopperItemGone({ order, itemName: targetRow.name, cancelled: true, message });
       return res.json({ order: updated, cancelled: true });
     }
 
-    // Refund for THIS line = its price + its tax share (concurrency-safe: each
-    // line is claimed exactly once, so it's refunded exactly once).
-    const lineTax = Math.round(lineAmount * taxRate * 100) / 100;
-    const refundAmount = Math.round((lineAmount + lineTax) * 100) / 100;
+    // Refund for the removed UNITS = units × price + their tax share.
+    const removedAmount = Math.round(unitPrice * removedQty * 100) / 100;
+    const removedTax = Math.round(removedAmount * taxRate * 100) / 100;
+    const refundAmount = Math.round((removedAmount + removedTax) * 100) / 100;
 
     if (order.stripe_payment_intent_id && refundAmount > 0) {
       try {
@@ -626,9 +652,9 @@ const markItemUnavailable = [
       .select()
       .single();
 
-    await notifyShopperItemGone({ order, itemName: target.name, refundAmount, cancelled: false });
+    await notifyShopperItemGone({ order, itemName: targetRow.name, refundAmount, cancelled: false, removedQty, lineQty, message });
 
-    return res.json({ order: updatedOrder, cancelled: false, refunded: refundAmount });
+    return res.json({ order: updatedOrder, cancelled: false, refunded: refundAmount, removed_qty: removedQty, partial: isPartial });
   }),
 ];
 
