@@ -272,4 +272,58 @@ router.post(
   })
 );
 
+// POST   /api/v1/orders/:id/boutique-rating   — Shopper: rate the boutique
+router.post(
+  '/:id/boutique-rating',
+  requireRole('shopper'),
+  [
+    body('rating').isInt({ min: 1, max: 5 }).withMessage('rating must be 1-5'),
+    body('comment').optional().isString(),
+  ],
+  validate,
+  asyncHandler(async (req, res) => {
+    const { supabaseAdmin } = require('../config/supabase');
+    const orderId = req.params.id;
+    const { rating, comment } = req.body;
+
+    const { data: order } = await supabaseAdmin
+      .from('orders')
+      .select('shopper_id, boutique_id, status, notes')
+      .eq('id', orderId)
+      .single();
+
+    if (!order) throw Object.assign(new Error('Order not found'), { status: 404 });
+    if (order.shopper_id !== req.userId) throw Object.assign(new Error('Unauthorized'), { status: 403 });
+    // Only after delivery, and only once per order.
+    if (!['delivered', 'completed'].includes(order.status)) {
+      throw Object.assign(new Error('You can rate the boutique once your order is delivered'), { status: 422 });
+    }
+    const existingNotes = order.notes
+      ? (typeof order.notes === 'string'
+          ? (() => { try { return JSON.parse(order.notes); } catch { return { text: order.notes }; } })()
+          : order.notes)
+      : {};
+    if (existingNotes.boutique_rating != null) {
+      throw Object.assign(new Error('You have already rated this boutique for this order'), { status: 409 });
+    }
+    await supabaseAdmin.from('orders')
+      .update({ notes: JSON.stringify({ ...existingNotes, boutique_rating: rating, boutique_comment: comment || '' }) })
+      .eq('id', orderId);
+
+    // Update the boutique's running average + review count.
+    const { data: boutique } = await supabaseAdmin
+      .from('boutiques').select('rating, review_count').eq('id', order.boutique_id).single();
+    if (boutique) {
+      const reviews = parseInt(boutique.review_count || 0, 10) || 0;
+      const current = parseFloat(boutique.rating || 0);
+      const newRating = reviews > 0 ? ((current * reviews) + rating) / (reviews + 1) : rating;
+      await supabaseAdmin.from('boutiques')
+        .update({ rating: parseFloat(newRating.toFixed(2)), review_count: reviews + 1 })
+        .eq('id', order.boutique_id);
+    }
+
+    res.json({ success: true, rating });
+  })
+);
+
 module.exports = router;
