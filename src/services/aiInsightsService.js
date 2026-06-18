@@ -1197,4 +1197,59 @@ async function getBoutiqueReport(boutiqueId, { refresh = false } = {}) {
   return { ...content, _source: source, _generated_at: new Date().toISOString() };
 }
 
-module.exports = { getDailyBriefing, getBoutiqueReport };
+// ── Out-of-stock analysis (for the admin Stock Issues page) ──────────────────
+
+const UNAVAILABLE_SCHEMA = {
+  type: 'object',
+  properties: {
+    headline: { type: 'string', description: 'One-sentence read on the marketplace out-of-stock situation' },
+    patterns: {
+      type: 'array',
+      description: 'The meaningful patterns: which boutique has an inventory-accuracy problem (cite count + rate), which products keep overselling, which shoppers are being let down repeatedly.',
+      items: {
+        type: 'object',
+        properties: { title: { type: 'string' }, detail: { type: 'string' }, severity: { type: 'string', enum: ['high', 'medium', 'low'] } },
+        required: ['title', 'detail', 'severity'],
+        additionalProperties: false,
+      },
+    },
+    actions: { type: 'array', description: 'Specific fixes, most impactful first', items: { type: 'string' } },
+  },
+  required: ['headline', 'patterns', 'actions'],
+  additionalProperties: false,
+};
+
+function fallbackUnavailable(d) {
+  const patterns = [];
+  const topB = (d.by_boutique || []).filter((b) => b.flag)[0] || (d.by_boutique || [])[0];
+  if (topB) patterns.push({ title: `${topB.boutique} marks the most unavailable`, detail: `${topB.count} item(s)${topB.rate_pct != null ? ` (${topB.rate_pct}% of their orders)` : ''} — likely an inventory-accuracy problem.`, severity: topB.flag ? 'high' : 'medium' });
+  const topP = (d.by_product || [])[0];
+  if (topP && topP.count >= 2) patterns.push({ title: `${topP.name} keeps going out of stock`, detail: `Flagged ${topP.count}× — the on-hand count for this product is wrong or it's chronically oversold.`, severity: topP.count >= 3 ? 'high' : 'medium' });
+  const topS = (d.by_shopper || []).filter((s) => s.flag)[0];
+  if (topS) patterns.push({ title: `${topS.customer} keeps getting let down`, detail: `Hit an unavailable item ${topS.count}× — a churn risk worth a proactive credit.`, severity: 'medium' });
+  if (!patterns.length) patterns.push({ title: 'No significant patterns', detail: `${d.summary?.total || 0} item(s) flagged; nothing recurring yet.`, severity: 'low' });
+
+  const actions = [];
+  if (topB && topB.flag) actions.push(`Audit ${topB.boutique}'s inventory accuracy — have them sync stock or enable inventory holds so unavailable items can't be ordered.`);
+  if (topP && topP.count >= 2) actions.push(`Correct or pull "${topP.name}" until restocked — it's overselling.`);
+  if (topS) actions.push(`Reach out to ${topS.customer} with a credit; they've hit this ${topS.count}×.`);
+  if (!actions.length) actions.push('Keep monitoring — no systemic issue to fix right now.');
+
+  return { headline: `${d.summary?.total || 0} unavailable flag(s) across ${d.summary?.affected_boutiques || 0} boutique(s); ${(d.by_boutique || []).filter((b) => b.flag).length} need attention.`, patterns, actions };
+}
+
+async function analyzeUnavailable(data) {
+  const ai = await askClaude({
+    maxTokens: 2000,
+    system:
+      'You analyze out-of-stock events for DapperDriver admin ops. Boutiques can mark an item unavailable on an active customer order; too much of it signals broken inventory accuracy and frustrates shoppers. ' +
+      'Given the aggregated data, find the real patterns and prescribe fixes: name the boutique with an accuracy problem (cite count + rate — a rate ≥15% of their orders is a red flag), the products that keep overselling, and shoppers being repeatedly let down (churn risk). ' +
+      'Connect signals and prioritize by impact. Cite exact numbers; never invent. Be concise and operational — each action should be something the admin can do this week.',
+    prompt: `Out-of-stock analytics:\n${JSON.stringify(data, null, 1)}\n\nAnalyze the pattern and prescribe fixes.`,
+    schema: UNAVAILABLE_SCHEMA,
+  });
+  const source = ai ? 'claude' : 'fallback';
+  return { ...(ai || fallbackUnavailable(data)), _source: source };
+}
+
+module.exports = { getDailyBriefing, getBoutiqueReport, analyzeUnavailable };

@@ -1170,7 +1170,7 @@ router.get(
 
     const byProductArr = Object.values(byProduct).map((p) => ({ ...p, flag: p.count >= 3 })).sort((a, b) => b.count - a.count).slice(0, 20);
 
-    res.json({
+    const payload = {
       available: true,
       summary: {
         total: items.length,
@@ -1183,7 +1183,19 @@ router.get(
       by_shopper: byShopperArr,
       by_product: byProductArr,
       recent: recent.slice(0, 100),
-    });
+    };
+
+    // Opt-in AI synthesis (?ai=1) — only when explicitly requested, to control cost.
+    if (req.query.ai === '1' && items.length) {
+      try {
+        const { analyzeUnavailable } = require('../services/aiInsightsService');
+        payload.ai = await analyzeUnavailable({
+          summary: payload.summary, by_boutique: byBoutiqueArr, by_shopper: byShopperArr, by_product: byProductArr,
+        });
+      } catch (e) { console.error('[UNAVAILABLE AI] failed:', e.message); }
+    }
+
+    res.json(payload);
   })
 );
 
