@@ -37,7 +37,8 @@ const sources = [
   ['K. Migration 019 — order item unavailable (out of stock)', fs.readFileSync(path.join(root, 'src/migrations/019_order_item_unavailable.sql'), 'utf8')],
   ['L. Migration 020 — atomic stock decrement + restore', fs.readFileSync(path.join(root, 'src/migrations/020_atomic_stock.sql'), 'utf8')],
   ['M. Migration 021 — boutique return policy', fs.readFileSync(path.join(root, 'src/migrations/021_boutique_returns.sql'), 'utf8')],
-  ['N. RLS security hardening', fs.readFileSync(path.join(root, 'rls_security_fix.sql'), 'utf8')],
+  ['N. Migration 022 — variant stock key resolution', fs.readFileSync(path.join(root, 'src/migrations/022_variant_stock_key.sql'), 'utf8')],
+  ['O. RLS security hardening', fs.readFileSync(path.join(root, 'rls_security_fix.sql'), 'utf8')],
 ];
 
 /** Split SQL on ';' respecting line comments, '...' strings, and $tag$ quotes. */

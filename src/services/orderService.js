@@ -5,6 +5,30 @@ const { getPlatformSettingJson } = require('../utils/platformSettings');
 const { stripe } = require('../config/stripe');
 
 /**
+ * Resolve per-variant stock from a variant_stock map keyed "Size / Color"
+ * (e.g. "S / Black"). Falls back through color/size orderings and a fuzzy
+ * '/'-split match, so callers don't silently drop to the product total stock
+ * just because the key format differs. Returns an int, or null if no variant
+ * match (caller should use the product's total stock).
+ */
+function resolveVariantStock(vs, size, color) {
+  if (!vs || !size) return null;
+  const candidates = [];
+  if (color) candidates.push(`${size} / ${color}`, `${color} / ${size}`);
+  candidates.push(size);
+  for (const k of candidates) {
+    if (vs[k] != null) return parseInt(vs[k], 10);
+  }
+  for (const [k, v] of Object.entries(vs)) {
+    const parts = k.split('/').map((s) => s.trim());
+    if (parts.includes(size) && (!color || parts.includes(color))) {
+      return parseInt(v, 10);
+    }
+  }
+  return null;
+}
+
+/**
  * Valid order status transitions.
  * Maps current status → allowed next statuses.
  */
@@ -368,24 +392,25 @@ async function createOrder({
   }
 
   // Stock guard — never let an order exceed what's in inventory (prevents the
-  // "qty 2 of a size with only 1 in stock" oversell). Per-size variant_stock
-  // wins when present; otherwise fall back to the product's total stock.
-  const overStock = validatedItems.filter((i) => {
+  // "qty 2 of a size with only 1 in stock" oversell). Per-variant stock wins
+  // when present; otherwise fall back to the product's total stock.
+  // variant_stock is keyed "Size / Color" (e.g. "S / Black"); match flexibly.
+  const availFor = (i) => {
     const p = trustedProductsMap[i.product_id];
-    if (!p) return false;
-    let available = (typeof p.stock === 'number') ? p.stock : null;
-    if (p.variant_stock && i.selected_size && p.variant_stock[i.selected_size] != null) {
-      available = parseInt(p.variant_stock[i.selected_size], 10);
-    }
+    if (!p) return null;
+    const va = resolveVariantStock(p.variant_stock, i.selected_size, i.selected_color);
+    if (va != null) return va;
+    return (typeof p.stock === 'number') ? p.stock : null;
+  };
+  const overStock = validatedItems.filter((i) => {
+    const available = availFor(i);
     return available != null && i.quantity > available;
   });
   if (overStock.length) {
     const detail = overStock.map((i) => {
       const p = trustedProductsMap[i.product_id];
-      const avail = (p.variant_stock && i.selected_size && p.variant_stock[i.selected_size] != null)
-        ? p.variant_stock[i.selected_size] : p.stock;
       const sz = i.selected_size ? ` (size ${i.selected_size})` : '';
-      return `${p.name}${sz}: only ${avail} left`;
+      return `${p.name}${sz}: only ${availFor(i)} left`;
     }).join('; ');
     throw Object.assign(
       new Error(`Not enough stock — ${detail}.`),
@@ -537,6 +562,7 @@ async function createOrder({
       product_id: i.product_id,
       qty: i.quantity,
       size: i.selected_size || null,
+      color: i.selected_color || null,
     }));
     const { data: stockResult, error: stockErr } = await supabaseAdmin.rpc(
       'fn_apply_order_stock', { p_items: stockItems }
@@ -792,6 +818,19 @@ async function updateOrderStatus({ orderId, newStatus, actorId, driverId }) {
         console.error('[FCM] Notification failed:', e.message)
       );
     }
+
+    // Also write an in-app notification row for the shopper, so the order
+    // update shows in the Notifications page even when push isn't configured
+    // (this is why "ready for pickup" / "cancelled" weren't appearing in-app).
+    supabaseAdmin.from('notifications').insert({
+      user_id:   order.shopper_id,
+      type:      `order_${newStatus}`,
+      title:     notif.title,
+      body:      notif.body,
+      data:      { order_id: orderId, status: newStatus },
+      is_read:   false,
+      sent_push: tokens.length > 0,
+    }).then(() => {}, (e) => console.warn('[ORDER] in-app notification insert failed:', e?.message));
   }
 
   return updated;

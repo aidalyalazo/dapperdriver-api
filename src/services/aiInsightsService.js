@@ -15,6 +15,41 @@ const { supabaseAdmin } = require('../config/supabase');
 
 const MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
 
+// Industry benchmarks (deep-research, June 2026) — fed to the AI so it grades a
+// boutique against the standard instead of reporting numbers in a vacuum. THIS
+// is what makes a report worth something: "your X vs the benchmark Y, so do Z."
+const BENCHMARKS = `INDUSTRY BENCHMARKS (use to contextualize — always compare the boutique's number to the relevant benchmark and say whether they're above/below and what to do):
+- Sell-through rate (units sold ÷ units stocked): seasonal/new drops should clear >80% within their launch window; evergreen/core run 40–60% per month/quarter; chronically <40% = overstocked, mark down or stop reordering.
+- Repeat-purchase rate (fashion/apparel): 12–26% is typical (luxury 10–15%, casual 20–26%); ~25–27% is a strong fashion average. Below ~15% means weak retention.
+- GMROI (gross profit ÷ avg inventory cost): <1.0 loses money on inventory; ~2.0 thin; ~$3.00–3.20 is strong for apparel (women's ~3.0, accessories ~2.8, shoes ~1.9). Below 2.0 signals buy-depth or markdown-timing problems.
+- Returns: fashion has the highest return rate of any industry (~25–30%); poor size/fit is the #1 cause — a try-on keep rate below ~60% is a fit/sizing red flag.
+- Pricing: profitable boutiques hold keystone (2× wholesale) or higher; early discounting trains customers to wait for sales.
+- Cash: unsold inventory is trapped cash — aged stock (45+ days, no sales) should be marked down or cut.`;
+
+// Local seasonal context so guidance is timely and city-correct, not generic.
+function seasonalContext(cityName, monthIdx) {
+  const c = (cityName || '').toLowerCase();
+  const m = monthIdx; // 0=Jan
+  const winter = m <= 1 || m === 11, spring = m >= 2 && m <= 4, summer = m >= 5 && m <= 7, fall = m >= 8 && m <= 10;
+  if (c.includes('chicago')) {
+    if (fall) return 'Chicago, fall: peak outerwear/knit-buying season is starting (Sept–Feb). Also build a small resort/warm-weather capsule — affluent "snowbird" customers leave for Florida in winter and shop for it Oct–Dec.';
+    if (winter) return 'Chicago, winter: outerwear/knits peak, but a chunk of the affluent base is in Florida (snowbirds). Plan end-of-season coat markdowns and start previewing spring.';
+    if (spring) return 'Chicago, spring: short, fast transition season — shoppers return from winter; rotate out heavy outerwear quickly and bring in transitional/spring pieces.';
+    if (summer) return 'Chicago, summer: peak patio/warm-weather demand (Jun–Aug); lightweight pieces, event/festival dressing. Clear summer by August before fall outerwear lands.';
+  }
+  if (c.includes('miami')) {
+    if (winter || (m >= 11)) return 'Miami, peak season (Dec–Apr): tourists + snowbirds + Art Basel/event traffic — your make-or-break window. Stock depth in resort/eveningwear; this is when to invest, not clear.';
+    if (spring) return 'Miami, late peak (through Apr): high tourist/snowbird demand continues; begin planning the slower, hotter summer after April.';
+    if (summer) return 'Miami, low season (summer): hotter, slower, more locals + Latin-American tourism. Run promotions to move inventory; keep year-round warm-weather/resort assortment (Miami has no real cold season).';
+    if (fall) return 'Miami, pre-peak (fall): build toward the Dec–Apr peak — bring in resort and eveningwear ahead of tourist/snowbird arrival.';
+  }
+  // generic
+  if (winter) return 'Winter: end-of-season markdowns on cold-weather stock; preview spring.';
+  if (spring) return 'Spring: transitional and spring assortment; clear remaining winter.';
+  if (summer) return 'Summer: warm-weather and event dressing; clear summer before fall.';
+  return 'Fall: build outerwear/transitional depth; clear summer leftovers.';
+}
+
 function anthropicClient() {
   if (!process.env.ANTHROPIC_API_KEY) return null;
   const Anthropic = require('@anthropic-ai/sdk');
@@ -398,7 +433,8 @@ async function getDailyBriefing({ refresh = false } = {}) {
       '(2) PREDICTIONS — be genuinely forward-looking: extrapolate the month-to-date run-rate to a month-end projection and compare it to last month; call out which cities/boutiques are accelerating vs at risk of churning and what that implies; flag any anomaly. Put these in the predictions field with a confidence level. ' +
       '(3) TASKS — what needs the founder\'s attention today, most urgent first (stalled orders, failed payouts, pending approvals, support, queue demand). ' +
       '(4) EFFICIENCY/GROWTH — concrete levers to grow GMV or run leaner, drawn from the patterns (e.g. a city outpacing supply, a demand gap nobody stocks, a boutique worth featuring). ' +
-      'Cross-reference signals — connect the dots between cities, boutiques, keep rate, and demand gaps rather than listing them. Cite exact numbers; NEVER invent any. Be concise but insightful; every item earns its place.',
+      'Cross-reference signals — connect the dots between cities, boutiques, keep rate, and demand gaps rather than listing them. Cite exact numbers; NEVER invent any. Be concise but insightful; every item earns its place.\n\n' +
+      'Benchmark context to ground your read: try-on keep rate is the fit north-star — below ~60% is a red flag worth investigating; fashion repeat-purchase rate of 12–26% is normal, so marketplace retention above that is a strength. Compare to these where relevant.',
     prompt: `Today's full data snapshot (use every relevant block; compute comparisons and the run-rate projection from month_to_date):\n${JSON.stringify(data, null, 1)}\n\nWrite today's strategic briefing.`,
     schema: BRIEFING_SCHEMA,
   });
@@ -449,7 +485,7 @@ async function gatherBoutiqueData(boutiqueId) {
   const productName = Object.fromEntries(products.map((p) => [p.id, p.name]));
 
   // Second wave — these need the product id list
-  const [interactionsRes, savedRes, searchRes, cartRes, reviewsRes] = await Promise.all([
+  const [interactionsRes, savedRes, searchRes, cartRes, reviewsRes, costsRes] = await Promise.all([
     productIds.length
       ? supabaseAdmin.from('shopper_interactions')
           .select('product_id, action, duration_seconds, created_at')
@@ -470,7 +506,15 @@ async function gatherBoutiqueData(boutiqueId) {
           .select('product_id, rating, comment, selected_size, created_at')
           .in('product_id', productIds).order('created_at', { ascending: false }).limit(100)
       : Promise.resolve({ data: [] }),
+    // Guarded cost fetch for GMROI — if the column doesn't exist yet, this just
+    // errors to {data:null} and GMROI stays null (no break).
+    productIds.length
+      ? supabaseAdmin.from('products').select('id, cost').eq('boutique_id', boutiqueId)
+      : Promise.resolve({ data: [] }),
   ]);
+  // Merge cost onto products (when the column exists)
+  const costById = Object.fromEntries(((costsRes && costsRes.data) || []).map((r) => [r.id, r.cost]));
+  for (const p of products) if (costById[p.id] != null) p.cost = costById[p.id];
 
   const orders90 = ordersRes.data || [];
   const done = (o) => ['delivered', 'completed'].includes(o.status);
@@ -768,6 +812,58 @@ async function gatherBoutiqueData(boutiqueId) {
   const crossSell = Object.entries(pairCounts).filter(([, n]) => n >= 2).sort((a, c) => c[1] - a[1]).slice(0, 4)
     .map(([key, n]) => { const [p1, p2] = key.split('|'); return { pair: [productName[p1] || '?', productName[p2] || '?'], times_bought_together: n }; });
 
+  // ── Sell-through rate per product (sold ÷ (sold + on-hand)) ───────────────
+  const onHand = (p) => (p.variant_stock && typeof p.variant_stock === 'object')
+    ? Object.values(p.variant_stock).reduce((s, q) => s + (parseInt(q) || 0), 0) : null;
+  const productSTR = products.map((p) => {
+    const sold = byProduct[p.id]?.units || 0;
+    const stock = onHand(p);
+    if (stock == null) return null;
+    const denom = sold + stock;
+    return denom > 0 ? { product: p.name, sold_90d: sold, on_hand: stock, sell_through_pct: Math.round(sold / denom * 100) } : null;
+  }).filter(Boolean);
+  const totSold = productSTR.reduce((s, p) => s + p.sold_90d, 0);
+  const totDenom = productSTR.reduce((s, p) => s + p.sold_90d + p.on_hand, 0);
+  const sellThrough = productSTR.length ? {
+    overall_pct: totDenom > 0 ? Math.round(totSold / totDenom * 100) : 0,
+    overstocked: productSTR.filter((p) => p.sell_through_pct < 40 && p.on_hand >= 3).sort((a, c) => a.sell_through_pct - c.sell_through_pct).slice(0, 5),
+    selling_out: productSTR.filter((p) => p.sell_through_pct >= 75).sort((a, c) => c.sell_through_pct - a.sell_through_pct).slice(0, 5),
+  } : null;
+
+  // ── Customer lifetime value (proxy) ───────────────────────────────────────
+  const aov90 = orders90.filter(done).length ? money(gmv(orders90) / orders90.filter(done).length) : 0;
+  const uniq90 = customers.length;
+  const ordersPerCustomer = uniq90 ? Math.round(orders90.filter(done).length / uniq90 * 10) / 10 : 0;
+  const clv = uniq90 ? {
+    avg_order_value: aov90,
+    orders_per_customer_90d: ordersPerCustomer,
+    revenue_per_customer_90d: money(gmv(orders90) / uniq90),
+    // rough annualized estimate = 90d revenue/customer × 4
+    estimated_annual_clv: money((gmv(orders90) / uniq90) * 4),
+  } : null;
+
+  // ── GMROI (only when product cost is known; else null) ────────────────────
+  let gmroi = null;
+  const costed = products.filter((p) => p.cost != null && parseFloat(p.cost) > 0);
+  if (costed.length) {
+    let invCost = 0, grossProfit = 0;
+    for (const p of products) {
+      const stock = onHand(p) || 0;
+      const cost = parseFloat(p.cost) || 0;
+      invCost += stock * cost;
+      const sold = byProduct[p.id]?.units || 0;
+      const rev = byProduct[p.id]?.revenue || 0;
+      grossProfit += rev - sold * cost;
+    }
+    gmroi = invCost > 0 ? {
+      value: Math.round(grossProfit / invCost * 100) / 100,
+      products_with_cost: costed.length,
+      total_products: products.length,
+    } : null;
+  }
+
+  const season = seasonalContext(b.cities?.name, new Date().getUTCMonth());
+
   return {
     boutique: {
       name: b.name, owner: b.owner_name, email: b.email, city: b.cities?.name || null,
@@ -789,7 +885,11 @@ async function gatherBoutiqueData(boutiqueId) {
       city_avg_gmv_per_boutique: cityAvgGmv30,
     },
     last_90_days: { orders: orders90.length, gmv: gmv(orders90) },
+    season_context: season,
     momentum: trends,
+    sell_through: sellThrough,
+    gmroi,
+    customer_lifetime_value: clv,
     reviews: reviewSummary,
     customer_insights: customerInsights,
     storefront_conversion_30d: conversion,
@@ -986,8 +1086,29 @@ function fallbackReport(d) {
   if (d.cross_sell_pairs && d.cross_sell_pairs.length) {
     sections.push({ heading: 'Bought together', body: d.cross_sell_pairs.map((p) => `${p.pair[0]} + ${p.pair[1]} (${p.times_bought_together}×)`).join('; ') + '. Bundle or cross-promote these pairs.' });
   }
+  if (d.sell_through) {
+    const st = d.sell_through;
+    let body = `Your overall sell-through is ${st.overall_pct}% (healthy core runs 40–60%; seasonal drops should clear 80%+).`;
+    if (st.overstocked && st.overstocked.length) body += ` Overstocked (under 40%, mark down or stop reordering): ${st.overstocked.map((p) => `${p.product} ${p.sell_through_pct}% (${p.on_hand} left)`).join(', ')}.`;
+    if (st.selling_out && st.selling_out.length) body += ` Selling out (reorder): ${st.selling_out.map((p) => `${p.product} ${p.sell_through_pct}%`).join(', ')}.`;
+    sections.push({ heading: 'Sell-through — what to reorder vs mark down', body });
+  }
+  if (d.gmroi) {
+    sections.push({ heading: 'Inventory return (GMROI)', body: `Your GMROI is ${d.gmroi.value} (gross profit per $1 of inventory cost). Apparel target is ~3.0; under 2.0 signals over-buying or late markdowns. Based on ${d.gmroi.products_with_cost}/${d.gmroi.total_products} products with cost entered.` });
+  }
+  if (d.customer_lifetime_value) {
+    const c = d.customer_lifetime_value;
+    sections.push({ heading: 'What a customer is worth', body: `Each customer is worth about $${c.revenue_per_customer_90d} over 90 days (${c.orders_per_customer_90d} orders × $${c.avg_order_value} AOV) — roughly $${c.estimated_annual_clv}/yr. Spend up to a fraction of that to acquire and retain them.` });
+  }
+  if (d.season_context) {
+    sections.push({ heading: 'Right now, for your market', body: d.season_context });
+  }
 
   const recommendations = [];
+  if (d.sell_through && d.sell_through.overstocked && d.sell_through.overstocked.length) {
+    const o = d.sell_through.overstocked[0];
+    recommendations.push(`Mark down ${o.product} — ${o.sell_through_pct}% sell-through with ${o.on_hand} units sitting; it's trapped cash.`);
+  }
   for (const r of d.stock_out_risk.slice(0, 3)) {
     recommendations.push(`Restock ${r.product} in size ${r.size} — only ${r.units_left} left and that size sells.`);
   }
@@ -1053,8 +1174,11 @@ async function getBoutiqueReport(boutiqueId, { refresh = false } = {}) {
       'Your job is NOT to recite metrics. It is to ANALYZE all of their shopper + boutique data together, find the PATTERNS and CORRELATIONS hiding in it, and turn them into insight that grows their sales — across marketing, merchandising, and operations.\n\n' +
       'Actively hunt for cross-signal patterns, for example: which price tier / category / size / material correlates with the highest keep rate and repeat purchase, and which with returns and dead stock; whether high-view/low-buy items share a trait (price? photos? size gaps?); whether reviews explain a fit or quality problem the try-on data also shows; whether their busiest hours/days and peak demand align with when they could run promotions; whether local search demand matches or mismatches what they stock; whether revenue is dangerously concentrated in a few customers and how to broaden it; what the repeat-purchase cadence implies for timing a re-engagement push; which products to bundle based on what sells together. Synthesize — connect blocks to each other, don\'t report them in isolation.\n\n' +
       'Structure: an executive summary (2-3 sentences naming the single biggest opportunity and biggest risk), then sections. Lead with the highest-leverage findings. Group naturally: Performance & momentum; Marketing & demand (audience, conversion, demand gaps, reviews, what to promote/bundle); Merchandising (what to restock/buy-deeper, price-tier and category strategy, dead stock to cut); Fit & quality (keep rate, returns, reviews, sizing); Customers (concentration, repeat cadence, new vs returning); Operations (peak times, cancellations). Skip any area with no data rather than padding. Be thorough — 7-10 sections when the data supports it.\n\n' +
-      'End with a prioritized, numbered action list: the specific marketing / merchandising / operations moves that will most improve their sales, each tied to the exact number that motivates it ("Restock the Wide Leg Trouser in M — 2 left, your #1 size"; "Bundle the Linen Set + Straw Tote — bought together 6×"; "Email past buyers ~day 28, your repeat cadence"). Cite exact numbers; NEVER invent data; every claim must trace to a value in the data.',
-    prompt: `This boutique's full shopper + boutique dataset. Analyze it holistically — find the patterns across blocks, not block-by-block:\n${JSON.stringify(data, null, 1)}\n\nWrite the intelligence report.`,
+      'GRADE AGAINST BENCHMARKS — this is what makes the report worth paying for. Whenever the data has a metric with a benchmark below, state the boutique\'s number, compare it to the benchmark, say whether it\'s healthy/weak, and prescribe the move. E.g. "Your sell-through on the Merino Pullover is 31% — well under the 40% floor for core product; stop reordering and mark the remaining 8 units down." Do not report a number without its benchmark context where one exists.\n\n' +
+      BENCHMARKS + '\n\n' +
+      'Use the season_context field to make timing advice city-correct and current (e.g. what to buy deeper or clear right now for their market) — never give generic seasonal advice.\n\n' +
+      'End with a prioritized, numbered action list: the specific marketing / merchandising / operations moves that will most improve their sales, each tied to the exact number that motivates it ("Restock the Wide Leg Trouser in M — 2 left, your #1 size"; "Bundle the Linen Set + Straw Tote — bought together 6×"; "Email past buyers ~day 28, your repeat cadence"; "Mark down the 5 items under 40% sell-through to free trapped cash"). Cite exact numbers; NEVER invent data; every claim must trace to a value in the data. The owner should finish reading and know exactly what to do Monday morning.',
+    prompt: `This boutique's full shopper + boutique dataset. Analyze it holistically — find the patterns across blocks, compare metrics to the benchmarks, and use season_context for timing:\n${JSON.stringify(data, null, 1)}\n\nWrite the intelligence report.`,
     schema: REPORT_SCHEMA,
   });
 
