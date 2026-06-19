@@ -40,7 +40,7 @@ const sources = [
   ['Mb. Migration 022 — variant_stock key', fs.readFileSync(path.join(root, 'src/migrations/022_variant_stock_key.sql'), 'utf8')],
   ['Mc. Migration 023 — stock sum sync', fs.readFileSync(path.join(root, 'src/migrations/023_stock_sum_sync.sql'), 'utf8')],
   ['Md. Migration 024 — notifications type unconstrain', fs.readFileSync(path.join(root, 'src/migrations/024_notifications_type_unconstrain.sql'), 'utf8')],
-  ['N. Migration 022 — variant stock key resolution', fs.readFileSync(path.join(root, 'src/migrations/022_variant_stock_key.sql'), 'utf8')],
+  ['Me. Migration 025 — payment_status CHECK (allow paid)', fs.readFileSync(path.join(root, 'src/migrations/025_payment_status_check.sql'), 'utf8')],
   ['O. RLS security hardening', fs.readFileSync(path.join(root, 'rls_security_fix.sql'), 'utf8')],
 ];
 
