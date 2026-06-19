@@ -148,9 +148,9 @@ router.get(
       }
     }
 
-    const reviews = (rawReviews || []).map(r => ({
+    const reviews = (rawReviews || []).map(({ shopper_id, ...r }) => ({
       ...r,
-      shopper: shoppersMap[r.shopper_id] || { display_name: 'Shopper', avatar_url: null },
+      shopper: shoppersMap[shopper_id] || { display_name: 'Shopper', avatar_url: null },
     }));
 
     // Get aggregate stats

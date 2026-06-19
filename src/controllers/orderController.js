@@ -220,6 +220,12 @@ const listOrders = asyncHandler(async (req, res) => {
   }
 
   const result = await orderService.listOrders(filters);
+  // A driver can't see customer addresses for completed deliveries in history.
+  if (role === 'driver' && Array.isArray(result.orders)) {
+    for (const o of result.orders) {
+      if (['delivered', 'completed'].includes(o.status)) o.delivery_address = null;
+    }
+  }
   res.json(result);
 });
 
@@ -253,6 +259,19 @@ const getOrder = asyncHandler(async (req, res) => {
 
     if (!authorized) {
       return res.status(403).json({ error: 'Access denied' });
+    }
+
+    // Driver/boutique see the shopper's FIRST NAME only — never full name,
+    // phone, or email. (Operator has the phone in the admin panel.)
+    if (role === 'driver' || role === 'boutique') {
+      const { data: shopper } = await supabaseAdmin
+        .from('shoppers').select('display_name').eq('user_id', order.shopper_id).maybeSingle();
+      const dn = (shopper?.display_name || '').trim();
+      order.customer_name = dn ? dn.split(/\s+/)[0] : 'Customer';
+    }
+    // A driver can no longer see the delivery address once the order is done.
+    if (role === 'driver' && ['delivered', 'completed'].includes(order.status)) {
+      order.delivery_address = null;
     }
   }
 

@@ -935,10 +935,10 @@ async function getOrder(orderId) {
     try {
       const { data: driver } = await supabaseAdmin
         .from('drivers')
-        // Shopper-facing driver info — deliberately excludes license_plate and
-        // the driver's auth user_id (PII the shopper has no need for). Name +
-        // phone + vehicle + live location are kept for contact/tracking.
-        .select('id, full_name, phone, vehicle_make, vehicle_model, vehicle_color, rating, current_lat, current_lng, last_location_at')
+        // Shopper-facing driver info: name + license plate + vehicle (to
+        // identify the courier at the door) + rating + live location. NO phone
+        // and NO auth user_id — comms are handled by the operator, not in-app.
+        .select('id, full_name, vehicle_make, vehicle_model, vehicle_color, license_plate, rating, current_lat, current_lng, last_location_at')
         .eq('id', order.driver_id)
         .single();
       order.drivers = driver;
