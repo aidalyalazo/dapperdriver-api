@@ -796,6 +796,13 @@ async function updateOrderStatus({ orderId, newStatus, actorId, driverId }) {
         }
       }
 
+      // Reflect the capture on the order so it shows 'paid' (not 'authorized')
+      // without depending on the payment_intent.succeeded webhook round-trip.
+      if (paymentSettled && order.stripe_payment_intent_id) {
+        await supabaseAdmin.from('orders')
+          .update({ payment_status: 'paid' }).eq('id', orderId).catch(() => {});
+      }
+
       if (paymentSettled) {
         const { transferToBoutique } = require('./stripeService');
         await transferToBoutique(order).catch((err) => {
