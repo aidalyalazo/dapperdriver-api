@@ -473,6 +473,273 @@ router.post(
   })
 );
 
+// ─────────────────────────────────────────────────────────────────────────────
+// PAYMENT TRACKING & COMPANY ACCOUNTING
+//
+// The Payouts tab is a single unified money view: money IN (captured charges)
+// vs money OUT (boutique + driver Stripe transfers) vs money RETAINED
+// (commission + tax liability + delivery/service fees). Stripe is the system of
+// record for actual movement; the `payouts` table mirrors each Stripe transfer.
+// All reads here use supabaseAdmin (service role) so they bypass the
+// recipient-scoped RLS on `payouts`/`payout_failures`.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Resolve payee display names for payout/failure rows. `recipient_id` is written
+ * inconsistently across the writers — sometimes the boutiques/drivers table-row
+ * id (transferToBoutique, mondayPayouts), sometimes the auth user_id (cashOut) —
+ * so we key the lookup on BOTH id and user_id.
+ */
+async function buildPayeeMaps() {
+  const [{ data: boutiques }, { data: drivers }] = await Promise.all([
+    Promise.resolve(supabaseAdmin.from('boutiques').select('id, user_id, name')).catch(() => ({ data: [] })),
+    Promise.resolve(supabaseAdmin.from('drivers').select('id, user_id, full_name')).catch(() => ({ data: [] })),
+  ]);
+  const boutiqueMap = {};
+  for (const b of boutiques || []) {
+    if (b.id) boutiqueMap[b.id] = b.name;
+    if (b.user_id) boutiqueMap[b.user_id] = b.name;
+  }
+  const driverMap = {};
+  for (const d of drivers || []) {
+    if (d.id) driverMap[d.id] = d.full_name;
+    if (d.user_id) driverMap[d.user_id] = d.full_name;
+  }
+  return { boutiqueMap, driverMap };
+}
+
+const payeeName = ({ boutiqueMap, driverMap }, type, id) =>
+  (type === 'boutique' ? boutiqueMap : driverMap)[id] ||
+  (id ? `#${String(id).slice(0, 8).toUpperCase()}` : '—');
+
+/**
+ * GET /api/v1/admin/payouts
+ * Paginated ledger of every payout (boutique + driver Stripe transfers).
+ * Query: from, to (ISO), type (boutique|driver), status, limit (≤200), offset.
+ */
+router.get(
+  '/payouts',
+  asyncHandler(async (req, res) => {
+    const { from, to, type, status } = req.query;
+    const limit = Math.min(parseInt(req.query.limit, 10) || 50, 200);
+    const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+
+    let q = supabaseAdmin
+      .from('payouts')
+      .select('id, order_id, recipient_id, recipient_type, amount, stripe_transfer_id, status, paid_at, created_at', { count: 'exact' })
+      .order('created_at', { ascending: false })
+      .range(offset, offset + limit - 1);
+
+    if (from) q = q.gte('created_at', from);
+    if (to) q = q.lte('created_at', to);
+    if (type) q = q.eq('recipient_type', type);
+    if (status) q = q.eq('status', status);
+
+    const { data: payouts, count, error } = await q;
+    if (error) throw new Error(error.message);
+
+    const rows = payouts || [];
+    const maps = await buildPayeeMaps();
+
+    // order_ids per payout: orders.payout_id back-links driver/cashOut batches;
+    // boutique transfers also carry a single payouts.order_id.
+    const payoutIds = rows.map((p) => p.id);
+    const orderLinks = {};
+    if (payoutIds.length) {
+      const { data: linkedOrders } = await Promise.resolve(
+        supabaseAdmin.from('orders').select('id, payout_id').in('payout_id', payoutIds)
+      ).catch(() => ({ data: [] }));
+      for (const o of linkedOrders || []) {
+        (orderLinks[o.payout_id] ||= []).push(o.id);
+      }
+    }
+
+    res.json({
+      data: rows.map((p) => {
+        const orderIds = [...(orderLinks[p.id] || [])];
+        if (p.order_id && !orderIds.includes(p.order_id)) orderIds.push(p.order_id);
+        return {
+          id: p.id,
+          recipient_type: p.recipient_type,
+          recipient_id: p.recipient_id,
+          payee_name: payeeName(maps, p.recipient_type, p.recipient_id),
+          amount: Number(p.amount || 0),
+          stripe_transfer_id: p.stripe_transfer_id || null,
+          status: p.status,
+          order_ids: orderIds,
+          order_count: orderIds.length,
+          created_at: p.created_at,
+          paid_at: p.paid_at || null,
+        };
+      }),
+      total: count || 0,
+      limit,
+      offset,
+    });
+  })
+);
+
+/**
+ * GET /api/v1/admin/payouts/failures
+ * Recorded payout failures (Stripe transfer threw) — these need manual retry.
+ */
+router.get(
+  '/payouts/failures',
+  asyncHandler(async (req, res) => {
+    const limit = Math.min(parseInt(req.query.limit, 10) || 100, 200);
+    const { data, error } = await supabaseAdmin
+      .from('payout_failures')
+      .select('*')
+      .order('attempted_at', { ascending: false })
+      .limit(limit);
+    if (error) throw new Error(error.message);
+
+    const maps = await buildPayeeMaps();
+    res.json({
+      data: (data || []).map((f) => ({
+        id: f.id,
+        recipient_type: f.recipient_type,
+        recipient_id: f.recipient_id,
+        payee_name: payeeName(maps, f.recipient_type, f.recipient_id),
+        amount: Number(f.amount || 0),
+        order_ids: f.order_ids || [],
+        error_message: f.error_message || null,
+        attempted_at: f.attempted_at || f.created_at || null,
+      })),
+    });
+  })
+);
+
+/**
+ * GET /api/v1/admin/accounting/summary
+ * Company P&L for a period: money in (gross charges) vs money out (boutique +
+ * driver payouts) vs money retained (commission + tax liability + fees), plus
+ * reconciliation flags (paid-but-unsettled orders, pending failures, ledger
+ * drift). Aggregated over CAPTURED orders (payment_status='paid') by created_at.
+ *
+ * Per-order identity used to make the numbers tie out:
+ *   total_amount = subtotal + delivery_fee + service_fee + tax + tip − promo_discount
+ *   subtotal     = boutique_earnings + dd_commission_amount
+ *   net_platform_revenue = commission + (delivery_fee + service_fee − driver_earnings) − promo
+ *                        = GMV − boutique_earnings − (driver_earnings + tip) − tax
+ */
+router.get(
+  '/accounting/summary',
+  asyncHandler(async (req, res) => {
+    const to = req.query.to || new Date().toISOString();
+    const from = req.query.from || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+
+    // Captured orders in the window — the basis for recognized revenue.
+    const { data: orders, error } = await supabaseAdmin
+      .from('orders')
+      .select('id, status, payment_status, boutique_paid, payout_id, total_amount, subtotal, ' +
+              'delivery_fee, service_fee, tax, tip, promo_discount, dd_commission_amount, ' +
+              'boutique_earnings, driver_earnings')
+      .eq('payment_status', 'paid')
+      .gte('created_at', from)
+      .lte('created_at', to)
+      .limit(10000);
+    if (error) throw new Error(error.message);
+
+    const n = (v) => Number(v || 0);
+    const s = {
+      order_count: 0,
+      gross_order_volume: 0,
+      platform_commission: 0,
+      tax_collected: 0,
+      delivery_fees: 0,
+      service_fees: 0,
+      boutique_payouts: 0,
+      driver_payouts: 0,
+      tips: 0,
+      promo_discounts: 0,
+    };
+    let ledgerDrift = 0;
+    const unsettled = { count: 0, amount: 0 };
+
+    for (const o of orders || []) {
+      s.order_count++;
+      s.gross_order_volume += n(o.total_amount);
+      s.platform_commission += n(o.dd_commission_amount);
+      s.tax_collected += n(o.tax);
+      s.delivery_fees += n(o.delivery_fee);
+      s.service_fees += n(o.service_fee);
+      s.boutique_payouts += n(o.boutique_earnings);
+      s.driver_payouts += n(o.driver_earnings) + n(o.tip);
+      s.tips += n(o.tip);
+      s.promo_discounts += n(o.promo_discount);
+
+      if (Math.abs(n(o.boutique_earnings) + n(o.dd_commission_amount) - n(o.subtotal)) > 0.01) ledgerDrift++;
+
+      // Unsettled: delivered/completed + captured but boutique never paid out.
+      if (['delivered', 'completed'].includes(o.status) && !o.boutique_paid) {
+        unsettled.count++;
+        unsettled.amount += n(o.boutique_earnings);
+      }
+    }
+
+    // Platform's retained slice of delivery/service (driver_earnings come out of
+    // delivery+express; whatever's left is the platform's).
+    const fees_retained = s.delivery_fees + s.service_fees - (s.driver_payouts - s.tips);
+    const net_platform_revenue = s.platform_commission + fees_retained - s.promo_discounts;
+
+    // Actual money moved out per the payouts ledger in the same window.
+    const [{ data: paidPayouts }, failuresRes] = await Promise.all([
+      Promise.resolve(supabaseAdmin
+        .from('payouts')
+        .select('recipient_type, amount, status')
+        .gte('created_at', from)
+        .lte('created_at', to)
+        .limit(10000)).catch(() => ({ data: [] })),
+      Promise.resolve(supabaseAdmin
+        .from('payout_failures')
+        .select('amount', { count: 'exact', head: false })
+        .limit(10000)).catch(() => ({ data: [], count: 0 })),
+    ]);
+
+    const actual = { boutique_paid: 0, driver_paid: 0 };
+    for (const p of paidPayouts || []) {
+      if (p.status !== 'paid') continue;
+      if (p.recipient_type === 'boutique') actual.boutique_paid += n(p.amount);
+      else if (p.recipient_type === 'driver') actual.driver_paid += n(p.amount);
+    }
+    const failures_pending = (failuresRes.data || []).length;
+    const failures_amount = (failuresRes.data || []).reduce((acc, f) => acc + n(f.amount), 0);
+
+    const round2 = (v) => Math.round(v * 100) / 100;
+    res.json({
+      period: { from, to },
+      orders: s.order_count,
+      money_in: {
+        gross_order_volume: round2(s.gross_order_volume),
+      },
+      money_out: {
+        boutique_payouts: round2(s.boutique_payouts),
+        driver_payouts: round2(s.driver_payouts),
+        total: round2(s.boutique_payouts + s.driver_payouts),
+        actual_boutique_transferred: round2(actual.boutique_paid),
+        actual_driver_transferred: round2(actual.driver_paid),
+      },
+      retained: {
+        platform_commission: round2(s.platform_commission),
+        fees_retained: round2(fees_retained),
+        delivery_fees: round2(s.delivery_fees),
+        service_fees: round2(s.service_fees),
+        tax_liability: round2(s.tax_collected),
+        promo_discounts: round2(s.promo_discounts),
+        net_platform_revenue: round2(net_platform_revenue),
+      },
+      reconciliation: {
+        unsettled_orders: unsettled.count,
+        unsettled_amount: round2(unsettled.amount),
+        ledger_drift_orders: ledgerDrift,
+        failures_pending,
+        failures_amount: round2(failures_amount),
+      },
+    });
+  })
+);
+
 /**
  * PATCH /api/v1/admin/orders/:id/status
  */

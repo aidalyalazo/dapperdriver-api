@@ -18,9 +18,15 @@ router.get(
       search,
       in_stock,
       source,
+      on_sale,
       page = 1,
       limit = 40,
     } = req.query;
+
+    // "Sale" is a computed condition (compare_price > price), not a real category.
+    // PostgREST can't compare two columns in a filter, so when on_sale is requested we
+    // skip server-side pagination and post-filter in JS (catalog is small).
+    const wantOnSale = on_sale === 'true' || on_sale === '1' || on_sale === true;
 
     let query = supabaseAdmin
       .from('products')
@@ -30,8 +36,13 @@ router.get(
         { count: 'exact' }
       )
       .eq('status', 'active')
-      .order('created_at', { ascending: false })
-      .range((page - 1) * limit, page * limit - 1);
+      .order('created_at', { ascending: false });
+
+    if (wantOnSale) {
+      query = query.range(0, 999); // fetch the full catalog, then JS-filter to on-sale
+    } else {
+      query = query.range((page - 1) * limit, page * limit - 1);
+    }
 
     if (boutique_id) query = query.eq('boutique_id', boutique_id);
     if (category) query = query.ilike('category', `%${category}%`);
@@ -55,12 +66,19 @@ router.get(
     // Post-filter by city if needed
     let filtered = data;
     if (city_id) {
-      filtered = data.filter((p) => p.boutiques?.city_id === city_id);
+      filtered = filtered.filter((p) => p.boutiques?.city_id === city_id);
+    }
+
+    // Post-filter to on-sale items (compare_price strictly greater than price)
+    if (wantOnSale) {
+      filtered = filtered.filter(
+        (p) => p.compare_price != null && Number(p.compare_price) > Number(p.price)
+      );
     }
 
     res.json({
       data: filtered,
-      total: count,
+      total: wantOnSale ? filtered.length : count,
       page: parseInt(page),
       limit: parseInt(limit),
     });
