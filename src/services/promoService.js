@@ -16,17 +16,27 @@ async function validatePromo({ code, boutiqueId, subtotal, shopperId }) {
   // min_order_value). The old valid_from/valid_until/min_order_amount names
   // don't exist → the query errored → every code was rejected at order time,
   // so shoppers saw a discount in the UI but were charged full price.
+  // Fetch by code + active only, then check the window in JS so NULL
+  // starts_at/expires_at are tolerated (a never-expiring code has expires_at
+  // NULL — `.gte('expires_at', now)` would EXCLUDE it, rejecting the code at
+  // order time while the display validator accepted it → shopper saw a discount
+  // but was charged full. These two validators MUST agree.
   const { data: promo, error } = await supabaseAdmin
     .from('promos')
     .select('*')
     .eq('code', code.toUpperCase())
     .eq('is_active', true)
-    .lte('starts_at', now)
-    .gte('expires_at', now)
-    .single();
+    .maybeSingle();
 
   if (error || !promo) {
     throw Object.assign(new Error('Invalid or expired promo code'), { status: 422 });
+  }
+  const nowDate = new Date(now);
+  if (promo.starts_at && new Date(promo.starts_at) > nowDate) {
+    throw Object.assign(new Error('This promo code is not active yet'), { status: 422 });
+  }
+  if (promo.expires_at && new Date(promo.expires_at) < nowDate) {
+    throw Object.assign(new Error('This promo code has expired'), { status: 422 });
   }
 
   if (promo.min_order_value && subtotal < promo.min_order_value) {

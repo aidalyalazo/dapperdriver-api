@@ -74,9 +74,19 @@ router.post(
       case 'flat':
         discount_amount = Math.min(value, order_total);
         break;
-      case 'free_delivery':
-        discount_amount = value || 4.99; // default delivery fee
+      case 'free_delivery': {
+        // Free delivery waives the delivery fee — NOT the promo's `value`
+        // (which for these codes is a stray 1.00). Use the configured base
+        // delivery fee so the displayed discount matches what's actually waived.
+        let baseFee = 4.99;
+        try {
+          const { getPlatformSettingJson } = require('../utils/platformSettings');
+          const df = await getPlatformSettingJson('delivery_fee', { base: 4.99 });
+          baseFee = parseFloat(df.base || 4.99);
+        } catch (_) { /* fall back to 4.99 */ }
+        discount_amount = baseFee;
         break;
+      }
       default:
         discount_amount = 0;
     }

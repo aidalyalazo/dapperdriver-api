@@ -959,6 +959,14 @@ async function listOrders({ shopperId, boutiqueId, driverId, status, page = 1, l
   if (driverId) query = query.eq('driver_id', driverId);
   if (status) query = query.eq('status', status);
 
+  // A boutique (or driver) must NEVER see/act on a 'pending' order — those are
+  // not yet paid (the shopper hasn't confirmed the payment sheet). Showing them
+  // let unpaid/abandoned orders be accepted and even delivered for free. Only
+  // the shopper sees their own pending orders. Applies even if ?status=pending.
+  if ((boutiqueId || driverId) && (!status || status === 'pending')) {
+    query = query.neq('status', 'pending');
+  }
+
   const { data, error, count } = await query;
   if (error) throw new Error(error.message);
 
