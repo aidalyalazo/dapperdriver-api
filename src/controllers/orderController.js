@@ -610,10 +610,21 @@ const markItemUnavailable = [
       return res.json({ order: updated, cancelled: true });
     }
 
-    // Refund for the removed UNITS = units × price + their tax share.
+    // Recompute order money from the LIVE remaining items FIRST, so the refund
+    // is the EXACT reduction in the order total (no derived-rate rounding drift
+    // across multiple removals).
     const removedAmount = Math.round(unitPrice * removedQty * 100) / 100;
-    const removedTax = Math.round(removedAmount * taxRate * 100) / 100;
-    const refundAmount = Math.round((removedAmount + removedTax) * 100) / 100;
+    const newSubtotal = Math.round(
+      remaining.reduce((s, i) => s + Number(i.unit_price ?? i.price ?? 0) * (i.quantity ?? i.qty ?? 1), 0) * 100
+    ) / 100;
+    const newTax = Math.round((newSubtotal + deliveryFee - promoDiscount) * taxRate * 100) / 100;
+    const newCommission = Math.round(newSubtotal * commissionRate * 100) / 100;
+    const newBoutiqueEarnings = Math.round((newSubtotal - newCommission) * 100) / 100;
+    const newTotal = Math.round(
+      (newSubtotal + deliveryFee + serviceFee + newTax + tip - promoDiscount) * 100
+    ) / 100;
+    // Refund = exact total reduction = removed line amount + (old tax − new tax).
+    const refundAmount = Math.round((Number(order.total_amount ?? 0) - newTotal) * 100) / 100;
 
     if (order.stripe_payment_intent_id && refundAmount > 0) {
       try {
@@ -627,17 +638,6 @@ const markItemUnavailable = [
         return res.status(502).json({ error: 'Could not adjust the payment. Please try again or contact support.' });
       }
     }
-
-    // Recompute order money from the LIVE remaining items.
-    const newSubtotal = Math.round(
-      remaining.reduce((s, i) => s + Number(i.unit_price ?? i.price ?? 0) * (i.quantity ?? i.qty ?? 1), 0) * 100
-    ) / 100;
-    const newTax = Math.round((newSubtotal + deliveryFee - promoDiscount) * taxRate * 100) / 100;
-    const newCommission = Math.round(newSubtotal * commissionRate * 100) / 100;
-    const newBoutiqueEarnings = Math.round((newSubtotal - newCommission) * 100) / 100;
-    const newTotal = Math.round(
-      (newSubtotal + deliveryFee + serviceFee + newTax + tip - promoDiscount) * 100
-    ) / 100;
 
     const { data: updatedOrder } = await supabaseAdmin.from('orders')
       .update({

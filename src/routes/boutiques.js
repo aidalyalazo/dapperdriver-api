@@ -170,7 +170,6 @@ router.get(
   '/me',
   requireRole('boutique'),
   asyncHandler(async (req, res) => {
-    console.log('[BOUTIQUE /me] userId:', req.userId, 'email:', req.user?.email, 'role:', req.user?.user_metadata?.role);
 
     const { data, error } = await supabaseAdmin
       .from('boutiques')

@@ -260,6 +260,11 @@ async function createOrder({
     supabaseAdmin.from('products')
       .select('id, name, price, images, sizes, stock, variant_stock')
       .in('id', productIds)
+      // Bind to THIS boutique and active products only — otherwise a crafted
+      // order could include another boutique's (or a delisted) product, and an
+      // unknown id would fall through to the client-supplied price below.
+      .eq('boutique_id', boutiqueId)
+      .eq('status', 'active')
       .then((r) => {
         if (r.error) console.error('[ORDER] Products query failed:', r.error.message);
         return r.data || [];
@@ -366,14 +371,20 @@ async function createOrder({
     commissionRate = parseFloat(commissionSetting?.default || 20) / 100;
   }
 
-  // Replace client unit_price with server prices
-  const validatedItems = items.map((i) => {
-    const serverPrice = trustedProductsMap[i.product_id]?.price;
-    return {
-      ...i,
-      unit_price: serverPrice != null ? parseFloat(serverPrice) : i.unit_price,
-    };
-  });
+  // Replace client unit_price with server prices. A product missing from the
+  // trusted map (wrong boutique, inactive, or bogus id) is a HARD ERROR — never
+  // fall back to the client-supplied price (that allowed a $0.01 order).
+  const missing = items.filter((i) => trustedProductsMap[i.product_id]?.price == null);
+  if (missing.length) {
+    throw Object.assign(
+      new Error('One or more items are unavailable from this boutique.'),
+      { status: 422, code: 'INVALID_ITEMS', unavailableProductIds: missing.map((i) => i.product_id) }
+    );
+  }
+  const validatedItems = items.map((i) => ({
+    ...i,
+    unit_price: parseFloat(trustedProductsMap[i.product_id].price),
+  }));
 
   // Sized products must carry a size — per-variant sell-through and fit data
   // are worthless with size holes in them.
@@ -924,7 +935,10 @@ async function getOrder(orderId) {
     try {
       const { data: driver } = await supabaseAdmin
         .from('drivers')
-        .select('id, user_id, full_name, phone, vehicle_make, vehicle_model, vehicle_color, license_plate, rating, current_lat, current_lng, last_location_at')
+        // Shopper-facing driver info — deliberately excludes license_plate and
+        // the driver's auth user_id (PII the shopper has no need for). Name +
+        // phone + vehicle + live location are kept for contact/tracking.
+        .select('id, full_name, phone, vehicle_make, vehicle_model, vehicle_color, rating, current_lat, current_lng, last_location_at')
         .eq('id', order.driver_id)
         .single();
       order.drivers = driver;
