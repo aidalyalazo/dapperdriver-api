@@ -575,4 +575,55 @@ router.post(
   })
 );
 
+/**
+ * DELETE /api/v1/boutiques/me
+ * Permanently delete the boutique account (App Store 5.1.1(v)).
+ * Orders are kept (anonymized) for financial records; products are deactivated.
+ */
+router.delete(
+  '/me',
+  requireRole('boutique'),
+  asyncHandler(async (req, res) => {
+    const userId = req.userId;
+
+    const { data: boutique } = await supabaseAdmin
+      .from('boutiques').select('id').eq('user_id', userId).maybeSingle();
+    if (!boutique) return res.status(404).json({ error: 'Boutique not found' });
+
+    // Block deletion while an order is in flight.
+    const { count } = await supabaseAdmin.from('orders')
+      .select('id', { count: 'exact', head: true })
+      .eq('boutique_id', boutique.id)
+      .in('status', ['pending', 'confirmed', 'preparing', 'ready_for_pickup',
+                     'driver_assigned', 'picked_up', 'out_for_delivery']);
+    if ((count || 0) > 0) {
+      return res.status(422).json({
+        error: 'You have an order in progress. Complete or cancel it, then try again.',
+      });
+    }
+
+    // Deactivate products (kept so past order_items still resolve).
+    await supabaseAdmin.from('products').update({ status: 'inactive' }).eq('boutique_id', boutique.id);
+
+    // Anonymize the boutique row (kept for order financial records).
+    const scrambledEmail = `deleted-${userId.slice(0, 8)}@deleted.dapperdriver.com`;
+    await supabaseAdmin.from('boutiques').update({
+      name: 'Deleted Boutique', email: scrambledEmail, phone: null, owner_name: null,
+      logo_url: null, logo_bg: null, address: null, stripe_account_id: null,
+      fcm_token: null, status: 'closed',
+    }).eq('id', boutique.id);
+
+    const { error: authErr } = await supabaseAdmin.auth.admin.deleteUser(userId);
+    if (authErr) {
+      const { error: banErr } = await supabaseAdmin.auth.admin.updateUserById(userId, {
+        email: scrambledEmail, password: require('crypto').randomUUID(),
+        ban_duration: '876000h', user_metadata: { deleted: true },
+      });
+      if (banErr) return res.status(500).json({ error: 'Account deletion failed. Please contact support.' });
+    }
+    console.log(`[ACCOUNT] Boutique account deleted: ${userId}`);
+    res.json({ deleted: true });
+  })
+);
+
 module.exports = router;

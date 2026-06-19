@@ -497,4 +497,53 @@ router.post(
   })
 );
 
+/**
+ * DELETE /api/v1/drivers/me
+ * Permanently delete the driver account (App Store 5.1.1(v)).
+ * Past deliveries are kept (anonymized) for financial records.
+ */
+router.delete(
+  '/me',
+  requireRole('driver'),
+  asyncHandler(async (req, res) => {
+    const userId = req.userId;
+
+    const { data: driver } = await supabaseAdmin
+      .from('drivers').select('id').eq('user_id', userId).maybeSingle();
+    if (!driver) return res.status(404).json({ error: 'Driver not found' });
+
+    // Block deletion while a delivery is in flight.
+    const { count } = await supabaseAdmin.from('orders')
+      .select('id', { count: 'exact', head: true })
+      .eq('driver_id', driver.id)
+      .in('status', ['driver_assigned', 'picked_up', 'out_for_delivery']);
+    if ((count || 0) > 0) {
+      return res.status(422).json({
+        error: 'You have a delivery in progress. Complete it, then try again.',
+      });
+    }
+
+    // Remove uploaded documents; anonymize the driver row (kept for payout records).
+    await supabaseAdmin.from('driver_documents').delete().eq('driver_id', driver.id);
+    const scrambledEmail = `deleted-${userId.slice(0, 8)}@deleted.dapperdriver.com`;
+    await supabaseAdmin.from('drivers').update({
+      full_name: 'Deleted Driver', email: scrambledEmail, phone: null,
+      license_plate: null, vehicle_make: null, vehicle_model: null, vehicle_color: null,
+      stripe_account_id: null, fcm_token: null,
+      current_lat: null, current_lng: null, status: 'offline', is_approved: false,
+    }).eq('id', driver.id);
+
+    const { error: authErr } = await supabaseAdmin.auth.admin.deleteUser(userId);
+    if (authErr) {
+      const { error: banErr } = await supabaseAdmin.auth.admin.updateUserById(userId, {
+        email: scrambledEmail, password: require('crypto').randomUUID(),
+        ban_duration: '876000h', user_metadata: { deleted: true },
+      });
+      if (banErr) return res.status(500).json({ error: 'Account deletion failed. Please contact support.' });
+    }
+    console.log(`[ACCOUNT] Driver account deleted: ${userId}`);
+    res.json({ deleted: true });
+  })
+);
+
 module.exports = router;
