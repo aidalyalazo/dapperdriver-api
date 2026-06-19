@@ -177,6 +177,10 @@ async function createOrderPaymentIntent({ order, shopperId }) {
         customer:             customerId,
         capture_method:       'manual',
         payment_method_types: ['card'],
+        // Save + attach the card to the customer on payment so we can charge it
+        // off-session later — required for post-delivery tips (and quick re-orders).
+        // Without this the card is never attached and off_session tip charges fail.
+        setup_future_usage:   'off_session',
         metadata: {
           order_id:    order.id,
           boutique_id: order.boutique_id,
