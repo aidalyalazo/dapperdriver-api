@@ -46,6 +46,24 @@ router.patch(
 );
 
 /**
+ * DELETE /api/v1/notifications/:id
+ * Delete one of the caller's notifications.
+ */
+// UUID-constrained so it never shadows DELETE /token below.
+router.delete(
+  '/:id([0-9a-fA-F-]{36})',
+  asyncHandler(async (req, res) => {
+    const { error } = await supabaseAdmin
+      .from('notifications')
+      .delete()
+      .eq('id', req.params.id)
+      .eq('user_id', req.userId); // ownership check
+    if (error) throw new Error(error.message);
+    res.json({ message: 'Notification deleted.' });
+  })
+);
+
+/**
  * POST /api/v1/notifications/mark-all-read
  * Mark all of the caller's notifications as read.
  */
