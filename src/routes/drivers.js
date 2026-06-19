@@ -509,8 +509,9 @@ router.delete(
     const userId = req.userId;
 
     const { data: driver } = await supabaseAdmin
-      .from('drivers').select('id').eq('user_id', userId).maybeSingle();
+      .from('drivers').select('id, full_name, email').eq('user_id', userId).maybeSingle();
     if (!driver) return res.status(404).json({ error: 'Driver not found' });
+    const origName = driver.full_name, origEmail = driver.email; // capture before anonymizing
 
     // Block deletion while a delivery is in flight.
     const { count } = await supabaseAdmin.from('orders')
@@ -542,6 +543,13 @@ router.delete(
       if (banErr) return res.status(500).json({ error: 'Account deletion failed. Please contact support.' });
     }
     console.log(`[ACCOUNT] Driver account deleted: ${userId}`);
+    const { notifyAdmins } = require('../utils/adminAlerts');
+    await notifyAdmins({
+      type: 'account_deleted',
+      title: '🗑️ Driver deleted their account',
+      body: `Driver "${origName || 'Unknown'}" (${origEmail || 'no email'}) permanently deleted their account. Documents removed; records anonymized.`,
+      data: { role: 'driver', driver_id: driver.id, user_id: userId, name: origName, email: origEmail },
+    });
     res.json({ deleted: true });
   })
 );

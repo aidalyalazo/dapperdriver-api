@@ -587,8 +587,9 @@ router.delete(
     const userId = req.userId;
 
     const { data: boutique } = await supabaseAdmin
-      .from('boutiques').select('id').eq('user_id', userId).maybeSingle();
+      .from('boutiques').select('id, name, email').eq('user_id', userId).maybeSingle();
     if (!boutique) return res.status(404).json({ error: 'Boutique not found' });
+    const origName = boutique.name, origEmail = boutique.email; // capture before anonymizing
 
     // Block deletion while an order is in flight.
     const { count } = await supabaseAdmin.from('orders')
@@ -622,6 +623,13 @@ router.delete(
       if (banErr) return res.status(500).json({ error: 'Account deletion failed. Please contact support.' });
     }
     console.log(`[ACCOUNT] Boutique account deleted: ${userId}`);
+    const { notifyAdmins } = require('../utils/adminAlerts');
+    await notifyAdmins({
+      type: 'account_deleted',
+      title: '🗑️ Boutique deleted their account',
+      body: `Boutique "${origName || 'Unknown'}" (${origEmail || 'no email'}) permanently deleted their account. Products deactivated; records anonymized.`,
+      data: { role: 'boutique', boutique_id: boutique.id, user_id: userId, name: origName, email: origEmail },
+    });
     res.json({ deleted: true });
   })
 );
