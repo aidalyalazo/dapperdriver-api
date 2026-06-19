@@ -26,7 +26,10 @@ router.get(
     // "Sale" is a computed condition (compare_price > price), not a real category.
     // PostgREST can't compare two columns in a filter, so when on_sale is requested we
     // skip server-side pagination and post-filter in JS (catalog is small).
-    const wantOnSale = on_sale === 'true' || on_sale === '1' || on_sale === true;
+    // Also treat an exact "sale" text search as the on-sale filter, so already-shipped
+    // app builds (which send search=Sale for the Sale chip) work without a rebuild.
+    const searchIsSale = typeof search === 'string' && search.trim().toLowerCase() === 'sale';
+    const wantOnSale = on_sale === 'true' || on_sale === '1' || on_sale === true || searchIsSale;
 
     let query = supabaseAdmin
       .from('products')
@@ -46,7 +49,7 @@ router.get(
 
     if (boutique_id) query = query.eq('boutique_id', boutique_id);
     if (category) query = query.ilike('category', `%${category}%`);
-    if (search) {
+    if (search && !searchIsSale) {
       // Strip PostgREST metacharacters to prevent .or() filter injection.
       const safe = String(search).replace(/[^a-zA-Z0-9 &'\-]/g, '').trim();
       if (safe) query = query.or(`name.ilike.%${safe}%,category.ilike.%${safe}%,description.ilike.%${safe}%`);
