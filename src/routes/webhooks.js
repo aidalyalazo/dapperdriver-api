@@ -220,7 +220,21 @@ router.post(
             .update({ payment_status: 'cancelled' })
             .eq('id', orderId))
             .catch(() => {});
-          // Decision A (additive): release holds so stock returns to available pool
+          // Cancel the order itself if it's still open — this also restores the
+          // inventory that was decremented at order creation (fn_restore_order_stock
+          // inside updateOrderStatus). Previously this path only released holds
+          // (which are disabled by default), so abandoned-checkout stock leaked.
+          // updateOrderStatus throws on an already-terminal order → no double-restore.
+          try {
+            const { data: ord } = await supabaseAdmin
+              .from('orders').select('status').eq('id', orderId).single();
+            if (ord && !['cancelled', 'delivered', 'completed'].includes(ord.status)) {
+              await orderService.updateOrderStatus({ orderId, newStatus: 'cancelled', actorId: 'stripe-webhook' });
+            }
+          } catch (e) {
+            console.warn('[WEBHOOK] cancel-restore failed:', orderId, e.message);
+          }
+          // Legacy holds release (no-op unless inventory holds are enabled).
           try {
             const { releaseHoldsForOrder } = require('../services/tryOnInventoryService');
             await releaseHoldsForOrder(orderId);
