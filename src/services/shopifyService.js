@@ -116,18 +116,13 @@ async function shopifyPut(shopDomain, accessToken, path, body) {
 }
 
 // ── Category mapping ───────────────────────────────────────────────────────────
+// Normalize Shopify's freeform product_type (falling back to its tags) onto one of
+// DapperDriver's canonical shopper categories. See categoryNormalizer.js.
+const { normalizeCategory } = require('./categoryNormalizer');
 
-const SHOPIFY_TYPE_TO_CATEGORY = {
-  'Tops': 'Tops', 'T-Shirts': 'Tops', 'Shirts': 'Tops', 'Blouses': 'Tops',
-  'Bottoms': 'Bottoms', 'Pants': 'Bottoms', 'Jeans': 'Bottoms', 'Skirts': 'Bottoms', 'Shorts': 'Bottoms',
-  'Dresses': 'Dresses', 'Jumpsuits': 'Dresses',
-  'Outerwear': 'Outerwear', 'Jackets': 'Outerwear', 'Coats': 'Outerwear',
-  'Shoes': 'Shoes', 'Boots': 'Shoes', 'Sneakers': 'Shoes', 'Heels': 'Shoes',
-  'Accessories': 'Accessories', 'Bags': 'Accessories', 'Jewelry': 'Accessories',
-};
-
-function mapShopifyCategory(productType) {
-  return SHOPIFY_TYPE_TO_CATEGORY[productType] || 'Accessories';
+function mapShopifyCategory(productType, tags) {
+  const raw = (productType && String(productType).trim()) ? productType : (tags || '');
+  return normalizeCategory(raw);
 }
 
 // ── Product sync ───────────────────────────────────────────────────────────────
@@ -217,7 +212,7 @@ async function syncProducts(integrationId) {
                 description:   sp.body_html?.replace(/<[^>]*>/g, '') || null,
                 price:         price || 0.01,
                 compare_price: comparePrice,
-                category:      mapShopifyCategory(sp.product_type),
+                category:      mapShopifyCategory(sp.product_type, sp.tags),
                 images,
                 sizes,
                 tags:          sp.tags ? sp.tags.split(',').map(t => t.trim()) : [],

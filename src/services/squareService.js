@@ -130,14 +130,9 @@ async function refreshToken(refreshToken) {
 
 // ── Category mapping ───────────────────────────────────────────────────────────
 
-const SQUARE_CATEGORY_MAP = {
-  'Tops': 'Tops', 'T-Shirts': 'Tops', 'Shirts': 'Tops',
-  'Bottoms': 'Bottoms', 'Pants': 'Bottoms', 'Denim': 'Bottoms',
-  'Dresses': 'Dresses', 'Jumpsuits': 'Dresses',
-  'Outerwear': 'Outerwear', 'Jackets': 'Outerwear', 'Coats': 'Outerwear',
-  'Footwear': 'Shoes', 'Shoes': 'Shoes',
-  'Accessories': 'Accessories', 'Bags': 'Accessories', 'Jewelry': 'Accessories',
-};
+// Normalize Square's freeform catalog category name onto a canonical DapperDriver
+// category. See categoryNormalizer.js.
+const { normalizeCategory } = require('./categoryNormalizer');
 
 // ── Product sync ───────────────────────────────────────────────────────────────
 
@@ -185,14 +180,15 @@ async function syncProducts(integrationId) {
           .filter(o => o.type === 'IMAGE' && itemData.image_ids?.includes(o.id));
         const images = relatedImages.map(img => img.image_data?.url).filter(Boolean);
 
-        // Get category name
-        let category = 'Accessories';
-        if (itemData.category_id) {
-          const catObj = (result.related_objects || [])
-            .find(o => o.id === itemData.category_id);
-          const catName = catObj?.category_data?.name || '';
-          category = SQUARE_CATEGORY_MAP[catName] || 'Accessories';
-        }
+        // Get category name and normalize onto a canonical DapperDriver category.
+        // Fall back to the item name if Square has no category (so a product called
+        // "Linen Trousers" still lands in Bottoms rather than the Accessories default).
+        let category;
+        const catObj = itemData.category_id
+          ? (result.related_objects || []).find(o => o.id === itemData.category_id)
+          : null;
+        const catName = catObj?.category_data?.name || '';
+        category = normalizeCategory(catName || itemData.name || '');
 
         // Check existing mapping
         const { data: existing } = await supabaseAdmin
