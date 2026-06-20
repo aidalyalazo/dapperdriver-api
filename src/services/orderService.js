@@ -479,6 +479,14 @@ async function createOrder({
           .filter(Boolean).join(', ')
       : (deliveryAddress || '');
 
+  // Also persist the structured components so orders can be filtered/grouped by
+  // city/state/zip (analytics, reporting). Null for pickup or string addresses.
+  const addrObj = (!isPickup && deliveryAddress && typeof deliveryAddress === 'object')
+    ? deliveryAddress : null;
+  const deliveryCity = addrObj?.city ? String(addrObj.city).trim() : null;
+  const deliveryState = addrObj?.state ? String(addrObj.state).trim() : null;
+  const deliveryZip = addrObj?.zip ? String(addrObj.zip).trim() : null;
+
   // ── Phase 3: Estimated delivery + DB inserts ─────────────────────────────
   // Calculate estimated delivery considering boutique hours + active queue.
   const deliveryEstimate = await calculateEstimatedDelivery(boutiqueId);
@@ -542,6 +550,27 @@ async function createOrder({
       }
     }
     throw Object.assign(new Error(error.message), { status: 400 });
+  }
+
+  // Best-effort: persist structured address parts (city/state/zip) for analytics
+  // and filtering. Wrapped so it silently no-ops if the columns don't exist yet
+  // (migration 026 adds them) — it must never block order creation. Auto-activates
+  // once the migration runs; no code change needed then.
+  if (deliveryCity || deliveryState || deliveryZip) {
+    await Promise.resolve(
+      supabaseAdmin
+        .from('orders')
+        .update({ delivery_city: deliveryCity, delivery_state: deliveryState, delivery_zip: deliveryZip })
+        .eq('id', order.id)
+    )
+      .then((r) => {
+        if (!r || !r.error) {
+          order.delivery_city = deliveryCity;
+          order.delivery_state = deliveryState;
+          order.delivery_zip = deliveryZip;
+        }
+      })
+      .catch(() => {});
   }
 
   // ── Decision A: place inventory holds (atomic, behind flag) ───────────────
