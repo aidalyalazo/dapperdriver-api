@@ -79,6 +79,22 @@ router.get(
       );
     }
 
+    // Demand-signal logging (fire-and-forget): the app searches via this endpoint,
+    // so log real text searches here (the standalone /search route is unused by the
+    // app). Zero-result queries are literal demand gaps for the admin Search board.
+    // Skip the 'sale' shortcut and blank/category-chip traffic.
+    if (search && !searchIsSale && String(search).trim()) {
+      supabaseAdmin
+        .from('search_logs')
+        .insert({
+          query: String(search).slice(0, 200),
+          result_count: wantOnSale ? filtered.length : (count || 0),
+          city_id: city_id || null,
+          shopper_id: null,
+        })
+        .then(() => {}, () => {});
+    }
+
     res.json({
       data: filtered,
       total: wantOnSale ? filtered.length : count,
