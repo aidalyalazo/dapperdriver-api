@@ -333,8 +333,10 @@ async function payoutDriver({ driverId, amount, stripeAccountId, orderIds }) {
         destination: stripeAccountId,
         metadata:    { driver_id: driverId, order_count: claimed.length },
       },
-      // Idempotent per driver + order set: a retried call cannot double-transfer
-      { idempotencyKey: `driver_payout_${driverId}_${claimed.map((c) => c.id).sort().join('_').slice(0, 180)}` }
+      // Idempotent per driver + order set: a retried call cannot double-transfer.
+      // Hash the sorted id list (instead of truncating) so two different large order
+      // sets for the same driver can't collapse to the same key and skip a transfer.
+      { idempotencyKey: `driver_payout_${driverId}_${require('crypto').createHash('sha256').update(claimed.map((c) => c.id).sort().join('_')).digest('hex').slice(0, 32)}` }
     );
   } catch (transferErr) {
     // Transfer failed — release the claim so the next run retries these orders

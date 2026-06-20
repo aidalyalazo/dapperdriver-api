@@ -124,7 +124,7 @@ router.post(
 
     const { data: order } = await supabaseAdmin
       .from('orders')
-      .select('stripe_payment_intent_id, shopper_id, tip, fulfillment_type')
+      .select('stripe_payment_intent_id, shopper_id, tip, fulfillment_type, status, driver_paid, driver_id')
       .eq('id', orderId)
       .single();
 
@@ -138,12 +138,17 @@ router.post(
       throw Object.assign(new Error('Tips are not applicable for pickup orders'), { status: 400 });
     }
 
+    // A cancelled order has no driver to pay — tipping it would just charge the
+    // shopper for nothing.
+    if (order.status === 'cancelled') {
+      throw Object.assign(new Error('This order was cancelled and cannot be tipped'), { status: 400 });
+    }
+
     if (!order.stripe_payment_intent_id) {
       throw Object.assign(new Error('No payment intent found'), { status: 400 });
     }
 
     const oldTip = parseFloat(order.tip || 0);
-    const newTip = oldTip + amount;
     const tipCents = Math.round(amount * 100);
 
     // The original PaymentIntent is already captured at delivery; tips are a
@@ -181,13 +186,49 @@ router.post(
       return res.status(402).json({ error: 'Could not charge the tip. Please try again.' });
     }
 
-    // Charge succeeded — now persist the cumulative tip.
-    await supabaseAdmin
-      .from('orders')
-      .update({ tip: newTip })
-      .eq('id', orderId);
+    // Charge succeeded — persist the cumulative tip with a compare-and-set retry so
+    // two concurrent tips on the same order accumulate instead of overwriting each
+    // other (a lost update would mean charging the shopper but underpaying the driver).
+    let persistedTip = null;
+    for (let attempt = 0; attempt < 5 && persistedTip === null; attempt++) {
+      let base = oldTip;
+      if (attempt > 0) {
+        const { data: cur } = await supabaseAdmin
+          .from('orders').select('tip').eq('id', orderId).single();
+        base = parseFloat(cur?.tip || 0);
+      }
+      const next = Math.round((base + amount) * 100) / 100;
+      const { data: updated } = await supabaseAdmin
+        .from('orders')
+        .update({ tip: next })
+        .eq('id', orderId)
+        .eq('tip', base) // CAS: only if tip hasn't changed since we read it
+        .select('tip');
+      if (updated && updated.length) persistedTip = next;
+    }
+    if (persistedTip === null) {
+      // CAS kept losing the race (or tip was NULL) — fall back to a plain increment
+      // off the freshest read so the already-charged tip is never dropped.
+      const { data: fresh } = await supabaseAdmin
+        .from('orders').select('tip').eq('id', orderId).single();
+      persistedTip = Math.round((parseFloat(fresh?.tip || 0) + amount) * 100) / 100;
+      await supabaseAdmin.from('orders').update({ tip: persistedTip }).eq('id', orderId);
+    }
 
-    res.json({ tip: newTip });
+    // Safety net: if the driver was ALREADY paid out for this order, the payout path
+    // (which only sweeps driver_paid=false rows) will never deliver this tip. Alert
+    // admins to pay it manually rather than let the platform silently keep it.
+    if (order.driver_paid === true) {
+      const { notifyAdmins } = require('../utils/adminAlerts');
+      await notifyAdmins({
+        type: 'tip_after_payout',
+        title: 'Tip added after driver payout',
+        body: `Order ${orderId} received a $${amount.toFixed(2)} tip after the driver was already paid — pay the driver this tip manually.`,
+        data: { order_id: orderId, driver_id: order.driver_id, tip_amount: amount },
+      }).catch(() => {});
+    }
+
+    res.json({ tip: persistedTip });
   })
 );
 
