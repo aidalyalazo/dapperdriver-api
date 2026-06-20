@@ -119,6 +119,44 @@ async function sweepStalledOrders() {
         console.error('[STALLED SWEEP] Re-broadcast failed:', order.id, e.message)
       );
     }
+
+    // ── Stuck in active delivery: driver picked up but never marked delivered ──
+    // Do NOT auto-cancel — the driver physically has the goods, so refunding would
+    // be wrong. Alert admins ONCE so a human resolves it before the Stripe
+    // authorization auto-expires (~7 days) leaving boutique + driver unpaid.
+    const STUCK_DELIVERY_MINUTES = 45;
+    const deliveryCutoff = new Date(Date.now() - STUCK_DELIVERY_MINUTES * 60 * 1000).toISOString();
+    const { data: stuckDeliveries } = await supabaseAdmin
+      .from('orders')
+      .select('id, driver_id, total_amount, updated_at')
+      .in('status', ['picked_up', 'in_transit'])
+      .not('driver_id', 'is', null)
+      .lt('updated_at', deliveryCutoff);
+
+    for (const order of stuckDeliveries || []) {
+      // Alert only once — an order_timeline marker is the idempotency guard.
+      const { data: alerted } = await supabaseAdmin
+        .from('order_timeline')
+        .select('id')
+        .eq('order_id', order.id)
+        .eq('status', 'delivery_stuck_alerted')
+        .limit(1);
+      if (alerted && alerted.length) continue;
+
+      const mins = Math.round((Date.now() - new Date(order.updated_at).getTime()) / 60000);
+      await notifyAdmins({
+        type: 'order_stuck_in_delivery',
+        title: '⚠️ Order stuck in delivery',
+        body: `Order ${order.id.slice(0, 8)} ($${Number(order.total_amount || 0).toFixed(2)}) was picked up but not marked delivered for ${mins} min. Nudge the driver — the payment authorization will expire (~7 days) if left, leaving boutique + driver unpaid.`,
+        data: { order_id: order.id, driver_id: order.driver_id },
+      }).catch(() => {});
+
+      await Promise.resolve(supabaseAdmin.from('order_timeline').insert({
+        order_id: order.id,
+        status: 'delivery_stuck_alerted',
+        notes: `No delivery confirmation ${mins} min after pickup — admin alerted.`,
+      })).catch(() => {});
+    }
   } catch (err) {
     console.error('[STALLED SWEEP] Fatal error:', err.message);
   }
