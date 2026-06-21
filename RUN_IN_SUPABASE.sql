@@ -862,6 +862,39 @@ EXCEPTION
 END $run$;
 
 
+-- ── Mg. Migration 027 — shopper date_of_birth + age view ──────────────────
+
+DO $run$ BEGIN
+  EXECUTE $stmt$ALTER TABLE shoppers ADD COLUMN IF NOT EXISTS date_of_birth DATE$stmt$;
+EXCEPTION
+  WHEN undefined_column OR undefined_table OR undefined_object
+    OR duplicate_object OR duplicate_table OR duplicate_column THEN
+    RAISE NOTICE 'SKIPPED: %', SQLERRM;
+END $run$;
+
+DO $run$ BEGIN
+  EXECUTE $stmt$CREATE OR REPLACE VIEW shopper_age_v AS
+SELECT
+  id,
+  date_of_birth,
+  date_part('year', age(date_of_birth))::int AS age_years,
+  CASE
+    WHEN date_of_birth IS NULL THEN NULL
+    WHEN date_part('year', age(date_of_birth)) < 18 THEN 'under_18'
+    WHEN date_part('year', age(date_of_birth)) < 25 THEN '18_24'
+    WHEN date_part('year', age(date_of_birth)) < 35 THEN '25_34'
+    WHEN date_part('year', age(date_of_birth)) < 45 THEN '35_44'
+    WHEN date_part('year', age(date_of_birth)) < 55 THEN '45_54'
+    ELSE '55_plus'
+  END AS age_bracket
+FROM shoppers$stmt$;
+EXCEPTION
+  WHEN undefined_column OR undefined_table OR undefined_object
+    OR duplicate_object OR duplicate_table OR duplicate_column THEN
+    RAISE NOTICE 'SKIPPED: %', SQLERRM;
+END $run$;
+
+
 -- ── Mf. Migration 026 — order delivery address parts ──────────────────────
 
 DO $run$ BEGIN

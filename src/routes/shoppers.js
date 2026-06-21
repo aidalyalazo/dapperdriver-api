@@ -17,7 +17,7 @@ router.get(
   asyncHandler(async (req, res) => {
     const { data, error } = await supabaseAdmin
       .from('shoppers')
-      .select('id, user_id, display_name, full_name, email, phone, avatar_url, default_address, created_at, style_preferences, size_tops, size_bottoms, size_shoes, size_dresses, body_measurements, marketing_emails')
+      .select('id, user_id, display_name, full_name, email, phone, avatar_url, default_address, created_at, style_preferences, size_tops, size_bottoms, size_shoes, size_dresses, body_measurements, marketing_emails, date_of_birth')
       .eq('user_id', req.userId)
       .single();
 
@@ -37,6 +37,18 @@ router.patch(
     body('display_name').optional().isString().trim().notEmpty(),
     body('phone').optional().isMobilePhone('any'),
     body('default_address').optional().isObject(),
+    body('date_of_birth').optional({ nullable: true }).isISO8601().withMessage('date_of_birth must be YYYY-MM-DD')
+      .custom((v) => {
+        const dob = new Date(v);
+        if (isNaN(dob.getTime())) throw new Error('invalid date');
+        const now = new Date();
+        let age = now.getFullYear() - dob.getFullYear();
+        const m = now.getMonth() - dob.getMonth();
+        if (m < 0 || (m === 0 && now.getDate() < dob.getDate())) age--;
+        if (age < 13) throw new Error('You must be at least 13 to use DapperDriver');
+        if (age > 120) throw new Error('Please enter a valid date of birth');
+        return true;
+      }),
     validate,
   ],
   asyncHandler(async (req, res) => {
@@ -44,6 +56,7 @@ router.patch(
       'display_name', 'phone', 'avatar_url', 'default_address',
       'size_tops', 'size_bottoms', 'size_shoes', 'size_dresses',
       'body_measurements', 'style_preferences', 'marketing_emails',
+      'date_of_birth',
     ];
     const updates = Object.fromEntries(
       Object.entries(req.body).filter(([k]) => allowed.includes(k))
