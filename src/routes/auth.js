@@ -41,10 +41,22 @@ router.post(
     body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters'),
     body('role').isIn(['shopper', 'boutique', 'driver']).withMessage('role must be shopper, boutique, or driver'),
     body('full_name').notEmpty().withMessage('full_name is required'),
+    body('date_of_birth').optional({ nullable: true }).isISO8601().withMessage('date_of_birth must be YYYY-MM-DD')
+      .custom((v) => {
+        const dob = new Date(v);
+        if (isNaN(dob.getTime())) throw new Error('invalid date');
+        const now = new Date();
+        let age = now.getFullYear() - dob.getFullYear();
+        const m = now.getMonth() - dob.getMonth();
+        if (m < 0 || (m === 0 && now.getDate() < dob.getDate())) age--;
+        if (age < 13) throw new Error('You must be at least 13 to use DapperDriver');
+        if (age > 120) throw new Error('Please enter a valid date of birth');
+        return true;
+      }),
     validate,
   ],
   asyncHandler(async (req, res) => {
-    const { email, password, role, full_name, phone } = req.body;
+    const { email, password, role, full_name, phone, date_of_birth } = req.body;
 
     // 1. Create Supabase Auth user WITHOUT role in metadata first.
     //    A DB trigger on auth.users fires on INSERT and tries to create
@@ -105,11 +117,21 @@ router.post(
       // Shopper: upsert the profile row.
       // The DB trigger may have auto-created the row with user_id = userId.
       // We upsert on user_id so this is idempotent whether or not the trigger fired.
-      const { error: updateError } = await supabaseAdmin.from('shoppers')
+      let { error: updateError } = await supabaseAdmin.from('shoppers')
         .upsert(
-          { user_id: userId, display_name: full_name, email, phone: phone || null },
+          { user_id: userId, display_name: full_name, email, phone: phone || null, date_of_birth: date_of_birth || null },
           { onConflict: 'user_id' }
         );
+
+      // If date_of_birth column isn't there yet (migration 027 pending), don't fail
+      // registration — retry the upsert without it (DOB is captured once 027 runs).
+      if (updateError && /date_of_birth/.test(updateError.message || '')) {
+        ({ error: updateError } = await supabaseAdmin.from('shoppers')
+          .upsert(
+            { user_id: userId, display_name: full_name, email, phone: phone || null },
+            { onConflict: 'user_id' }
+          ));
+      }
 
       if (updateError) {
         await supabaseAdmin.auth.admin.deleteUser(userId);

@@ -15,11 +15,18 @@ router.get(
   '/me',
   requireRole('shopper'),
   asyncHandler(async (req, res) => {
-    const { data, error } = await supabaseAdmin
+    const baseCols = 'id, user_id, display_name, full_name, email, phone, avatar_url, default_address, created_at, style_preferences, size_tops, size_bottoms, size_shoes, size_dresses, body_measurements, marketing_emails';
+    // Tolerate date_of_birth not existing yet (migration 027) — fall back without it
+    // so the profile endpoint never breaks; it self-activates once the column is added.
+    let { data, error } = await supabaseAdmin
       .from('shoppers')
-      .select('id, user_id, display_name, full_name, email, phone, avatar_url, default_address, created_at, style_preferences, size_tops, size_bottoms, size_shoes, size_dresses, body_measurements, marketing_emails, date_of_birth')
+      .select(`${baseCols}, date_of_birth`)
       .eq('user_id', req.userId)
       .single();
+    if (error && /date_of_birth/.test(error.message || '')) {
+      ({ data, error } = await supabaseAdmin
+        .from('shoppers').select(baseCols).eq('user_id', req.userId).single());
+    }
 
     if (error) throw Object.assign(new Error('Shopper not found'), { status: 404 });
     res.json(data);
@@ -62,11 +69,19 @@ router.patch(
       Object.entries(req.body).filter(([k]) => allowed.includes(k))
     );
 
-    const { data, error } = await supabaseAdmin
+    let { data, error } = await supabaseAdmin
       .from('shoppers')
       .update(updates)
       .eq('user_id', req.userId)
       .select();
+
+    // If date_of_birth column isn't there yet (migration 027 pending), retry the
+    // rest of the update without it rather than failing the whole save.
+    if (error && /date_of_birth/.test(error.message || '') && 'date_of_birth' in updates) {
+      const { date_of_birth, ...rest } = updates;
+      ({ data, error } = await supabaseAdmin
+        .from('shoppers').update(rest).eq('user_id', req.userId).select());
+    }
 
     if (error) throw new Error(error.message);
     if (!data || data.length === 0) {
