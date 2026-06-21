@@ -53,10 +53,11 @@ router.post(
         if (age > 120) throw new Error('Please enter a valid date of birth');
         return true;
       }),
+    body('gender').optional({ nullable: true }).isString().isLength({ max: 40 }),
     validate,
   ],
   asyncHandler(async (req, res) => {
-    const { email, password, role, full_name, phone, date_of_birth } = req.body;
+    const { email, password, role, full_name, phone, date_of_birth, gender } = req.body;
 
     // 1. Create Supabase Auth user WITHOUT role in metadata first.
     //    A DB trigger on auth.users fires on INSERT and tries to create
@@ -117,20 +118,26 @@ router.post(
       // Shopper: upsert the profile row.
       // The DB trigger may have auto-created the row with user_id = userId.
       // We upsert on user_id so this is idempotent whether or not the trigger fired.
+      const baseRow = { user_id: userId, display_name: full_name, email, phone: phone || null };
       let { error: updateError } = await supabaseAdmin.from('shoppers')
         .upsert(
-          { user_id: userId, display_name: full_name, email, phone: phone || null, date_of_birth: date_of_birth || null },
+          { ...baseRow, date_of_birth: date_of_birth || null, gender: gender || null },
           { onConflict: 'user_id' }
         );
 
-      // If date_of_birth column isn't there yet (migration 027 pending), don't fail
-      // registration — retry the upsert without it (DOB is captured once 027 runs).
-      if (updateError && /date_of_birth/.test(updateError.message || '')) {
+      // If the demographic columns aren't there yet (migrations 027/028 pending),
+      // don't fail registration — retry the upsert without the missing column(s).
+      if (updateError && /(date_of_birth|gender)/.test(updateError.message || '')) {
+        const retryRow = { ...baseRow };
+        if (!/gender/.test(updateError.message || '')) retryRow.date_of_birth = date_of_birth || null;
+        if (!/date_of_birth/.test(updateError.message || '')) retryRow.gender = gender || null;
         ({ error: updateError } = await supabaseAdmin.from('shoppers')
-          .upsert(
-            { user_id: userId, display_name: full_name, email, phone: phone || null },
-            { onConflict: 'user_id' }
-          ));
+          .upsert(retryRow, { onConflict: 'user_id' }));
+        // Final fallback: base columns only.
+        if (updateError && /(date_of_birth|gender)/.test(updateError.message || '')) {
+          ({ error: updateError } = await supabaseAdmin.from('shoppers')
+            .upsert(baseRow, { onConflict: 'user_id' }));
+        }
       }
 
       if (updateError) {

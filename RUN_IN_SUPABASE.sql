@@ -862,6 +862,17 @@ EXCEPTION
 END $run$;
 
 
+-- ── Mh. Migration 028 — shopper gender ────────────────────────────────────
+
+DO $run$ BEGIN
+  EXECUTE $stmt$ALTER TABLE shoppers ADD COLUMN IF NOT EXISTS gender TEXT$stmt$;
+EXCEPTION
+  WHEN undefined_column OR undefined_table OR undefined_object
+    OR duplicate_object OR duplicate_table OR duplicate_column THEN
+    RAISE NOTICE 'SKIPPED: %', SQLERRM;
+END $run$;
+
+
 -- ── Mg. Migration 027 — shopper date_of_birth + age view ──────────────────
 
 DO $run$ BEGIN

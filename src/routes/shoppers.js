@@ -16,14 +16,14 @@ router.get(
   requireRole('shopper'),
   asyncHandler(async (req, res) => {
     const baseCols = 'id, user_id, display_name, full_name, email, phone, avatar_url, default_address, created_at, style_preferences, size_tops, size_bottoms, size_shoes, size_dresses, body_measurements, marketing_emails';
-    // Tolerate date_of_birth not existing yet (migration 027) — fall back without it
-    // so the profile endpoint never breaks; it self-activates once the column is added.
+    // Tolerate the demographic columns not existing yet (migrations 027/028) — fall
+    // back without them so the profile endpoint never breaks; self-activates on migrate.
     let { data, error } = await supabaseAdmin
       .from('shoppers')
-      .select(`${baseCols}, date_of_birth`)
+      .select(`${baseCols}, date_of_birth, gender`)
       .eq('user_id', req.userId)
       .single();
-    if (error && /date_of_birth/.test(error.message || '')) {
+    if (error && /(date_of_birth|gender)/.test(error.message || '')) {
       ({ data, error } = await supabaseAdmin
         .from('shoppers').select(baseCols).eq('user_id', req.userId).single());
     }
@@ -63,7 +63,7 @@ router.patch(
       'display_name', 'phone', 'avatar_url', 'default_address',
       'size_tops', 'size_bottoms', 'size_shoes', 'size_dresses',
       'body_measurements', 'style_preferences', 'marketing_emails',
-      'date_of_birth',
+      'date_of_birth', 'gender',
     ];
     const updates = Object.fromEntries(
       Object.entries(req.body).filter(([k]) => allowed.includes(k))
@@ -75,10 +75,10 @@ router.patch(
       .eq('user_id', req.userId)
       .select();
 
-    // If date_of_birth column isn't there yet (migration 027 pending), retry the
-    // rest of the update without it rather than failing the whole save.
-    if (error && /date_of_birth/.test(error.message || '') && 'date_of_birth' in updates) {
-      const { date_of_birth, ...rest } = updates;
+    // If a demographic column isn't there yet (migrations 027/028 pending), retry the
+    // rest of the update without those columns rather than failing the whole save.
+    if (error && /(date_of_birth|gender)/.test(error.message || '')) {
+      const { date_of_birth, gender, ...rest } = updates;
       ({ data, error } = await supabaseAdmin
         .from('shoppers').update(rest).eq('user_id', req.userId).select());
     }
