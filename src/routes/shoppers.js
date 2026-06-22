@@ -15,7 +15,7 @@ router.get(
   '/me',
   requireRole('shopper'),
   asyncHandler(async (req, res) => {
-    const baseCols = 'id, user_id, display_name, full_name, email, phone, avatar_url, default_address, created_at, style_preferences, size_tops, size_bottoms, size_shoes, size_dresses, body_measurements, marketing_emails';
+    const baseCols = 'id, user_id, display_name, full_name, email, phone, avatar_url, default_address, created_at, style_preferences, category_prefs, price_tier, gender, size_tops, size_bottoms, size_shoes, size_dresses, body_measurements, marketing_emails';
     // Tolerate the demographic columns not existing yet (migrations 027/028) — fall
     // back without them so the profile endpoint never breaks; self-activates on migrate.
     let { data, error } = await supabaseAdmin
@@ -62,25 +62,30 @@ router.patch(
     const allowed = [
       'display_name', 'phone', 'avatar_url', 'default_address',
       'size_tops', 'size_bottoms', 'size_shoes', 'size_dresses',
-      'body_measurements', 'style_preferences', 'marketing_emails',
+      'body_measurements', 'style_preferences', 'category_prefs',
+      'shopping_occasions', 'price_tier', 'marketing_emails',
       'date_of_birth', 'gender',
     ];
     const updates = Object.fromEntries(
       Object.entries(req.body).filter(([k]) => allowed.includes(k))
     );
 
-    let { data, error } = await supabaseAdmin
-      .from('shoppers')
-      .update(updates)
-      .eq('user_id', req.userId)
-      .select();
-
-    // If a demographic column isn't there yet (migrations 027/028 pending), retry the
-    // rest of the update without those columns rather than failing the whole save.
-    if (error && /(date_of_birth|gender)/.test(error.message || '')) {
-      const { date_of_birth, gender, ...rest } = updates;
+    // Apply the update, tolerating columns that don't exist yet (a pending
+    // migration like shopping_occasions): drop the offending column and retry so
+    // the rest of the profile still saves. Self-activates once the migration runs.
+    let data, error;
+    for (let attempt = 0; attempt < 10; attempt++) {
+      if (Object.keys(updates).length === 0) {
+        ({ data, error } = await supabaseAdmin
+          .from('shoppers').select().eq('user_id', req.userId).limit(1));
+        break;
+      }
       ({ data, error } = await supabaseAdmin
-        .from('shoppers').update(rest).eq('user_id', req.userId).select());
+        .from('shoppers').update(updates).eq('user_id', req.userId).select());
+      if (!error) break;
+      const missing = Object.keys(updates).find((k) => new RegExp(`\\b${k}\\b`).test(error.message || ''));
+      if (!missing) break;
+      delete updates[missing];
     }
 
     if (error) throw new Error(error.message);

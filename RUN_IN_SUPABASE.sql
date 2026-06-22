@@ -862,17 +862,6 @@ EXCEPTION
 END $run$;
 
 
--- ── Mh. Migration 028 — shopper gender ────────────────────────────────────
-
-DO $run$ BEGIN
-  EXECUTE $stmt$ALTER TABLE shoppers ADD COLUMN IF NOT EXISTS gender TEXT$stmt$;
-EXCEPTION
-  WHEN undefined_column OR undefined_table OR undefined_object
-    OR duplicate_object OR duplicate_table OR duplicate_column THEN
-    RAISE NOTICE 'SKIPPED: %', SQLERRM;
-END $run$;
-
-
 -- ── Mg. Migration 027 — shopper date_of_birth + age view ──────────────────
 
 DO $run$ BEGIN
@@ -899,6 +888,28 @@ SELECT
     ELSE '55_plus'
   END AS age_bracket
 FROM shoppers$stmt$;
+EXCEPTION
+  WHEN undefined_column OR undefined_table OR undefined_object
+    OR duplicate_object OR duplicate_table OR duplicate_column THEN
+    RAISE NOTICE 'SKIPPED: %', SQLERRM;
+END $run$;
+
+
+-- ── Mh. Migration 028 — shopper gender ────────────────────────────────────
+
+DO $run$ BEGIN
+  EXECUTE $stmt$ALTER TABLE shoppers ADD COLUMN IF NOT EXISTS gender TEXT$stmt$;
+EXCEPTION
+  WHEN undefined_column OR undefined_table OR undefined_object
+    OR duplicate_object OR duplicate_table OR duplicate_column THEN
+    RAISE NOTICE 'SKIPPED: %', SQLERRM;
+END $run$;
+
+
+-- ── Mi. Migration 029 — shopping occasions ────────────────────────────────
+
+DO $run$ BEGIN
+  EXECUTE $stmt$ALTER TABLE shoppers ADD COLUMN IF NOT EXISTS shopping_occasions TEXT[] DEFAULT '{}'$stmt$;
 EXCEPTION
   WHEN undefined_column OR undefined_table OR undefined_object
     OR duplicate_object OR duplicate_table OR duplicate_column THEN
