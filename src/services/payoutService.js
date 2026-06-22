@@ -113,6 +113,9 @@ async function cashOut({ recipientId, recipientType }) {
       id: payoutId,
       recipient_id: recipientId,
       recipient_type: recipientType,
+      // Role-specific id is required by the payouts CHECK constraint (recipient_id
+      // is the auth user; boutique_id/driver_id is the table row id).
+      [recipientType === 'boutique' ? 'boutique_id' : 'driver_id']: tableRowId,
       payout_number: `PO-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
       period_start: nowIso,
       period_end: nowIso,
@@ -126,7 +129,7 @@ async function cashOut({ recipientId, recipientType }) {
     })
     .select()
     .single())
-    .catch(() => ({ data: null }));
+    .catch((e) => { console.error('[PAYOUT] record insert failed (money already transferred!):', e?.message); return { data: null }; });
 
   // Stamp the payout id onto the orders it covers (best-effort traceability).
   await Promise.resolve(supabaseAdmin

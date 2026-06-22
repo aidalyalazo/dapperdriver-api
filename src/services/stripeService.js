@@ -270,6 +270,7 @@ async function transferToBoutique(order) {
     order_id:          order.id,
     recipient_id:      order.boutique_id,
     recipient_type:    'boutique',
+    boutique_id:       order.boutique_id,
     payout_number:     `PO-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
     period_start:      new Date().toISOString(),
     period_end:        new Date().toISOString(),
@@ -363,6 +364,7 @@ async function payoutDriver({ driverId, amount, stripeAccountId, orderIds }) {
   await supabaseAdmin.from('payouts').insert({
     recipient_id:      driverId,
     recipient_type:    'driver',
+    driver_id:         driverId,
     payout_number:     `PO-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
     period_start:      new Date().toISOString(),
     period_end:        new Date().toISOString(),
