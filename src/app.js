@@ -92,6 +92,9 @@ app.use(express.urlencoded({ extended: true }));
 // ── Health Check ───────────────────────────────────────────────────────────
 app.get('/health', (_req, res) => res.json({ status: 'ok', ts: new Date().toISOString() }));
 
+// ── Stripe Connect onboarding return/refresh landing pages (HTML, no /api prefix) ──
+app.use('/connect', require('./routes/connect'));
+
 // ── API Routes ─────────────────────────────────────────────────────────────
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/shoppers', shopperRoutes);

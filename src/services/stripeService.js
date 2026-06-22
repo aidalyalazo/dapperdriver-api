@@ -1,6 +1,12 @@
 const { stripe } = require('../config/stripe');
 const { supabaseAdmin } = require('../config/supabase');
 
+// Reachable HTTPS base for Stripe Connect return/refresh URLs. NEVER localhost —
+// onboarding runs on the user's phone, which can't reach a dev server (that was
+// the "kicked out on the last page" bug). Falls back to the live API URL.
+const PUBLIC_BASE = process.env.PUBLIC_BASE_URL || process.env.API_BASE_URL
+  || 'https://dapperdriver-api-production.up.railway.app';
+
 // ─────────────────────────────────────────────────────────────────────────────
 // BOUTIQUE ONBOARDING (Stripe Connect — Express accounts)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -40,8 +46,8 @@ async function createConnectAccount({ boutiqueId, email, businessName }) {
 async function createAccountLink({ stripeAccountId, boutiqueId }) {
   const link = await stripe.accountLinks.create({
     account:     stripeAccountId,
-    refresh_url: `${process.env.FRONTEND_URL}/boutiques/onboarding/refresh?boutiqueId=${boutiqueId}`,
-    return_url:  `${process.env.FRONTEND_URL}/boutiques/onboarding/complete?boutiqueId=${boutiqueId}`,
+    refresh_url: `${PUBLIC_BASE}/connect/refresh?role=boutique&id=${boutiqueId}`,
+    return_url:  `${PUBLIC_BASE}/connect/return?role=boutique&id=${boutiqueId}`,
     type:        'account_onboarding',
   });
   return link;
@@ -54,8 +60,8 @@ async function createAccountLink({ stripeAccountId, boutiqueId }) {
 async function createDriverAccountLink({ stripeAccountId, driverId }) {
   const link = await stripe.accountLinks.create({
     account:     stripeAccountId,
-    refresh_url: `${process.env.FRONTEND_URL}/drivers/onboarding/refresh?driverId=${driverId}`,
-    return_url:  `${process.env.FRONTEND_URL}/drivers/onboarding/complete?driverId=${driverId}`,
+    refresh_url: `${PUBLIC_BASE}/connect/refresh?role=driver&id=${driverId}`,
+    return_url:  `${PUBLIC_BASE}/connect/return?role=driver&id=${driverId}`,
     type:        'account_onboarding',
   });
   return link;
