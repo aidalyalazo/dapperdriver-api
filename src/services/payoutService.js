@@ -58,12 +58,15 @@ async function cashOut({ recipientId, recipientType }) {
   const claimedIds = (claimed || []).map((o) => o.id);
 
   // Release helper — flip the claimed orders back to unpaid (used on bail/failure).
+  // Returns whether the release actually succeeded, so callers can escalate a
+  // failed release (orders stuck marked-paid with no money sent).
   const releaseClaim = async () => {
-    if (!claimedIds.length) return;
+    if (!claimedIds.length) return true;
     const release = {};
     release[paidCol] = false;
-    await Promise.resolve(supabaseAdmin
-      .from('orders').update(release).in('id', claimedIds)).catch(() => {});
+    const res = await Promise.resolve(supabaseAdmin
+      .from('orders').update(release).in('id', claimedIds)).catch((e) => ({ error: e }));
+    return !(res && res.error);
   };
 
   if (!claimed || claimed.length === 0) {
@@ -100,7 +103,18 @@ async function cashOut({ recipientId, recipientType }) {
   } catch (err) {
     // Transfer failed — release the claimed orders so the balance is withdrawable
     // again. No payout row was created, so there's nothing to mark failed.
-    await releaseClaim();
+    const released = await releaseClaim();
+    if (!released) {
+      // CRITICAL: orders are still flipped paid=true but NO money was sent — the
+      // recipient would be silently shorted. Surface for manual correction.
+      const { notifyAdmins } = require('../utils/adminAlerts');
+      await notifyAdmins({
+        type: 'payout_release_failed',
+        title: '🔴 Payout release FAILED — orders stuck paid, no transfer',
+        body: `${recipientType} ${recipientId}: Stripe transfer failed AND the claim release failed. Orders ${claimedIds.join(', ')} are marked paid but were NOT paid out ($${total.toFixed(2)}). Set ${paidCol}=false on them manually so the balance is withdrawable again.`,
+        data: { recipient_id: recipientId, recipient_type: recipientType, order_ids: claimedIds, amount: total },
+      }).catch(() => {});
+    }
     throw Object.assign(new Error(`Stripe transfer failed: ${err.message}`), { status: 500 });
   }
 
@@ -130,6 +144,18 @@ async function cashOut({ recipientId, recipientType }) {
     .select()
     .single())
     .catch((e) => { console.error('[PAYOUT] record insert failed (money already transferred!):', e?.message); return { data: null }; });
+
+  if (!payout) {
+    // Money moved + orders are correctly marked paid (no double-pay risk), but the
+    // audit record didn't persist. Alert so it can be reconciled against Stripe.
+    const { notifyAdmins } = require('../utils/adminAlerts');
+    await notifyAdmins({
+      type: 'payout_record_missing',
+      title: '🟠 Payout transferred but record failed to save',
+      body: `${recipientType} ${recipientId}: $${total.toFixed(2)} transferred (${transfer.id}) but the payouts row failed to insert. Reconcile manually — orders ${claimedIds.join(', ')} are paid.`,
+      data: { recipient_id: recipientId, recipient_type: recipientType, transfer_id: transfer.id, amount: total, order_ids: claimedIds },
+    }).catch(() => {});
+  }
 
   // Stamp the payout id onto the orders it covers (best-effort traceability).
   await Promise.resolve(supabaseAdmin
