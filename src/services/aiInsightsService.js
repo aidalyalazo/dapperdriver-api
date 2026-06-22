@@ -173,6 +173,64 @@ async function askClaude({ system, prompt, schema, maxTokens = 4000 }) {
   }
 }
 
+// ── Shopper demographics ─────────────────────────────────────────────────────
+
+// Aggregate shopper demographics/preferences into a compact summary for reports.
+function summarizeDemographics(shoppers) {
+  const list = (shoppers || []).filter(Boolean);
+  const n = list.length;
+  if (!n) return null;
+  const ageOf = (dob) => {
+    if (!dob) return null;
+    const d = new Date(dob); if (isNaN(d.getTime())) return null;
+    const t = new Date(); let a = t.getFullYear() - d.getFullYear();
+    const m = t.getMonth() - d.getMonth();
+    if (m < 0 || (m === 0 && t.getDate() < d.getDate())) a--;
+    return a >= 0 && a <= 120 ? a : null;
+  };
+  const bracket = (a) => a == null ? 'Unknown' : a < 18 ? '<18' : a < 25 ? '18-24' : a < 35 ? '25-34' : a < 45 ? '35-44' : a < 55 ? '45-54' : '55+';
+  const tally = (arr) => { const c = {}; for (const v of arr) if (v) c[v] = (c[v] || 0) + 1; return c; };
+  const top = (c, k = 5) => Object.entries(c).sort((a, b) => b[1] - a[1]).slice(0, k).map(([label, count]) => ({ label, count }));
+  const mostCommon = (c) => { const e = Object.entries(c).filter(([k]) => k !== 'Unknown').sort((a, b) => b[1] - a[1]); return e[0] ? e[0][0] : null; };
+  const ages = tally(list.map((s) => bracket(ageOf(s.date_of_birth))));
+  const genders = tally(list.map((s) => s.gender || 'Unknown'));
+  const budgets = tally(list.map((s) => s.price_tier).filter(Boolean));
+  const withAny = list.filter((s) => s.date_of_birth || s.gender || (s.style_preferences || []).length).length;
+  return {
+    shoppers_analyzed: n,
+    coverage_pct: Math.round((withAny / n) * 100),
+    most_common_age: mostCommon(ages),
+    age_brackets: ages,
+    gender_split: genders,
+    top_styles: top(tally(list.flatMap((s) => s.style_preferences || []))),
+    top_categories: top(tally(list.flatMap((s) => s.category_prefs || []))),
+    top_occasions: top(tally(list.flatMap((s) => s.shopping_occasions || []))),
+    most_common_budget: mostCommon(budgets),
+    budget_tiers: budgets,
+  };
+}
+
+// Fetch demographic fields for a set of shopper user_ids (orders.shopper_id =
+// shoppers.user_id). Tolerates shopping_occasions not existing yet (migration 029).
+async function fetchShopperDemographics(userIds) {
+  const ids = [...new Set((userIds || []).filter(Boolean))];
+  if (!ids.length) return [];
+  const FULL = 'date_of_birth, gender, style_preferences, category_prefs, shopping_occasions, price_tier';
+  const BASE = 'date_of_birth, gender, style_preferences, category_prefs, price_tier';
+  let r = await supabaseAdmin.from('shoppers').select(FULL).in('user_id', ids);
+  if (r.error) r = await supabaseAdmin.from('shoppers').select(BASE).in('user_id', ids);
+  return r.data || [];
+}
+
+// Platform-wide demographic fetch (all shoppers), same resilience.
+async function fetchAllShopperDemographics() {
+  const FULL = 'date_of_birth, gender, style_preferences, category_prefs, shopping_occasions, price_tier';
+  const BASE = 'date_of_birth, gender, style_preferences, category_prefs, price_tier';
+  let r = await supabaseAdmin.from('shoppers').select(FULL);
+  if (r.error) r = await supabaseAdmin.from('shoppers').select(BASE);
+  return r.data || [];
+}
+
 // ── Daily briefing ───────────────────────────────────────────────────────────
 
 async function gatherBriefingData() {
@@ -284,11 +342,13 @@ async function gatherBriefingData() {
   }
 
   const shoppers = shoppersRes.data || [];
+  const audience = summarizeDemographics(await fetchAllShopperDemographics());
   const newShoppers7 = shoppers.filter((s) => new Date(s.created_at).getTime() >= now - 7 * DAY_MS).length;
   const newShoppers14to7 = shoppers.filter((s) => { const t = new Date(s.created_at).getTime(); return t >= now - 14 * DAY_MS && t < now - 7 * DAY_MS; }).length;
 
   return {
     date: new Date().toISOString().slice(0, 10),
+    audience,
     week: {
       orders: thisWeek.length,
       orders_prev_week: lastWeek.length,
@@ -519,6 +579,11 @@ async function gatherBoutiqueData(boutiqueId) {
   const orders90 = ordersRes.data || [];
   const done = (o) => ['delivered', 'completed'].includes(o.status);
   const orders30 = orders90.filter((o) => new Date(o.created_at).getTime() >= Date.now() - 30 * DAY_MS);
+
+  // Audience: who actually buys from this boutique (demographics of its shoppers).
+  const audience = summarizeDemographics(
+    await fetchShopperDemographics(orders90.map((o) => o.shopper_id))
+  );
 
   const orderIds = new Set(orders90.filter(done).map((o) => o.id));
   const items = (itemsAllRes.data || []).filter((i) => orderIds.has(i.order_id));
@@ -874,6 +939,7 @@ async function gatherBoutiqueData(boutiqueId) {
       live_products: productsRes.count || 0,
       on_platform_since: (b.created_at || '').slice(0, 10),
     },
+    audience,
     last_30_days: {
       orders: orders30.length,
       completed_orders: completed30,
@@ -1178,7 +1244,7 @@ async function getBoutiqueReport(boutiqueId, { refresh = false } = {}) {
       BENCHMARKS + '\n\n' +
       'Use the season_context field to make timing advice city-correct and current (e.g. what to buy deeper or clear right now for their market) — never give generic seasonal advice.\n\n' +
       'End with a prioritized, numbered action list: the specific marketing / merchandising / operations moves that will most improve their sales, each tied to the exact number that motivates it ("Restock the Wide Leg Trouser in M — 2 left, your #1 size"; "Bundle the Linen Set + Straw Tote — bought together 6×"; "Email past buyers ~day 28, your repeat cadence"; "Mark down the 5 items under 40% sell-through to free trapped cash"). Cite exact numbers; NEVER invent data; every claim must trace to a value in the data. The owner should finish reading and know exactly what to do Monday morning.',
-    prompt: `This boutique's full shopper + boutique dataset. Analyze it holistically — find the patterns across blocks, compare metrics to the benchmarks, and use season_context for timing:\n${JSON.stringify(data, null, 1)}\n\nWrite the intelligence report.`,
+    prompt: `This boutique's full shopper + boutique dataset. Analyze it holistically — find the patterns across blocks, compare metrics to the benchmarks, and use season_context for timing. The "audience" block is WHO actually buys here (age, gender, style vibes, occasions, budget) — use it to tailor buying/merchandising advice to this boutique's real customer base; if audience is null or low coverage, say the demographic signal is still thin:\n${JSON.stringify(data, null, 1)}\n\nWrite the intelligence report.`,
     schema: REPORT_SCHEMA,
   });
 
