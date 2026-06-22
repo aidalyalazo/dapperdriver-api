@@ -917,6 +917,31 @@ EXCEPTION
 END $run$;
 
 
+-- ── Mj. Migration 030 — drop legacy double-decrement trigger ──────────────
+
+DO $run$ BEGIN
+  EXECUTE $stmt$DO $$
+DECLARE r RECORD;
+BEGIN
+  FOR r IN
+    SELECT tg.tgname
+    FROM pg_trigger tg
+    JOIN pg_class c ON c.oid = tg.tgrelid AND c.relname = 'orders'
+    JOIN pg_proc  p ON p.oid = tg.tgfoid
+    WHERE NOT tg.tgisinternal
+      AND pg_get_functiondef(p.oid) ILIKE '%Insufficient stock for one or more items%'
+  LOOP
+    EXECUTE format('DROP TRIGGER IF EXISTS %I ON orders', r.tgname);
+    RAISE NOTICE 'Dropped legacy double-decrement trigger: %', r.tgname;
+  END LOOP;
+END $$$stmt$;
+EXCEPTION
+  WHEN undefined_column OR undefined_table OR undefined_object
+    OR duplicate_object OR duplicate_table OR duplicate_column THEN
+    RAISE NOTICE 'SKIPPED: %', SQLERRM;
+END $run$;
+
+
 -- ── Mf. Migration 026 — order delivery address parts ──────────────────────
 
 DO $run$ BEGIN

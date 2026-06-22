@@ -44,6 +44,7 @@ const sources = [
   ['Mg. Migration 027 — shopper date_of_birth + age view', fs.readFileSync(path.join(root, 'src/migrations/027_shopper_date_of_birth.sql'), 'utf8')],
   ['Mh. Migration 028 — shopper gender', fs.readFileSync(path.join(root, 'src/migrations/028_shopper_gender.sql'), 'utf8')],
   ['Mi. Migration 029 — shopping occasions', fs.readFileSync(path.join(root, 'src/migrations/029_shopper_shopping_occasions.sql'), 'utf8')],
+  ['Mj. Migration 030 — drop legacy double-decrement trigger', fs.readFileSync(path.join(root, 'src/migrations/030_drop_legacy_stock_trigger.sql'), 'utf8')],
   ['Mf. Migration 026 — order delivery address parts', fs.readFileSync(path.join(root, 'src/migrations/026_order_address_parts.sql'), 'utf8')],
   ['O. RLS security hardening', fs.readFileSync(path.join(root, 'rls_security_fix.sql'), 'utf8')],
 ];
