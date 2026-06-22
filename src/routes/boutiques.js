@@ -233,39 +233,45 @@ router.get(
     const boutiqueId = await getBoutiqueId(req.userId);
     if (!boutiqueId) return res.status(404).json({ error: 'Boutique not found' });
 
-    // Terminal statuses: delivery orders end as 'delivered', pickup orders as 'completed'
+    // Terminal = delivered/completed. Active = anything in flight (NOT terminal,
+    // NOT cancelled). Received = the subset still awaiting the boutique (pending/
+    // confirmed/preparing). Received ⊂ Active, so TOTAL must be active+completed
+    // (never active+completed+received, which double-counts).
     const TERMINAL = ['delivered', 'completed'];
+    const ACTIVE   = ['pending', 'confirmed', 'preparing', 'ready_for_pickup',
+                      'driver_assigned', 'picked_up', 'out_for_delivery'];
+    const RECEIVED = ['pending', 'confirmed', 'preparing'];
 
-    const [ordersRes, revenueRes, pendingRes] = await Promise.all([
-      supabaseAdmin
-        .from('orders')
-        .select('id', { count: 'exact', head: true })
-        .eq('boutique_id', boutiqueId)
-        .in('status', TERMINAL),
-      supabaseAdmin
-        .from('orders')
-        .select('total_amount, boutique_earnings')
-        .eq('boutique_id', boutiqueId)
-        .in('status', TERMINAL),
-      supabaseAdmin
-        .from('orders')
-        .select('id', { count: 'exact', head: true })
-        .eq('boutique_id', boutiqueId)
-        .in('status', ['pending', 'confirmed', 'preparing']),
-    ]);
+    const { data: allOrders } = await supabaseAdmin
+      .from('orders')
+      .select('status, payment_status, total_amount, boutique_earnings')
+      .eq('boutique_id', boutiqueId)
+      .neq('status', 'cancelled');
 
-    const rows = revenueRes.data || [];
-    const totalRevenue = rows.reduce((s, o) => s + parseFloat(o.total_amount || 0), 0);
-    // Use pre-computed boutique_earnings if available, otherwise fall back to 75%
-    const boutiqueRevenue = rows.reduce(
-      (s, o) => s + parseFloat(o.boutique_earnings ?? o.total_amount * 0.75 ?? 0), 0
-    );
+    const rows = allOrders || [];
+    const sum = (list, field) => list.reduce((s, o) => s + parseFloat(o[field] || 0), 0);
+    // Active excludes UNPAID pending (abandoned checkouts) — mirrors the order list.
+    const isPaid = (o) => ['authorized', 'paid'].includes(o.payment_status);
+    const completed = rows.filter((o) => TERMINAL.includes(o.status));
+    const active    = rows.filter((o) => ACTIVE.includes(o.status) && (o.status !== 'pending' || isPaid(o)));
+    const received  = rows.filter((o) => RECEIVED.includes(o.status) && (o.status !== 'pending' || isPaid(o)));
+    const netCompleted = completed.reduce(
+      (s, o) => s + parseFloat(o.boutique_earnings ?? (parseFloat(o.total_amount || 0) * 0.75)), 0);
 
     res.json({
-      completed_orders: ordersRes.count || 0,
-      pending_orders:   pendingRes.count || 0,
-      gross_revenue:    totalRevenue.toFixed(2),
-      net_revenue:      boutiqueRevenue.toFixed(2),
+      // New, correctly-bucketed fields
+      active_orders:      active.length,
+      received_orders:    received.length,
+      completed_orders:   completed.length,
+      total_orders:       active.length + completed.length,
+      active_revenue:     sum(active, 'total_amount').toFixed(2),
+      received_revenue:   sum(received, 'total_amount').toFixed(2),
+      completed_revenue:  sum(completed, 'total_amount').toFixed(2),
+      completed_net:      netCompleted.toFixed(2),
+      // Backward-compatible aliases (old app builds)
+      pending_orders:     received.length,
+      gross_revenue:      sum(completed, 'total_amount').toFixed(2),
+      net_revenue:        netCompleted.toFixed(2),
     });
   })
 );
