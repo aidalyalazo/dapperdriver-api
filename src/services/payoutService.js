@@ -39,6 +39,13 @@ async function cashOut({ recipientId, recipientType }) {
     .insert({
       recipient_id: recipientId,
       recipient_type: recipientType,
+      // Required NOT-NULL columns. Amounts are finalized after the atomic claim;
+      // an instant cash-out has a point-in-time period.
+      payout_number: `PO-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      period_start: new Date().toISOString(),
+      period_end: new Date().toISOString(),
+      gross_amount: 0,
+      net_amount: 0,
       amount: 0,
       status: 'processing',
     })
@@ -94,7 +101,9 @@ async function cashOut({ recipientId, recipientType }) {
   }
 
   const amountCents = Math.round(total * 100);
-  await Promise.resolve(supabaseAdmin.from('payouts').update({ amount: total }).eq('id', payout.id)).catch(() => {});
+  await Promise.resolve(supabaseAdmin.from('payouts').update({
+    amount: total, gross_amount: total, net_amount: total, order_count: claimed.length,
+  }).eq('id', payout.id)).catch(() => {});
 
   try {
     // Idempotency key tied to this payout — a retried request can never create a
