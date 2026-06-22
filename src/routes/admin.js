@@ -1498,7 +1498,7 @@ router.get(
         .select('action, duration_seconds, product_id, created_at')
         .gte('created_at', since),
       supabaseAdmin.from('shoppers')
-        .select('id, body_measurements, style_preferences'),
+        .select('id, body_measurements, style_preferences, date_of_birth, gender, price_tier'),
       supabaseAdmin.from('products')
         .select('id, name, variant_stock, sizes'),
       supabaseAdmin.from('cities').select('id, name'),
@@ -1599,6 +1599,12 @@ router.get(
         ? +(shoppers.filter((s) => s.body_measurements).length / shoppers.length * 100).toFixed(1) : 0,
       style_profile_coverage_pct: shoppers.length
         ? +(shoppers.filter((s) => s.style_preferences?.length).length / shoppers.length * 100).toFixed(1) : 0,
+      age_coverage_pct: shoppers.length
+        ? +(shoppers.filter((s) => s.date_of_birth).length / shoppers.length * 100).toFixed(1) : 0,
+      gender_coverage_pct: shoppers.length
+        ? +(shoppers.filter((s) => s.gender).length / shoppers.length * 100).toFixed(1) : 0,
+      budget_coverage_pct: shoppers.length
+        ? +(shoppers.filter((s) => s.price_tier).length / shoppers.length * 100).toFixed(1) : 0,
       products_total: products.length,
       variant_stock_coverage_pct: products.length
         ? +(products.filter((p) => p.variant_stock).length / products.length * 100).toFixed(1) : 0,
