@@ -832,18 +832,12 @@ async function updateOrderStatus({ orderId, newStatus, actorId, driverId }) {
           .update({ payment_status: 'paid' }).eq('id', orderId).catch(() => {});
       }
 
-      if (paymentSettled) {
-        const { transferToBoutique } = require('./stripeService');
-        await transferToBoutique(order).catch((err) => {
-          // Log failure so ops team can manually trigger the payout — never silently drop.
-          console.error('[ORDER] transferToBoutique failed — MANUAL PAYOUT REQUIRED', {
-            orderId:    order.id,
-            boutiqueId: order.boutique_id,
-            error:      err.message,
-          });
-        });
-      } else {
-        console.error('[ORDER] Payment not captured — boutique transfer SKIPPED, manual review needed', {
+      // Boutique payouts are ON-DEMAND only — the boutique taps "Cash Out" (same as
+      // drivers). There is NO auto-transfer on delivery and NO Monday cron, so each
+      // order can only ever be paid out once, via cashOut()'s atomic claim. We just
+      // capture here; boutique_earnings accrue until the boutique cashes out.
+      if (!paymentSettled) {
+        console.error('[ORDER] Payment not captured at delivery — review needed', {
           orderId: order.id, boutiqueId: order.boutique_id,
         });
       }

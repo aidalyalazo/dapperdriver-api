@@ -55,11 +55,10 @@ async function reconcileMoney() {
         issues.push(`order ${o.id.slice(0, 8)}: total_amount (${n(o.total_amount).toFixed(2)}) ≠ sum of parts (${expectedTotal.toFixed(2)})`);
       }
 
-      const settled = ['delivered', 'completed'].includes(o.status);
-      const paidCharge = o.payment_status === 'paid';
-      if (settled && paidCharge && !o.boutique_paid) {
-        issues.push(`order ${o.id.slice(0, 8)}: ${o.status} + paid but boutique_paid=false → boutique transfer owed/failed ($${n(o.boutique_earnings).toFixed(2)})`);
-      }
+      // NOTE: boutique_paid=false on a delivered/paid order is NORMAL now — payouts
+      // are on-demand (the boutique cashes out when it chooses), so earnings sit
+      // captured-but-unpaid until then. That's an accruing balance, not a discrepancy,
+      // so we no longer flag it. (Same for driver_paid.)
 
       if (o.payment_status === 'refunded' && (o.boutique_paid || o.driver_paid)) {
         issues.push(`order ${o.id.slice(0, 8)}: refunded but already paid out (boutique_paid=${o.boutique_paid}, driver_paid=${o.driver_paid}) → possible loss, check for reversal`);

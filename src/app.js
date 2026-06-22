@@ -29,7 +29,10 @@ const integrationsRouter = require('./routes/integrations');
 const tryOnRouter        = require('./routes/tryOn');
 
 // Jobs
-require('./jobs/mondayPayouts');
+// Monday auto-payout DISABLED — payouts are on-demand only (drivers & boutiques
+// tap "Cash Out"). Keeping a scheduled cron alongside on-demand cash-out risks
+// double-paying, so cashOut() is the single payout path (atomic per-order claim).
+// require('./jobs/mondayPayouts');
 require('./jobs/orderTimeoutProcessor');
 // Try-On jobs
 require('./jobs/tryOnHoldExpiryProcessor');
