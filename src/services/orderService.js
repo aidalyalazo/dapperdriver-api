@@ -1009,12 +1009,19 @@ async function listOrders({ shopperId, boutiqueId, driverId, status, page = 1, l
   if (driverId) query = query.eq('driver_id', driverId);
   if (status) query = query.eq('status', status);
 
-  // A boutique (or driver) must NEVER see/act on a 'pending' order — those are
-  // not yet paid (the shopper hasn't confirmed the payment sheet). Showing them
-  // let unpaid/abandoned orders be accepted and even delivered for free. Only
-  // the shopper sees their own pending orders. Applies even if ?status=pending.
-  if ((boutiqueId || driverId) && (!status || status === 'pending')) {
+  // A boutique/driver must NEVER see an UNPAID pending order (abandoned checkout —
+  // showing them would let unpaid orders be accepted and delivered for free). But a
+  // PAID pending order (payment authorized, status not yet advanced to 'confirmed')
+  // MUST reach the boutique queue, or paid orders silently never get fulfilled.
+  // Drivers act on 'ready_for_pickup', so they never need to see pending at all.
+  if (driverId && (!status || status === 'pending')) {
     query = query.neq('status', 'pending');
+  } else if (boutiqueId && status === 'pending') {
+    // Explicit ?status=pending tab → only the paid ones.
+    query = query.in('payment_status', ['authorized', 'paid']);
+  } else if (boutiqueId && !status) {
+    // Default queue → everything except UNPAID pending.
+    query = query.or('status.neq.pending,payment_status.in.(authorized,paid)');
   }
 
   const { data, error, count } = await query;
