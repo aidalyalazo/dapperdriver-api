@@ -1,11 +1,20 @@
 const { stripe } = require('../config/stripe');
 const { supabaseAdmin } = require('../config/supabase');
+const { signState } = require('../utils/oauthState');
 
 // Reachable HTTPS base for Stripe Connect return/refresh URLs. NEVER localhost —
 // onboarding runs on the user's phone, which can't reach a dev server (that was
 // the "kicked out on the last page" bug). Falls back to the live API URL.
 const PUBLIC_BASE = process.env.PUBLIC_BASE_URL || process.env.API_BASE_URL
   || 'https://dapperdriver-api-production.up.railway.app';
+
+// Build a Connect return/refresh URL with an HMAC-signed {role,id} state so the
+// unauthenticated /connect/* endpoints can't be driven with a guessed/enumerated
+// row id (which would otherwise mint a real Stripe KYC link for someone else).
+function connectUrl(path, role, id) {
+  const state = encodeURIComponent(signState({ role, id: String(id) }));
+  return `${PUBLIC_BASE}/connect/${path}?role=${role}&id=${id}&state=${state}`;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // BOUTIQUE ONBOARDING (Stripe Connect — Express accounts)
@@ -46,8 +55,8 @@ async function createConnectAccount({ boutiqueId, email, businessName }) {
 async function createAccountLink({ stripeAccountId, boutiqueId }) {
   const link = await stripe.accountLinks.create({
     account:     stripeAccountId,
-    refresh_url: `${PUBLIC_BASE}/connect/refresh?role=boutique&id=${boutiqueId}`,
-    return_url:  `${PUBLIC_BASE}/connect/return?role=boutique&id=${boutiqueId}`,
+    refresh_url: connectUrl('refresh', 'boutique', boutiqueId),
+    return_url:  connectUrl('return', 'boutique', boutiqueId),
     type:        'account_onboarding',
   });
   return link;
@@ -60,8 +69,8 @@ async function createAccountLink({ stripeAccountId, boutiqueId }) {
 async function createDriverAccountLink({ stripeAccountId, driverId }) {
   const link = await stripe.accountLinks.create({
     account:     stripeAccountId,
-    refresh_url: `${PUBLIC_BASE}/connect/refresh?role=driver&id=${driverId}`,
-    return_url:  `${PUBLIC_BASE}/connect/return?role=driver&id=${driverId}`,
+    refresh_url: connectUrl('refresh', 'driver', driverId),
+    return_url:  connectUrl('return', 'driver', driverId),
     type:        'account_onboarding',
   });
   return link;

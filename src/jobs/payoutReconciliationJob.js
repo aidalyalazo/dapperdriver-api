@@ -6,14 +6,20 @@ const { notifyAdmins } = require('../utils/adminAlerts');
 /**
  * Payout reconciliation sweep.
  *
- * cashOut() leaves payouts at status='processing' and relies on a Stripe
- * webhook to advance them to 'paid' — a missed webhook meant limbo forever.
+ * On-demand cashOut() transfers FIRST, then inserts the payout row already at
+ * status='paid' (with its stripe_transfer_id) — so a healthy cash-out never
+ * lands in 'processing'. This sweep is the safety net for any payout that DOES
+ * sit at 'processing' (an older webhook-driven flow, or a future async path).
  * Hourly, any payout stuck in 'processing' for >1h is reconciled directly
  * against Stripe:
  *   - transfer exists and not reversed → paid
  *   - transfer reversed               → failed (+ admin alert)
  *   - no stripe_transfer_id at all    → failed (+ admin alert) — the transfer
  *     was never created, money never moved.
+ *
+ * Note: a cashOut whose post-transfer row INSERT fails leaves money moved with
+ * NO row to find here; that case is surfaced immediately by the
+ * 'payout_record_missing' admin alert in payoutService.
  */
 async function reconcilePayouts() {
   try {

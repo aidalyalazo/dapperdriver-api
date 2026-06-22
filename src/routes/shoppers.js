@@ -83,7 +83,15 @@ router.patch(
       ({ data, error } = await supabaseAdmin
         .from('shoppers').update(updates).eq('user_id', req.userId).select());
       if (!error) break;
-      const missing = Object.keys(updates).find((k) => new RegExp(`\\b${k}\\b`).test(error.message || ''));
+      // ONLY treat this as a not-yet-migrated column (drop it + retry) when the
+      // error is specifically "undefined column" (Postgres 42703 / PostgREST
+      // PGRST204). Any OTHER error — e.g. a 23514 CHECK violation that happens to
+      // name the column in its message — must surface, not silently drop the
+      // field and return 200 with partial data.
+      const isMissingCol = error.code === '42703' || error.code === 'PGRST204';
+      const missing = isMissingCol
+        ? Object.keys(updates).find((k) => new RegExp(`\\b${k}\\b`).test(error.message || ''))
+        : null;
       if (!missing) break;
       delete updates[missing];
     }

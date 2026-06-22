@@ -32,6 +32,8 @@ const supabasePublic = createClient(
  * POST /api/v1/auth/register
  * Creates a Supabase Auth user and the corresponding profile record.
  * `role` must be one of: shopper | boutique | driver
+ * Shopper body may also include demographic fields persisted to the profile:
+ * date_of_birth (ISO date, validated 13–120 yrs) and gender.
  */
 router.post(
   '/register',

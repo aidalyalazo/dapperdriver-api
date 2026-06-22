@@ -904,14 +904,16 @@ router.get(
     if (error) throw new Error(error.message);
 
     const posts = data || [];
+    // outfit_posts.shopper_id is the AUTH USER id, which maps to shoppers.user_id
+    // (NOT shoppers.id, a separate random PK) — joining on id left author always null.
     const shopperIds = [...new Set(posts.map((p) => p.shopper_id).filter(Boolean))];
     let shoppersById = {};
     if (shopperIds.length) {
       const { data: shopperRows } = await supabaseAdmin
         .from('shoppers')
-        .select('id, display_name, full_name')
-        .in('id', shopperIds);
-      shoppersById = Object.fromEntries((shopperRows || []).map((s) => [s.id, s]));
+        .select('user_id, display_name, full_name')
+        .in('user_id', shopperIds);
+      shoppersById = Object.fromEntries((shopperRows || []).map((s) => [s.user_id, s]));
     }
 
     res.json({

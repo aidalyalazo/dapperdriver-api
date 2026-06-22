@@ -178,10 +178,8 @@ router.get(
       .single();
 
     if (error) {
-      console.log('[BOUTIQUE /me] NOT FOUND for user_id:', req.userId, 'error:', error.message);
       throw Object.assign(new Error('Boutique not found'), { status: 404 });
     }
-    console.log('[BOUTIQUE /me] FOUND:', data.name);
     res.json(data);
   })
 );

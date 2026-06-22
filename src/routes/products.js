@@ -6,7 +6,9 @@ const { supabaseAdmin } = require('../config/supabase');
 /**
  * GET /api/v1/products
  * Public product listing with filters.
- * Filters: boutique_id, category, city_id, search, in_stock, source, page, limit
+ * Filters: boutique_id, category, city_id, search, in_stock, source, page, limit,
+ *          on_sale (true → fetch catalog and return only items with
+ *          compare_price > price; note: bounded to the first 1000 rows).
  */
 router.get(
   '/',
@@ -66,6 +68,13 @@ router.get(
 
     if (error) throw new Error(error.message);
 
+    // The on_sale path fetches range(0,999) then JS-filters; if we ever hit that
+    // cap, on-sale items past row 1000 are silently dropped. Fine at current
+    // catalog size — log it so the truncation is visible before it bites.
+    if (wantOnSale && Array.isArray(data) && data.length >= 1000) {
+      console.warn('[PRODUCTS] on_sale hit the 1000-row fetch cap — some sale items may be hidden; denormalize is_on_sale + paginate before the catalog grows.');
+    }
+
     // Post-filter by city if needed
     let filtered = data;
     if (city_id) {
@@ -88,7 +97,10 @@ router.get(
         .from('search_logs')
         .insert({
           query: String(search).slice(0, 200),
-          result_count: wantOnSale ? filtered.length : (count || 0),
+          // Use the post-filtered length whenever a post-filter ran (city and/or
+          // on-sale); `count` is the pre-filter all-cities total and would
+          // overstate per-city demand for a city-scoped search.
+          result_count: (city_id || wantOnSale) ? filtered.length : (count || 0),
           city_id: city_id || null,
           shopper_id: null,
         })
