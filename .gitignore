@@ -7,3 +7,7 @@ coverage/
 
 # Workflow/agent scratch worktrees
 .claude/worktrees/
+
+# Web marketing site
+.DS_Store
+web/preview-fullpage.png

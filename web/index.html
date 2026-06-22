@@ -1,0 +1,2049 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>DapperDriver — Boutique fashion, delivered.</title>
+<meta name="description" content="A door-to-door boutique. Discover independent designers in your city, delivered with the care of a love letter." />
+<link rel="canonical" href="https://dapperdriver.com/" />
+<meta name="theme-color" content="#F5F1EA" />
+
+<!-- Favicon -->
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<link rel="apple-touch-icon" href="/favicon.svg" />
+
+<!-- OG / Twitter -->
+<meta property="og:title" content="DapperDriver — Boutique fashion, delivered." />
+<meta property="og:description" content="A door-to-door boutique. Independent designers, vintage finds, the romance of small-shop curation, at your door in under an hour." />
+<meta property="og:type" content="website" />
+<meta property="og:url" content="https://dapperdriver.com/" />
+<meta property="og:image" content="https://dapperdriver.com/og-image.jpg" />
+<meta property="og:image:width" content="1200" />
+<meta property="og:image:height" content="630" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="DapperDriver — Boutique fashion, delivered." />
+<meta name="twitter:description" content="A door-to-door boutique. Delivered like a love letter." />
+<meta name="twitter:image" content="https://dapperdriver.com/og-image.jpg" />
+
+<!-- Structured data -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "Organization",
+  "name": "DapperDriver",
+  "url": "https://dapperdriver.com/",
+  "logo": "https://dapperdriver.com/favicon.svg",
+  "description": "A door-to-door boutique delivery service for independent designers and vintage finds.",
+  "sameAs": []
+}
+</script>
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400;1,500;1,600&family=Josefin+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Italianno&family=Pinyon+Script&display=swap" rel="stylesheet" />
+
+<style>
+  :root {
+    --cream: #F5F1EA;
+    --cream-deep: #ECE4D6;
+    --ivory: #FBF8F2;
+    --ink: #1A1812;
+    --ink-soft: #4A453B;
+    --terracotta: #1E66CA;
+    --terracotta-soft: #5A8FE0;
+    --sage: #8A9882;
+    --brand-blue: #1E66CA;
+    --gold: #C9A961;
+    --hairline: rgba(26, 24, 18, 0.12);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html { scroll-behavior: smooth; }
+  /* offset anchored sections so they don't hide behind the fixed nav */
+  section[id], header[id] { scroll-margin-top: 90px; }
+
+  /* skip to content — visible on focus only */
+  .skip-link {
+    position: fixed;
+    top: -100px;
+    left: 1rem;
+    z-index: 1000;
+    background: var(--ink);
+    color: var(--cream);
+    padding: 0.8rem 1.4rem;
+    border-radius: 999px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    text-decoration: none;
+    transition: top 0.25s ease;
+  }
+  .skip-link:focus { top: 1rem; outline: 2px solid var(--terracotta); outline-offset: 3px; }
+
+  body {
+    background: var(--cream);
+    background-image:
+      /* dark moody vignette */
+      radial-gradient(ellipse 110% 90% at 50% 100%, rgba(15, 12, 8, 0.32), transparent 55%),
+      radial-gradient(ellipse 80% 70% at 0% 0%, rgba(20, 15, 10, 0.22), transparent 55%),
+      radial-gradient(ellipse 80% 70% at 100% 100%, rgba(20, 15, 10, 0.28), transparent 60%),
+      radial-gradient(ellipse 100% 100% at 50% 50%, transparent 50%, rgba(20, 15, 10, 0.18) 100%),
+      /* subtle warm light spots remaining */
+      radial-gradient(ellipse 70% 50% at 70% 25%, rgba(217, 174, 130, 0.08), transparent 55%),
+      radial-gradient(ellipse 50% 60% at 30% 70%, rgba(201, 169, 97, 0.05), transparent 55%);
+    background-attachment: fixed;
+    color: var(--ink);
+    font-family: 'Josefin Sans', -apple-system, sans-serif;
+    font-weight: 300;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+
+  /* film grain — site-wide vintage texture */
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 9999;
+    opacity: 0.55;
+    mix-blend-mode: multiply;
+    background-image: url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 220 220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='1' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.06 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+
+  .serif { font-family: 'Cormorant Garamond', Georgia, serif; font-weight: 400; }
+  .mono { font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; letter-spacing: 0.15em; text-transform: uppercase; }
+
+  /* ─── NAV ─────────────────────────────────────── */
+  nav {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    z-index: 100;
+    padding: 1.5rem 3rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: rgba(245, 241, 234, 0.85);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-bottom: 1px solid var(--hairline);
+  }
+
+  .wordmark {
+    font-family: 'Cormorant Garamond', serif;
+    font-style: italic;
+    font-size: 1.6rem;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    color: var(--ink);
+  }
+  .wordmark span { font-style: normal; font-family: 'Josefin Sans', sans-serif; font-weight: 400; letter-spacing: 0.18em; font-size: 0.95rem; }
+
+  nav ul { display: flex; gap: 2.5rem; list-style: none; }
+  nav a {
+    color: var(--ink);
+    text-decoration: none;
+    font-size: 0.78rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    font-weight: 400;
+    transition: color 0.3s;
+  }
+  nav a:hover { color: var(--terracotta); }
+  .nav-cta {
+    border: 1px solid var(--ink);
+    padding: 0.55rem 1.4rem;
+    border-radius: 999px;
+    transition: all 0.3s;
+  }
+  .nav-cta:hover { background: var(--ink); color: var(--cream) !important; }
+
+  /* hamburger — hidden on desktop, shown on mobile */
+  .nav-toggle {
+    display: none;
+    background: transparent;
+    border: 0;
+    width: 36px;
+    height: 28px;
+    padding: 0;
+    cursor: pointer;
+    position: relative;
+  }
+  .nav-toggle span {
+    position: absolute;
+    left: 0; right: 0;
+    height: 1.5px;
+    background: var(--ink);
+    transition: transform 0.35s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.25s ease, top 0.35s ease;
+  }
+  .nav-toggle span:nth-child(1) { top: 8px; }
+  .nav-toggle span:nth-child(2) { top: 14px; }
+  .nav-toggle span:nth-child(3) { top: 20px; }
+  body.nav-open .nav-toggle span:nth-child(1) { top: 14px; transform: rotate(45deg); }
+  body.nav-open .nav-toggle span:nth-child(2) { opacity: 0; }
+  body.nav-open .nav-toggle span:nth-child(3) { top: 14px; transform: rotate(-45deg); }
+
+  /* mobile drawer */
+  .mobile-nav {
+    position: fixed;
+    inset: 0;
+    background: rgba(245, 241, 234, 0.97);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+    z-index: 99;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.4s ease;
+  }
+  body.nav-open { overflow: hidden; }
+  body.nav-open .mobile-nav { opacity: 1; pointer-events: auto; }
+  .mobile-nav ul {
+    list-style: none;
+    text-align: center;
+    padding: 0;
+  }
+  .mobile-nav li { margin: 1.6rem 0; opacity: 0; transform: translateY(12px); transition: opacity 0.5s ease, transform 0.5s ease; }
+  body.nav-open .mobile-nav li { opacity: 1; transform: translateY(0); }
+  body.nav-open .mobile-nav li:nth-child(1) { transition-delay: 0.10s; }
+  body.nav-open .mobile-nav li:nth-child(2) { transition-delay: 0.16s; }
+  body.nav-open .mobile-nav li:nth-child(3) { transition-delay: 0.22s; }
+  body.nav-open .mobile-nav li:nth-child(4) { transition-delay: 0.28s; }
+  body.nav-open .mobile-nav li:nth-child(5) { transition-delay: 0.34s; }
+  body.nav-open .mobile-nav li:nth-child(6) { transition-delay: 0.40s; }
+  .mobile-nav a {
+    font-family: 'Cormorant Garamond', serif;
+    font-size: 2.4rem;
+    font-style: italic;
+    color: var(--ink);
+    text-decoration: none;
+    letter-spacing: 0.01em;
+  }
+  .mobile-nav a.cta {
+    display: inline-block;
+    margin-top: 1rem;
+    background: var(--ink);
+    color: var(--cream);
+    padding: 1rem 2.4rem;
+    border-radius: 999px;
+    font-family: 'Josefin Sans', sans-serif;
+    font-style: normal;
+    font-size: 0.85rem;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+  }
+
+  /* ─── HERO ────────────────────────────────────── */
+  .hero {
+    min-height: 100vh;
+    padding: 0;
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+    --hero-mask: linear-gradient(180deg, #000 0%, #000 84%, transparent 100%);
+  }
+  /* hero photograph — full-bleed background */
+  .hero::before {
+    content: '';
+    position: absolute;
+    inset: -2% 0 0 0;
+    background-image: url('images/hero.jpg?v=1');
+    background-size: cover;
+    background-position: center 35%;
+    filter: saturate(0.95) contrast(1.05) brightness(0.78);
+    transform: scale(1.04);
+    animation: hero-drift 32s ease-in-out infinite;
+    -webkit-mask-image: var(--hero-mask);
+            mask-image: var(--hero-mask);
+    z-index: -2;
+  }
+  @keyframes hero-drift {
+    0%   { transform: scale(1.04) translate(0, 0); }
+    50%  { transform: scale(1.09) translate(-1.2%, -1.4%); }
+    100% { transform: scale(1.04) translate(0, 0); }
+  }
+  /* legibility veil — darker at top (under nav) and bottom-left (under headline) */
+  .hero::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background:
+      linear-gradient(180deg, rgba(15, 10, 5, 0.55) 0%, transparent 28%, transparent 48%, rgba(15, 10, 5, 0.55) 100%),
+      radial-gradient(ellipse 75% 65% at 22% 82%, rgba(15, 10, 5, 0.55), transparent 65%);
+    pointer-events: none;
+    -webkit-mask-image: var(--hero-mask);
+            mask-image: var(--hero-mask);
+    z-index: -1;
+  }
+
+  .hero-text {
+    position: absolute;
+    bottom: 5.5rem;
+    left: 4rem;
+    right: 4rem;
+    max-width: 760px;
+    z-index: 2;
+  }
+
+  .eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.7rem;
+    color: var(--ink-soft);
+    margin-bottom: 2rem;
+  }
+  .eyebrow::before {
+    content: '';
+    width: 30px;
+    height: 1px;
+    background: var(--terracotta);
+  }
+  .hero .eyebrow { color: rgba(245, 241, 234, 0.85); }
+  .hero .eyebrow::before { background: #E8B583; }
+
+  .hero h1 {
+    font-family: 'Cormorant Garamond', serif;
+    font-weight: 400;
+    font-size: clamp(3rem, 8vw, 7.4rem);
+    line-height: 0.95;
+    letter-spacing: -0.02em;
+    color: var(--cream);
+    margin-bottom: 2rem;
+    text-shadow: 0 2px 30px rgba(0, 0, 0, 0.35);
+  }
+  .hero h1 em {
+    font-style: italic;
+    color: #E8B583;
+    font-weight: 300;
+  }
+
+  .hero p.lede {
+    font-size: 1.05rem;
+    max-width: 32rem;
+    color: rgba(245, 241, 234, 0.82);
+    line-height: 1.75;
+    margin-bottom: 2.5rem;
+    font-weight: 300;
+    text-shadow: 0 1px 12px rgba(0, 0, 0, 0.35);
+  }
+  /* invert primary CTA on dark hero */
+  .hero .btn-primary { background: var(--cream); color: var(--ink); }
+  .hero .btn-primary:hover { background: #E8B583; color: var(--ink); }
+  .hero .btn-ghost { color: var(--cream); border-bottom-color: rgba(245, 241, 234, 0.8); }
+  .hero .btn-ghost:hover { color: #E8B583; border-bottom-color: #E8B583; }
+
+  .hero-cta-row { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; }
+
+  .btn-primary {
+    background: var(--ink);
+    color: var(--cream);
+    padding: 1rem 2.2rem;
+    border-radius: 999px;
+    border: none;
+    font-family: inherit;
+    font-size: 0.78rem;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    text-decoration: none;
+    cursor: pointer;
+    transition: all 0.3s;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.7rem;
+  }
+  .btn-primary:hover { background: var(--terracotta); transform: translateY(-1px); }
+  .btn-primary svg { width: 14px; height: 14px; transition: transform 0.3s; }
+  .btn-primary:hover svg { transform: translateX(3px); }
+
+  .btn-ghost {
+    color: var(--ink);
+    text-decoration: none;
+    font-size: 0.78rem;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    border-bottom: 1px solid var(--ink);
+    padding-bottom: 0.3rem;
+  }
+
+  /* hero collage — small overlapping postcard, top-right */
+  .hero-collage {
+    position: absolute;
+    top: 8rem;
+    right: 4rem;
+    width: 340px;
+    height: auto;
+    z-index: 3;
+    pointer-events: none;
+  }
+  .hero-collage .letter {
+    position: relative;
+    top: 0;
+    left: 0;
+    width: 100%;
+    max-width: 340px;
+    transform: rotate(2.5deg);
+    pointer-events: auto;
+  }
+  @keyframes letterFadeIn-hero {
+    from { opacity: 0; transform: rotate(2.5deg) translateY(20px); }
+    to   { opacity: 1; transform: rotate(2.5deg) translateY(0); }
+  }
+  .hero-collage .letter { animation: letterFadeIn-hero 1.2s cubic-bezier(0.2, 0.75, 0.25, 1) 0.2s forwards; }
+  .hero-collage .letter-paper { padding: 2.4rem 2rem 3rem; }
+  .hero-collage .letter-body { font-size: clamp(1.1rem, 1.3vw, 1.4rem); }
+  .hero-collage .photo-tag { bottom: -1.5rem; right: -1rem; transform: rotate(-5deg); }
+  .hero-collage .photo-tag .name { font-size: 0.95rem; }
+
+  .photo {
+    position: absolute;
+    overflow: hidden;
+    background: var(--cream-deep);
+    box-shadow: 0 20px 60px -20px rgba(26, 24, 18, 0.25);
+  }
+  .photo img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    filter: saturate(0.92) contrast(1.02);
+  }
+
+  /* ── letter composition ── */
+  .letter {
+    position: absolute;
+    width: 90%;
+    max-width: 520px;
+    top: 5%;
+    left: 5%;
+    transform: rotate(-1.8deg);
+    opacity: 0;
+    animation: letterFadeIn 1.2s cubic-bezier(0.2, 0.75, 0.25, 1) 0.2s forwards;
+  }
+  @keyframes letterFadeIn {
+    from { opacity: 0; transform: rotate(-1.8deg) translateY(20px); }
+    to { opacity: 1; transform: rotate(-1.8deg) translateY(0); }
+  }
+  .letter-paper {
+    background-color: #FAF6EC;
+    background-image:
+      /* very faint aged corner shadows (cool/neutral, not yellow) */
+      radial-gradient(ellipse 50% 45% at 0% 0%, rgba(120, 100, 80, 0.06), transparent 55%),
+      radial-gradient(ellipse 45% 40% at 100% 0%, rgba(120, 100, 80, 0.05), transparent 55%),
+      radial-gradient(ellipse 50% 50% at 0% 100%, rgba(120, 100, 80, 0.07), transparent 55%),
+      radial-gradient(ellipse 55% 55% at 100% 100%, rgba(120, 100, 80, 0.08), transparent 55%),
+      /* very subtle center luminance */
+      radial-gradient(ellipse 80% 70% at 50% 40%, rgba(255, 252, 245, 0.35), transparent 70%),
+      /* very faint horizontal fold creases */
+      linear-gradient(180deg,
+        transparent 32%, rgba(120, 100, 80, 0.045) 33%, transparent 34%,
+        transparent 65.5%, rgba(120, 100, 80, 0.045) 66.5%, transparent 67.5%
+      ),
+      /* paper grain via SVG noise — neutral tone */
+      url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 240 240'%3E%3Cfilter id='p'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.40 0 0 0 0 0.36 0 0 0 0 0.30 0 0 0 0.07 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23p)'/%3E%3C/svg%3E"),
+      /* base off-white gradient */
+      linear-gradient(180deg, #FCFAF3 0%, #F7F2E6 50%, #F1ECDD 100%);
+    padding: 4.2rem 3.4rem 4.8rem;
+    position: relative;
+    filter:
+      drop-shadow(0 30px 50px rgba(20, 15, 10, 0.45))
+      drop-shadow(0 10px 18px rgba(20, 15, 10, 0.30))
+      drop-shadow(0 2px 4px rgba(20, 15, 10, 0.20));
+    /* deckled all-around edges — subtle hand-cut paper feel */
+    clip-path: polygon(
+      1.5% 0.8%, 12% 0%, 24% 1.2%, 38% 0.3%, 52% 1%, 64% 0%, 76% 1.4%, 88% 0.4%, 99% 1%,
+      100% 8%, 99.2% 18%, 100% 28%, 99.4% 40%, 100% 52%, 99% 62%, 100% 74%, 99.5% 84%, 100% 94%,
+      98.5% 100%, 86% 99.2%, 74% 100%, 60% 98.8%, 46% 100%, 32% 99.3%, 18% 100%, 6% 98.8%, 0% 99.5%,
+      0.6% 90%, 0% 78%, 0.8% 66%, 0% 54%, 0.7% 42%, 0% 30%, 0.5% 18%, 0% 8%
+    );
+  }
+  .letter-paper::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    box-shadow:
+      inset 0 0 60px rgba(120, 100, 80, 0.10),
+      inset 0 0 6px rgba(120, 100, 80, 0.08);
+    pointer-events: none;
+  }
+  .letter-header {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.6rem;
+    letter-spacing: 0.25em;
+    text-transform: uppercase;
+    color: rgba(70, 50, 35, 0.5);
+    text-align: center;
+    margin-bottom: 1.8rem;
+    display: flex;
+    align-items: center;
+    gap: 0.8rem;
+  }
+  .letter-header::before,
+  .letter-header::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: rgba(70, 50, 35, 0.2);
+  }
+  .letter-body {
+    font-family: 'Italianno', cursive;
+    font-size: clamp(1.8rem, 2.4vw, 2.4rem);
+    line-height: 1.15;
+    color: #2C4170;
+    letter-spacing: 0.005em;
+  }
+  .letter-body .line {
+    display: block;
+    opacity: 0;
+    transform: translateY(6px);
+    animation: handwrite 0.9s cubic-bezier(0.25, 0.7, 0.3, 1) forwards;
+  }
+  .letter-body .line:nth-child(1) { animation-delay: 1.0s; }
+  .letter-body .line:nth-child(2) { animation-delay: 1.7s; }
+  .letter-body .line:nth-child(3) { animation-delay: 2.4s; }
+  .letter-body .line:nth-child(4) { animation-delay: 3.1s; }
+  .letter-body .line:nth-child(5) { animation-delay: 3.8s; }
+  @keyframes handwrite {
+    from { opacity: 0; transform: translateY(8px) translateX(-4px); }
+    to { opacity: 1; transform: translateY(0) translateX(0); }
+  }
+  .letter-sig {
+    font-family: 'Pinyon Script', cursive;
+    font-size: 1.4em;
+    color: var(--terracotta);
+    margin-top: 0.2em;
+    display: inline-block;
+  }
+  .photo-tag {
+    position: absolute;
+    bottom: 4rem;
+    right: 2rem;
+    background: var(--ivory);
+    padding: 1rem 1.4rem;
+    filter:
+      drop-shadow(0 14px 24px rgba(20, 15, 10, 0.35))
+      drop-shadow(0 4px 8px rgba(20, 15, 10, 0.20));
+    transform: rotate(4deg);
+    z-index: 5;
+    clip-path: polygon(
+      1% 4%, 30% 0%, 60% 2%, 99% 0%,
+      100% 30%, 99% 70%, 100% 96%,
+      80% 100%, 50% 98%, 20% 100%, 0% 99%,
+      1% 60%, 0% 30%
+    );
+  }
+  .photo-tag .price { font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; color: var(--ink-soft); letter-spacing: 0.15em; text-transform: uppercase; }
+  .photo-tag .name { font-family: 'Cormorant Garamond', serif; font-style: italic; font-size: 1.1rem; margin-top: 0.2rem; }
+
+  /* ─── MARQUEE ─────────────────────────────────── */
+  .marquee {
+    border-top: 1px solid var(--hairline);
+    border-bottom: 1px solid var(--hairline);
+    padding: 1.6rem 0;
+    overflow: hidden;
+    white-space: nowrap;
+    background: var(--ivory);
+  }
+  .marquee-inner {
+    display: inline-block;
+    animation: scroll 40s linear infinite;
+    font-family: 'Cormorant Garamond', serif;
+    font-size: 1.5rem;
+    font-style: italic;
+    color: var(--ink-soft);
+  }
+  .marquee-inner span {
+    margin: 0 2rem;
+  }
+  .marquee-inner span:nth-child(odd) { color: var(--terracotta); }
+  @keyframes scroll {
+    0% { transform: translateX(0); }
+    100% { transform: translateX(-50%); }
+  }
+
+  /* ─── SECTION COMMON ──────────────────────────── */
+  section { padding: 7rem 3rem; }
+  .section-header { text-align: center; margin-bottom: 5rem; }
+  .section-header h2 {
+    font-family: 'Cormorant Garamond', serif;
+    font-weight: 400;
+    font-size: clamp(2.5rem, 5vw, 4.5rem);
+    line-height: 1;
+    letter-spacing: -0.01em;
+  }
+  .section-header h2 em { font-style: italic; color: var(--terracotta); }
+  .section-header .eyebrow { justify-content: center; margin-bottom: 1.5rem; }
+  .section-header .eyebrow::after {
+    content: '';
+    width: 30px;
+    height: 1px;
+    background: var(--terracotta);
+  }
+  .section-header p {
+    max-width: 40rem;
+    margin: 1.5rem auto 0;
+    color: var(--ink-soft);
+    font-size: 1.05rem;
+    line-height: 1.75;
+  }
+
+  /* ─── HOW IT WORKS ────────────────────────────── */
+  .how {
+    background: var(--ivory);
+  }
+  .how-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 4rem;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+  .step { text-align: center; position: relative; }
+  .step-num {
+    font-family: 'Cormorant Garamond', serif;
+    font-style: italic;
+    font-size: 5rem;
+    color: var(--terracotta);
+    line-height: 1;
+    margin-bottom: 1.5rem;
+    opacity: 0.85;
+  }
+  .step h3 {
+    font-family: 'Cormorant Garamond', serif;
+    font-size: 2rem;
+    font-weight: 400;
+    margin-bottom: 1rem;
+  }
+  .step p { color: var(--ink-soft); line-height: 1.75; max-width: 22rem; margin: 0 auto; }
+
+  /* ─── EDITORIAL GRID (Boutiques) ──────────────── */
+  .editorial {
+    display: block;
+    max-width: 1340px;
+    margin: 0 auto;
+  }
+
+  /* ── FEATURED HERO BOUTIQUE ── */
+  .ed-feature {
+    position: relative;
+    width: 100%;
+    height: clamp(560px, 72vh, 740px);
+    overflow: hidden;
+    border-radius: 8px;
+    cursor: pointer;
+    box-shadow: 0 30px 60px -25px rgba(40, 25, 15, 0.45), 0 8px 20px -8px rgba(40, 25, 15, 0.20);
+    margin-bottom: 4.5rem;
+    transition: transform 0.6s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.5s ease;
+  }
+  .ed-feature:hover { transform: translateY(-3px); box-shadow: 0 40px 75px -25px rgba(40, 25, 15, 0.5), 0 10px 24px -8px rgba(40, 25, 15, 0.22); }
+  .ed-feature img {
+    width: 100%; height: 100%;
+    object-fit: cover;
+    object-position: center 45%;
+    display: block;
+    filter: saturate(0.88) contrast(1.04) brightness(0.92);
+    transition: transform 1.6s cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  .ed-feature:hover img { transform: scale(1.05); }
+  .ed-feature::after {
+    content: '';
+    position: absolute; inset: 0;
+    background:
+      linear-gradient(180deg, rgba(20, 12, 5, 0.30) 0%, transparent 30%, transparent 50%, rgba(20, 12, 5, 0.72) 100%),
+      radial-gradient(ellipse 70% 60% at 22% 80%, rgba(15, 10, 5, 0.45), transparent 65%);
+    pointer-events: none;
+    z-index: 1;
+  }
+  .ed-feature-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    padding: clamp(1.5rem, 3.5vw, 3rem);
+    color: var(--cream);
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    pointer-events: none;
+  }
+  .ed-feature-meta { display: flex; justify-content: flex-end; gap: 0.6rem; }
+  .ed-tag {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.62rem;
+    letter-spacing: 0.3em;
+    text-transform: uppercase;
+    background: rgba(245, 241, 234, 0.94);
+    color: var(--ink);
+    padding: 0.5rem 0.95rem;
+    border-radius: 999px;
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+  }
+  .ed-feature-text { max-width: 540px; }
+  .ed-feature-city {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+    letter-spacing: 0.28em;
+    text-transform: uppercase;
+    color: rgba(255, 240, 220, 0.88);
+    margin-bottom: 0.9rem;
+  }
+  .ed-feature-name {
+    font-family: 'Cormorant Garamond', serif;
+    font-style: italic;
+    font-weight: 400;
+    font-size: clamp(2.4rem, 4.8vw, 3.8rem);
+    line-height: 1.0;
+    letter-spacing: -0.005em;
+    margin-bottom: 1rem;
+    text-shadow: 0 2px 14px rgba(0, 0, 0, 0.35);
+  }
+  .ed-feature-specialty {
+    font-family: 'Cormorant Garamond', serif;
+    font-style: italic;
+    font-size: 1.15rem;
+    line-height: 1.45;
+    color: rgba(255, 240, 220, 0.85);
+    max-width: 38ch;
+    text-shadow: 0 1px 8px rgba(0, 0, 0, 0.35);
+  }
+
+  /* ── EPIGRAPH (between section header and grid) ── */
+  .ed-epigraph {
+    text-align: center;
+    font-family: 'Cormorant Garamond', serif;
+    font-style: italic;
+    font-weight: 400;
+    font-size: clamp(1.4rem, 2.6vw, 2rem);
+    line-height: 1.4;
+    color: var(--ink-soft);
+    max-width: 38ch;
+    margin: 0 auto 4.5rem;
+    letter-spacing: -0.005em;
+  }
+  .ed-epigraph::before {
+    content: '';
+    display: block;
+    width: 40px;
+    height: 1px;
+    background: var(--terracotta);
+    margin: 0 auto 1.6rem;
+  }
+
+  /* ── INDEX TILES (3×2 grid) ── */
+  .ed-index {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: clamp(1.5rem, 2.4vw, 2.6rem) clamp(1.5rem, 2.2vw, 2.4rem);
+  }
+  .ed-tile {
+    cursor: pointer;
+    display: block;
+  }
+  .ed-tile-image {
+    position: relative;
+    aspect-ratio: 4 / 5;
+    overflow: hidden;
+    border-radius: 6px;
+    box-shadow: 0 18px 35px -22px rgba(40, 25, 15, 0.35), 0 4px 8px -4px rgba(40, 25, 15, 0.15);
+    margin-bottom: 1.4rem;
+    transition: transform 0.5s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.5s ease;
+  }
+  .ed-tile:hover .ed-tile-image {
+    transform: translateY(-5px);
+    box-shadow: 0 28px 50px -20px rgba(40, 25, 15, 0.45), 0 8px 14px -4px rgba(40, 25, 15, 0.20);
+  }
+  .ed-tile-image img {
+    width: 100%; height: 100%;
+    object-fit: cover;
+    display: block;
+    filter: saturate(0.88) contrast(1.04) brightness(0.94);
+    transition: transform 1.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  .ed-tile:hover .ed-tile-image img { transform: scale(1.07); }
+  .ed-tile-image::after {
+    content: '';
+    position: absolute; inset: 0;
+    background: linear-gradient(180deg, transparent 70%, rgba(20, 12, 5, 0.18) 100%);
+    pointer-events: none;
+  }
+  .ed-tile-caption { padding: 0 0.15rem; }
+  .ed-tile-index {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.6rem;
+    letter-spacing: 0.3em;
+    color: var(--ink-soft);
+    margin-bottom: 0.6rem;
+    opacity: 0.75;
+  }
+  .ed-tile-name {
+    font-family: 'Cormorant Garamond', serif;
+    font-style: italic;
+    font-weight: 400;
+    font-size: 1.4rem;
+    line-height: 1.15;
+    color: var(--ink);
+    margin-bottom: 0.35rem;
+    letter-spacing: 0.005em;
+  }
+  .ed-tile-city {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.6rem;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    margin-bottom: 0.7rem;
+    opacity: 0.75;
+  }
+  .ed-tile-specialty {
+    font-family: 'Cormorant Garamond', serif;
+    font-style: italic;
+    font-size: 0.95rem;
+    line-height: 1.45;
+    color: var(--ink-soft);
+  }
+  .ed-tile-arrow {
+    position: absolute;
+    top: 1rem; right: 1rem;
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    background: rgba(245, 241, 234, 0.92);
+    color: var(--ink);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 2;
+    opacity: 0;
+    transform: translate(6px, -6px);
+    transition: opacity 0.4s, transform 0.4s;
+  }
+  .ed-tile-arrow svg { width: 13px; height: 13px; }
+  .ed-tile:hover .ed-tile-arrow { opacity: 1; transform: translate(0, 0); }
+
+  /* ─── MANIFESTO / EDITOR'S LETTER ───────────────── */
+  .manifesto {
+    background:
+      radial-gradient(ellipse at center, #2A1F18 0%, #16110D 75%);
+    color: var(--cream);
+    padding: 9rem 3rem;
+    text-align: center;
+    position: relative;
+  }
+  .manifesto::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(ellipse 60% 70% at 50% 50%, transparent 30%, rgba(0,0,0,0.5) 100%);
+    pointer-events: none;
+  }
+  .manifesto > * { position: relative; z-index: 1; }
+
+  .manifesto-inner {
+    max-width: 720px;
+    margin: 0 auto;
+  }
+  .manifesto .eyebrow {
+    color: rgba(245, 241, 234, 0.65);
+    margin-bottom: 2.5rem;
+  }
+  .manifesto .eyebrow::before { background: #E8B583; }
+
+  .manifesto .pull {
+    font-family: 'Cormorant Garamond', serif;
+    font-style: italic;
+    font-weight: 300;
+    font-size: clamp(1.7rem, 3.5vw, 2.6rem);
+    line-height: 1.3;
+    letter-spacing: -0.005em;
+    margin-bottom: 3rem;
+    color: var(--cream);
+  }
+  .manifesto .pull::before {
+    content: '"';
+    display: block;
+    font-size: 5rem;
+    line-height: 0.4;
+    color: #E8B583;
+    margin-bottom: 1.6rem;
+    font-style: normal;
+    font-weight: 400;
+  }
+
+  .manifesto-body p {
+    font-family: 'Cormorant Garamond', serif;
+    font-weight: 300;
+    font-size: 1.15rem;
+    line-height: 1.8;
+    color: rgba(245, 241, 234, 0.82);
+    margin-bottom: 1.4rem;
+    text-align: left;
+    max-width: 58ch;
+    margin-left: auto;
+    margin-right: auto;
+  }
+  .manifesto-body p:last-child { margin-bottom: 0; }
+  /* drop cap on the opening paragraph */
+  .manifesto-body p:first-child::first-letter {
+    font-family: 'Cormorant Garamond', serif;
+    font-style: italic;
+    font-size: 3.4em;
+    line-height: 0.85;
+    float: left;
+    margin: 0.15em 0.18em 0 0;
+    color: #E8B583;
+    font-weight: 400;
+  }
+
+  .manifesto-divider {
+    margin: 3.5rem auto 2.5rem;
+    width: 56px;
+    height: 1px;
+    background: rgba(245, 241, 234, 0.22);
+  }
+
+  .manifesto-sign {
+    line-height: 1.1;
+  }
+  .manifesto-sign .valediction {
+    display: block;
+    font-family: 'Cormorant Garamond', serif;
+    font-style: italic;
+    font-size: 1.1rem;
+    color: rgba(245, 241, 234, 0.7);
+    margin-bottom: 0.4rem;
+  }
+  .manifesto-sign .name {
+    display: block;
+    font-family: 'Pinyon Script', cursive;
+    font-size: clamp(2.4rem, 4.5vw, 3.4rem);
+    color: #E8B583;
+    line-height: 1.1;
+    letter-spacing: 0.005em;
+  }
+
+  .manifesto-credit {
+    margin-top: 1.8rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.62rem;
+    letter-spacing: 0.32em;
+    text-transform: uppercase;
+    color: rgba(245, 241, 234, 0.45);
+  }
+
+  /* ─── CITIES ──────────────────────────────────── */
+  .cities-list {
+    max-width: 1100px;
+    margin: 0 auto;
+  }
+  .city-row {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 3rem;
+    align-items: center;
+    padding: 2rem 0;
+    border-bottom: 1px solid var(--hairline);
+    cursor: pointer;
+    transition: padding-left 0.4s;
+  }
+  .city-row:hover { padding-left: 1rem; }
+  .city-row:hover .city-name { color: var(--terracotta); font-style: italic; }
+  .city-num {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.8rem;
+    color: var(--ink-soft);
+  }
+  .city-name {
+    font-family: 'Cormorant Garamond', serif;
+    font-size: clamp(2rem, 4vw, 3.5rem);
+    font-weight: 400;
+    line-height: 1;
+    transition: all 0.4s;
+  }
+  .city-meta {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+  }
+  .city-row.live .city-meta {
+    color: var(--terracotta);
+    display: inline-flex;
+    align-items: center;
+    gap: 0.6rem;
+  }
+  .city-row.live .city-meta::before {
+    content: '';
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--terracotta);
+    box-shadow: 0 0 0 4px rgba(30, 102, 202, 0.15);
+  }
+  .city-row.featured .city-name em {
+    font-style: italic;
+    color: var(--terracotta);
+    font-size: 0.65em;
+    letter-spacing: 0.01em;
+    margin-left: 0.4rem;
+    vertical-align: baseline;
+  }
+  .city-row.featured .city-meta {
+    text-transform: none;
+    letter-spacing: 0.04em;
+    font-style: italic;
+    font-family: 'Cormorant Garamond', serif;
+    font-size: 0.95rem;
+    color: var(--ink-soft);
+  }
+
+  /* ─── PRESS ───────────────────────────────────── */
+  .press {
+    background: var(--cream);
+    text-align: center;
+    border-top: 1px solid var(--hairline);
+  }
+  .press .section-header { margin-bottom: 3rem; }
+  .press-logos {
+    max-width: 1100px;
+    margin: 0 auto 4rem;
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 2rem;
+    border-top: 1px solid var(--hairline);
+    border-bottom: 1px solid var(--hairline);
+    padding: 2.5rem 0;
+  }
+  .press-slot {
+    height: 38px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Cormorant Garamond', serif;
+    font-style: italic;
+    font-size: 1.1rem;
+    color: var(--ink-soft);
+    opacity: 0.4;
+    border: 1px dashed var(--hairline);
+    border-radius: 2px;
+    letter-spacing: 0.04em;
+  }
+  .press-cta-row {
+    display: flex;
+    gap: 1.5rem;
+    justify-content: center;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  /* ─── PARTNER ─────────────────────────────────── */
+  .partner {
+    background: var(--ivory);
+    border-top: 1px solid var(--hairline);
+    padding: 7rem 3rem;
+  }
+  .partner-grid {
+    max-width: 1300px;
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 3rem;
+  }
+  .partner-col .eyebrow { margin-bottom: 1.5rem; }
+  .partner-col h3 {
+    font-family: 'Cormorant Garamond', serif;
+    font-weight: 400;
+    font-size: clamp(1.7rem, 2.6vw, 2.4rem);
+    line-height: 1.1;
+    letter-spacing: -0.01em;
+    margin-bottom: 1.5rem;
+  }
+  .partner-col h3 em { font-style: italic; color: var(--terracotta); }
+  .partner-col p {
+    color: var(--ink-soft);
+    line-height: 1.75;
+    max-width: 30rem;
+    margin-bottom: 2.2rem;
+    font-size: 1rem;
+  }
+  .partner-col + .partner-col {
+    padding-left: 3rem;
+    border-left: 1px solid var(--hairline);
+  }
+  .partner-col ul {
+    list-style: none;
+    margin-bottom: 2.2rem;
+  }
+  .partner-col li {
+    padding: 0.6rem 0;
+    border-bottom: 1px solid var(--hairline);
+    color: var(--ink-soft);
+    font-size: 0.9rem;
+    display: flex;
+    align-items: center;
+    gap: 0.8rem;
+  }
+  .partner-col li::before {
+    content: '✦';
+    color: var(--terracotta);
+    font-size: 0.7rem;
+  }
+
+  /* ─── DOWNLOAD ────────────────────────────────── */
+  .download {
+    background: var(--cream-deep);
+    text-align: center;
+  }
+  .download .section-header { margin-bottom: 3rem; }
+  .download-row {
+    display: flex;
+    gap: 1rem;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+  .store-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.9rem;
+    background: var(--ink);
+    color: var(--cream);
+    padding: 1rem 1.8rem;
+    border-radius: 4px;
+    text-decoration: none;
+    transition: all 0.3s;
+  }
+  .store-btn:hover { background: var(--terracotta); transform: translateY(-2px); }
+  .store-btn .small { font-size: 0.65rem; opacity: 0.8; letter-spacing: 0.1em; text-transform: uppercase; }
+  .store-btn .big { font-size: 1.1rem; font-weight: 500; line-height: 1; margin-top: 0.15rem; }
+
+  /* ─── FOOTER ──────────────────────────────────── */
+  footer {
+    background: var(--ink);
+    color: var(--cream);
+    padding: 5rem 3rem 2rem;
+  }
+  .footer-grid {
+    display: grid;
+    grid-template-columns: 1.5fr 1fr 1fr 1fr;
+    gap: 3rem;
+    max-width: 1300px;
+    margin: 0 auto 3rem;
+  }
+  footer h4 {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    opacity: 0.6;
+    margin-bottom: 1.5rem;
+    font-weight: 400;
+  }
+  footer ul { list-style: none; }
+  footer li { margin-bottom: 0.7rem; }
+  footer a {
+    color: var(--cream);
+    text-decoration: none;
+    opacity: 0.8;
+    font-size: 0.95rem;
+    transition: opacity 0.3s;
+  }
+  footer a:hover { opacity: 1; color: var(--terracotta-soft); }
+  .footer-brand .wordmark { color: var(--cream); font-size: 2rem; margin-bottom: 1rem; display: block; }
+  .footer-brand p { opacity: 0.6; line-height: 1.7; max-width: 22rem; font-size: 0.9rem; }
+  .footer-bottom {
+    border-top: 1px solid rgba(245, 241, 234, 0.1);
+    padding-top: 2rem;
+    max-width: 1300px;
+    margin: 0 auto;
+    display: flex;
+    justify-content: space-between;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    opacity: 0.65;
+  }
+  .footer-bottom a {
+    color: inherit;
+    text-decoration: none;
+    opacity: 1;
+    transition: color 0.25s ease;
+  }
+  .footer-bottom a:hover { color: var(--terracotta-soft); }
+
+  /* ─── SCROLL REVEAL ───────────────────────────── */
+  .reveal {
+    opacity: 0;
+    transform: translateY(36px);
+    transition: opacity 1s cubic-bezier(0.2, 0.8, 0.2, 1), transform 1s cubic-bezier(0.2, 0.8, 0.2, 1);
+    will-change: opacity, transform;
+  }
+  .reveal.in-view { opacity: 1; transform: translateY(0); }
+  .reveal[data-stagger="1"].in-view { transition-delay: 0.08s; }
+  .reveal[data-stagger="2"].in-view { transition-delay: 0.16s; }
+  .reveal[data-stagger="3"].in-view { transition-delay: 0.24s; }
+  .reveal[data-stagger="4"].in-view { transition-delay: 0.32s; }
+  .reveal[data-stagger="5"].in-view { transition-delay: 0.40s; }
+  @media (prefers-reduced-motion: reduce) {
+    .reveal { opacity: 1; transform: none; transition: none; }
+  }
+
+  /* ─── CAMPAIGN MOMENT ─────────────────────────── */
+  .campaign {
+    position: relative;
+    width: 100%;
+    height: 86vh;
+    min-height: 520px;
+    overflow: hidden;
+    padding: 0;
+    margin: -2rem 0;
+    --edge-mask: linear-gradient(180deg, transparent 0%, #000 12%, #000 88%, transparent 100%);
+  }
+  .campaign-image {
+    position: absolute;
+    inset: -4% 0;
+    background-image: url('images/campaign.jpg?v=3');
+    background-size: cover;
+    background-position: center center;
+    filter: saturate(0.92) contrast(1.05) brightness(0.92);
+    transform: scale(1.04);
+    animation: silk-drift 24s ease-in-out infinite;
+    -webkit-mask-image: var(--edge-mask);
+            mask-image: var(--edge-mask);
+  }
+  @keyframes silk-drift {
+    0%   { transform: scale(1.04) translate(0, 0); }
+    50%  { transform: scale(1.09) translate(-1.5%, -1.2%); }
+    100% { transform: scale(1.04) translate(0, 0); }
+  }
+  .campaign::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background:
+      /* caption darkening — bottom-left only */
+      radial-gradient(ellipse 70% 55% at 22% 82%, rgba(15, 10, 5, 0.55), transparent 65%),
+      /* soft moody vignette across the photo */
+      radial-gradient(ellipse 100% 90% at 50% 50%, transparent 55%, rgba(15, 10, 5, 0.28) 100%);
+    pointer-events: none;
+    -webkit-mask-image: var(--edge-mask);
+            mask-image: var(--edge-mask);
+  }
+  .campaign-caption {
+    position: absolute;
+    bottom: 4rem;
+    left: 4rem;
+    right: 4rem;
+    z-index: 2;
+    color: var(--cream);
+    text-align: left;
+  }
+  .campaign-eyebrow {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+    letter-spacing: 0.3em;
+    text-transform: uppercase;
+    margin-bottom: 1.5rem;
+    opacity: 0.85;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.8rem;
+  }
+  .campaign-eyebrow::before {
+    content: '';
+    width: 36px;
+    height: 1px;
+    background: var(--cream);
+    opacity: 0.7;
+  }
+  .campaign-caption h2 {
+    font-family: 'Cormorant Garamond', serif;
+    font-style: italic;
+    font-weight: 400;
+    font-size: clamp(2.5rem, 5vw, 4.8rem);
+    line-height: 1;
+    letter-spacing: -0.01em;
+    max-width: 22ch;
+    text-shadow: 0 2px 20px rgba(0, 0, 0, 0.3);
+  }
+  .campaign-caption .small {
+    display: block;
+    font-style: normal;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.65rem;
+    letter-spacing: 0.25em;
+    text-transform: uppercase;
+    margin-top: 1.5rem;
+    opacity: 0.75;
+  }
+
+  /* ─── WAITLIST ────────────────────────────────── */
+  .waitlist {
+    background:
+      radial-gradient(ellipse 60% 80% at 50% 0%, rgba(217, 174, 130, 0.12), transparent 60%),
+      var(--ivory);
+    padding: 7rem 3rem;
+    text-align: center;
+    border-top: 1px solid var(--hairline);
+  }
+  .waitlist-inner { max-width: 640px; margin: 0 auto; }
+  .waitlist h2 {
+    font-family: 'Cormorant Garamond', serif;
+    font-weight: 400;
+    font-size: clamp(2.2rem, 4.5vw, 3.6rem);
+    line-height: 1.05;
+    letter-spacing: -0.005em;
+    margin: 1.5rem 0;
+  }
+  .waitlist h2 em { font-style: italic; color: var(--terracotta); }
+  .waitlist p {
+    color: var(--ink-soft);
+    font-size: 1rem;
+    line-height: 1.75;
+    max-width: 36rem;
+    margin: 0 auto 2.5rem;
+  }
+  .waitlist-form {
+    display: flex;
+    gap: 0.5rem;
+    max-width: 460px;
+    margin: 0 auto;
+    border-bottom: 1px solid var(--ink);
+    padding-bottom: 0.4rem;
+  }
+  .waitlist-form input {
+    flex: 1;
+    border: none;
+    background: transparent;
+    padding: 0.6rem 0.2rem;
+    font-family: inherit;
+    font-size: 1rem;
+    color: var(--ink);
+    outline: none;
+    font-weight: 300;
+  }
+  .waitlist-form input::placeholder {
+    color: var(--ink-soft);
+    opacity: 0.5;
+    font-style: italic;
+    font-family: 'Cormorant Garamond', serif;
+    font-size: 1.1rem;
+  }
+  .waitlist-form button {
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 0.78rem;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--ink);
+    padding: 0.5rem 0.8rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.6rem;
+    transition: gap 0.3s, color 0.3s;
+  }
+  .waitlist-form button:hover { gap: 1rem; color: var(--terracotta); }
+  .waitlist-form button svg { width: 14px; height: 14px; }
+  .waitlist-success {
+    margin-top: 2rem;
+    font-family: 'Cormorant Garamond', serif;
+    font-style: italic;
+    font-size: 1.4rem;
+    color: var(--terracotta);
+    opacity: 0;
+    transform: translateY(-8px);
+    transition: opacity 0.6s, transform 0.6s;
+  }
+  .waitlist-success.show { opacity: 1; transform: translateY(0); }
+
+  /* ─── BOUTIQUE MODAL ──────────────────────────── */
+  .ed-card { transition: transform 0.6s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.5s ease; }
+  .ed-card-arrow {
+    position: absolute;
+    top: 1.2rem;
+    right: 1.2rem;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: rgba(245, 241, 234, 0.92);
+    color: var(--ink);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 3;
+    opacity: 0;
+    transform: translate(8px, -8px);
+    transition: opacity 0.4s, transform 0.4s;
+  }
+  .ed-card-arrow svg { width: 14px; height: 14px; }
+  .ed-card:hover .ed-card-arrow { opacity: 1; transform: translate(0, 0); }
+
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 10, 5, 0.78);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    z-index: 10000;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+    opacity: 0;
+    transition: opacity 0.4s ease;
+  }
+  .modal-backdrop.open { display: flex; opacity: 1; }
+  .modal {
+    background: var(--ivory);
+    width: 100%;
+    max-width: 460px;
+    border-radius: 6px;
+    overflow: hidden;
+    transform: scale(0.96);
+    transition: transform 0.5s cubic-bezier(0.2, 0.8, 0.2, 1);
+    box-shadow: 0 40px 80px -10px rgba(0, 0, 0, 0.5);
+  }
+  .modal-backdrop.open .modal { transform: scale(1); }
+  .modal-image {
+    width: 100%;
+    aspect-ratio: 4/3;
+    background-size: cover;
+    background-position: center;
+    filter: saturate(0.86) contrast(1.05);
+  }
+  .modal-body { padding: 2rem; text-align: center; }
+  .modal-body .city {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.65rem;
+    letter-spacing: 0.25em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    margin-bottom: 0.8rem;
+  }
+  .modal-body h3 {
+    font-family: 'Cormorant Garamond', serif;
+    font-style: italic;
+    font-weight: 400;
+    font-size: 2.2rem;
+    line-height: 1;
+    margin-bottom: 1rem;
+  }
+  .modal-body p {
+    color: var(--ink-soft);
+    line-height: 1.7;
+    margin-bottom: 2rem;
+    font-size: 0.95rem;
+  }
+  .modal-cta {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.7rem;
+    background: var(--ink);
+    color: var(--cream);
+    padding: 0.9rem 1.8rem;
+    border-radius: 999px;
+    text-decoration: none;
+    font-size: 0.78rem;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    transition: background 0.3s;
+  }
+  .modal-cta:hover { background: var(--terracotta); }
+  .modal-cta svg { width: 14px; height: 14px; }
+  .modal-close {
+    position: absolute;
+    top: 1.5rem;
+    right: 1.5rem;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: rgba(245, 241, 234, 0.95);
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--ink);
+    z-index: 2;
+    transition: transform 0.3s;
+  }
+  .modal-close:hover { transform: rotate(90deg); }
+
+  /* ─── RESPONSIVE ──────────────────────────────── */
+  @media (max-width: 900px) {
+    nav { padding: 1rem 1.5rem; }
+    nav > ul { display: none; }
+    .nav-toggle { display: block; }
+    .hero { padding: 0; }
+    .hero-text { left: 1.5rem; right: 1.5rem; bottom: 3rem; }
+    .hero h1 { font-size: clamp(2.8rem, 11vw, 4.5rem); }
+    .hero-collage { display: none; }
+    section { padding: 5rem 1.5rem; }
+    .how-grid { grid-template-columns: 1fr; gap: 3rem; }
+    .ed-feature { height: 60vh; min-height: 440px; margin-bottom: 3rem; }
+    .ed-index { grid-template-columns: repeat(2, 1fr); gap: 1.5rem; }
+    .ed-tile-name { font-size: 1.2rem; }
+    .ed-tile-specialty { font-size: 0.88rem; }
+    .footer-grid { grid-template-columns: 1fr 1fr; }
+    .city-row { grid-template-columns: auto 1fr; gap: 1.5rem; }
+    .city-meta { display: none; }
+    .partner-grid { grid-template-columns: 1fr; gap: 0; }
+    .partner-col + .partner-col { padding-left: 0; padding-top: 3rem; margin-top: 3rem; border-left: none; border-top: 1px solid var(--hairline); }
+    .press-logos { grid-template-columns: repeat(2, 1fr); gap: 1rem; }
+    .campaign { height: 60vh; min-height: 380px; }
+    .campaign-caption { left: 1.5rem; right: 1.5rem; bottom: 2rem; }
+    .waitlist { padding: 5rem 1.5rem; }
+  }
+</style>
+</head>
+
+<body>
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<!-- ─── NAV ────────────────────────────────── -->
+<nav>
+  <a href="#" class="wordmark"><em>dapperdriver</em></a>
+  <ul>
+    <li><a href="#story">The Story</a></li>
+    <li><a href="#boutiques">Boutiques</a></li>
+    <li><a href="#cities">Cities</a></li>
+    <li><a href="#partner">Partner</a></li>
+    <li><a href="#press">Press</a></li>
+    <li><a href="#download" class="nav-cta">Get the App</a></li>
+  </ul>
+  <button class="nav-toggle" id="nav-toggle" aria-label="Open menu" aria-expanded="false" aria-controls="mobile-nav">
+    <span></span><span></span><span></span>
+  </button>
+</nav>
+
+<!-- ─── MOBILE NAV DRAWER ──────────────────── -->
+<div class="mobile-nav" id="mobile-nav" aria-hidden="true">
+  <ul>
+    <li><a href="#story">The Story</a></li>
+    <li><a href="#boutiques">Boutiques</a></li>
+    <li><a href="#cities">Cities</a></li>
+    <li><a href="#partner">Partner</a></li>
+    <li><a href="#press">Press</a></li>
+    <li><a href="#download" class="cta">Get the App</a></li>
+  </ul>
+</div>
+
+<main id="main">
+
+<!-- ─── HERO ───────────────────────────────── -->
+<header class="hero" role="banner" aria-label="DapperDriver — boutique fashion delivered, pictured against draped amber fabric">
+  <div class="hero-text">
+    <div class="eyebrow mono">Est. MMXXIII · A Door-to-Door Boutique</div>
+    <h1>Boutique fashion,<br/><em>delivered like a love letter.</em></h1>
+    <p class="lede">
+      A door-to-door boutique that treats fashion as an intentional ritual, not a mindless
+      purchase. DapperDriver connects you with the independent shops and curators in your
+      neighborhood, the people who know their stock by heart, and brings their work to your
+      door in under an hour. No warehouses. No middlemen. Just the quiet pleasure of finding
+      the right thing.
+    </p>
+    <div class="hero-cta-row">
+      <a href="#download" class="btn-primary">
+        Begin Shopping
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
+      </a>
+      <a href="#story" class="btn-ghost">How It Works</a>
+    </div>
+  </div>
+
+  <div class="hero-collage">
+    <div class="letter">
+      <div class="letter-paper">
+        <div class="letter-header">a note from D.D</div>
+        <div class="letter-body">
+          <span class="line">Darling,</span>
+          <span class="line">heard you owned the room</span>
+          <span class="line">last night in your new dress.</span>
+          <span class="line">of course you did.</span>
+          <span class="line">yours, <span class="letter-sig">— D.</span></span>
+        </div>
+      </div>
+    </div>
+    <div class="photo-tag">
+      <div class="price">№ 0042 · CHICAGO</div>
+      <div class="name">Silk slip — <em>cream</em></div>
+    </div>
+  </div>
+</header>
+
+<!-- ─── MARQUEE ────────────────────────────── -->
+<div class="marquee">
+  <div class="marquee-inner">
+    <span>Independent designers</span><span>·</span>
+    <span>One-hour delivery</span><span>·</span>
+    <span>Vintage &amp; archival</span><span>·</span>
+    <span>5 cities</span><span>·</span>
+    <span>Curated weekly</span><span>·</span>
+    <span>Independent designers</span><span>·</span>
+    <span>One-hour delivery</span><span>·</span>
+    <span>Vintage &amp; archival</span><span>·</span>
+    <span>5 cities</span><span>·</span>
+    <span>Curated weekly</span><span>·</span>
+  </div>
+</div>
+
+<!-- ─── HOW IT WORKS ───────────────────────── -->
+<section id="story" class="how">
+  <div class="section-header reveal">
+    <div class="eyebrow mono">The Ritual</div>
+    <h2>Three steps.<br/><em>Don't trade quality time for quality clothes.</em></h2>
+    <p>Boutique shopping, made an experience again.</p>
+  </div>
+
+  <div class="how-grid">
+    <div class="step reveal">
+      <div class="step-num">i.</div>
+      <h3>Discover</h3>
+      <p>Browse a hand-picked roster of boutiques and ateliers in your city, or wander the way you would a sun-drenched market.</p>
+    </div>
+    <div class="step reveal">
+      <div class="step-num">ii.</div>
+      <h3>Curate</h3>
+      <p>Save what catches your eye. Build wishlists across as many boutiques as you'd like, then revisit at your own pace. No rushed decisions, no closing tabs.</p>
+    </div>
+    <div class="step reveal">
+      <div class="step-num">iii.</div>
+      <h3>Delivered</h3>
+      <p>A trusted DapperDriver picks up your selections by hand. At your door within the hour, wrapped, tagged, ready to be worn.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ─── BOUTIQUES (editorial grid) ─────────── -->
+<section id="boutiques">
+  <div class="section-header reveal">
+    <div class="eyebrow mono">The Atlas · Issue 01 · Miami</div>
+    <h2>An atlas,<br/><em>growing one boutique at a time.</em></h2>
+    <p>A living index of the small shops we visit each morning, chosen for the people behind the door, not the marketing behind the brand. Issue 01 covers Miami. Chicago is next.</p>
+  </div>
+
+  <div class="editorial">
+    <p class="ed-epigraph reveal">Small shops, kept by people who know their stock by heart.</p>
+
+    <div class="ed-index">
+      <div class="ed-tile reveal" data-stagger="1" data-name="Omdaya Atelier" data-city="Miami · Coral Gables" data-img="images/05-omdaya.png">
+        <div class="ed-tile-image">
+          <img src="images/05-omdaya.png" alt="Omdaya Atelier — Miami" />
+          <div class="ed-tile-arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M7 17L17 7M9 7h8v8"/></svg></div>
+        </div>
+        <div class="ed-tile-caption">
+          <div class="ed-tile-index">№ 01</div>
+          <h4 class="ed-tile-name">Omdaya Atelier</h4>
+          <div class="ed-tile-city">Miami · Coral Gables</div>
+          <p class="ed-tile-specialty">Hand-crocheted resort dressing in the warm pinks of Coral Gables.</p>
+        </div>
+      </div>
+      <div class="ed-tile reveal" data-stagger="2" data-name="Shoes2You" data-city="Miami" data-img="images/09-shoes2you.png">
+        <div class="ed-tile-image">
+          <img src="images/09-shoes2you.png" alt="Shoes2You — Miami" />
+          <div class="ed-tile-arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M7 17L17 7M9 7h8v8"/></svg></div>
+        </div>
+        <div class="ed-tile-caption">
+          <div class="ed-tile-index">№ 02</div>
+          <h4 class="ed-tile-name">Shoes2You</h4>
+          <div class="ed-tile-city">Miami</div>
+          <p class="ed-tile-specialty">Resort sandals &amp; swim, made for the boardwalk.</p>
+        </div>
+      </div>
+      <div class="ed-tile reveal" data-stagger="3" data-name="Golden Desire" data-city="Miami" data-img="images/10-golden-desire.png">
+        <div class="ed-tile-image">
+          <img src="images/10-golden-desire.png" alt="Golden Desire — Miami" />
+          <div class="ed-tile-arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M7 17L17 7M9 7h8v8"/></svg></div>
+        </div>
+        <div class="ed-tile-caption">
+          <div class="ed-tile-index">№ 03</div>
+          <h4 class="ed-tile-name">Golden Desire</h4>
+          <div class="ed-tile-city">Miami</div>
+          <p class="ed-tile-specialty">Layered gold, woven leather, and a little fruit.</p>
+        </div>
+      </div>
+      <div class="ed-tile reveal" data-stagger="1" data-name="V's Fashion" data-city="Miami · Wynwood" data-img="images/06-vs-fashion.png">
+        <div class="ed-tile-image">
+          <img src="images/06-vs-fashion.png" alt="V's Fashion — Miami" />
+          <div class="ed-tile-arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M7 17L17 7M9 7h8v8"/></svg></div>
+        </div>
+        <div class="ed-tile-caption">
+          <div class="ed-tile-index">№ 04</div>
+          <h4 class="ed-tile-name">V's Fashion</h4>
+          <div class="ed-tile-city">Miami · Wynwood</div>
+          <p class="ed-tile-specialty">Vintage Italianate prints in a Wynwood walk-up.</p>
+        </div>
+      </div>
+      <div class="ed-tile reveal" data-stagger="2" data-name="Angel Boutique" data-city="Miami" data-img="images/07-angel.png">
+        <div class="ed-tile-image">
+          <img src="images/07-angel.png" alt="Angel Boutique — Miami" />
+          <div class="ed-tile-arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M7 17L17 7M9 7h8v8"/></svg></div>
+        </div>
+        <div class="ed-tile-caption">
+          <div class="ed-tile-index">№ 05</div>
+          <h4 class="ed-tile-name">Angel Boutique</h4>
+          <div class="ed-tile-city">Miami</div>
+          <p class="ed-tile-specialty">Old-world silk slips for occasions and quiet rooms.</p>
+        </div>
+      </div>
+      <div class="ed-tile reveal" data-stagger="3" data-name="Intuitive Boutique" data-city="Miami" data-img="images/08-intuitive.png">
+        <div class="ed-tile-image">
+          <img src="images/08-intuitive.png" alt="Intuitive Boutique — Miami" />
+          <div class="ed-tile-arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M7 17L17 7M9 7h8v8"/></svg></div>
+        </div>
+        <div class="ed-tile-caption">
+          <div class="ed-tile-index">№ 06</div>
+          <h4 class="ed-tile-name">Intuitive Boutique</h4>
+          <div class="ed-tile-city">Miami</div>
+          <p class="ed-tile-specialty">Bridal &amp; bohemian dressing, by candlelight.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ─── MANIFESTO / EDITOR'S LETTER ────────── -->
+<section class="manifesto">
+  <div class="manifesto-inner reveal">
+    <div class="eyebrow mono">A note from the founder</div>
+    <p class="pull">DapperDriver was built to keep small shops alive.</p>
+    <div class="manifesto-body">
+      <p>Within the last decade, fashion shifted from curation and creation to selling and consuming. The reins of control moved from the consumer to the seller. We are constantly being sold to, and quality keeps falling, because it is no longer about what the consumer wants. It is about what sellers can convince us we want.</p>
+      <p>DapperDriver is my personal love letter to fashion. Fashion is one of our biggest forms of self-expression, and no one is exempt from it. We should treat it as an intentional ritual, not a mindless purchase.</p>
+      <p>I built this company to make the world better in small, connected ways at once. Local boutiques thrive. Local shoppers find new ways to express themselves, no longer bound to the same large stores. Local drivers earn honest work in their own neighborhoods, connecting the boutique and the shopper. And the community itself grows stronger, both financially and culturally.</p>
+      <p>My life's vision is to leave behind something that makes the world a better place for all of us, and for my children to grow up in. New cycles of community abundance and connection, in place of old cycles of mindless consumption and disconnection. That is the world I'm building.</p>
+    </div>
+    <div class="manifesto-divider"></div>
+    <div class="manifesto-sign">
+      <span class="valediction">with love,</span>
+      <span class="name">Aidaly Alazo</span>
+    </div>
+    <div class="manifesto-credit">Founder · DapperDriver · Est. MMXXIII</div>
+  </div>
+</section>
+
+<!-- ─── CITIES ─────────────────────────────── -->
+<section id="cities">
+  <div class="section-header reveal">
+    <div class="eyebrow mono">The Map</div>
+    <h2>Live in Miami &amp; Chicago,<br/><em>with an edit from Paris.</em></h2>
+  </div>
+
+  <div class="cities-list reveal">
+    <div class="city-row live">
+      <div class="city-num">01.</div>
+      <div class="city-name serif">Miami</div>
+      <div class="city-meta">Now delivering</div>
+    </div>
+    <div class="city-row live">
+      <div class="city-num">02.</div>
+      <div class="city-name serif">Chicago</div>
+      <div class="city-meta">Now delivering</div>
+    </div>
+    <div class="city-row featured">
+      <div class="city-num">03.</div>
+      <div class="city-name serif">Paris <em>— The Edit</em></div>
+      <div class="city-meta">Exclusive Parisian boutiques, shipped stateside</div>
+    </div>
+    <div class="city-row">
+      <div class="city-num">04.</div>
+      <div class="city-name serif">New York</div>
+      <div class="city-meta">Coming soon</div>
+    </div>
+    <div class="city-row">
+      <div class="city-num">05.</div>
+      <div class="city-name serif">Los Angeles</div>
+      <div class="city-meta">Coming soon</div>
+    </div>
+  </div>
+</section>
+
+<!-- ─── PRESS ───────────────────────────────── -->
+<section id="press" class="press">
+  <div class="section-header reveal">
+    <div class="eyebrow mono">Press</div>
+    <h2>For the journalists,<br/><em>editors, and storytellers.</em></h2>
+    <p>If you're writing about independent fashion, slow commerce, or the romance of the local boutique, we'd love to share our story.</p>
+  </div>
+
+  <div class="press-cta-row">
+    <a href="mailto:aidaly@dapperdriver.com?subject=Press%20Inquiry%20%E2%80%94%20DapperDriver&body=Hi%20DapperDriver%2C%0A%0AOutlet%3A%0AAngle%20%2F%20story%3A%0ADeadline%3A%0A%0A" class="btn-primary">
+      Press inquiries
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
+    </a>
+    <a href="mailto:aidaly@dapperdriver.com?subject=Press%20Kit%20Request%20%E2%80%94%20DapperDriver&body=Hi%20Aidaly%2C%0A%0AI%27d%20like%20to%20request%20the%20DapperDriver%20press%20kit.%0A%0AOutlet%3A%0AAngle%20%2F%20story%3A%0ADeadline%3A%0A%0AThanks%21" class="btn-ghost">Request press kit</a>
+  </div>
+</section>
+
+<!-- ─── PARTNER ─────────────────────────────── -->
+<section id="partner" class="partner">
+  <div class="partner-grid">
+    <div class="partner-col reveal">
+      <div class="eyebrow mono">For Boutiques</div>
+      <h3>Sell from your shop,<br/><em>without leaving the floor.</em></h3>
+      <p>
+        We list your inventory, route the orders, and dispatch a runner to your door. Your
+        clothes never leave the boutique until they're sold. No warehousing, no consignment,
+        no fuss. You keep your shop. We handle the delivery.
+      </p>
+      <ul>
+        <li>Free to join</li>
+        <li>White-glove pickup from your floor</li>
+      </ul>
+      <a href="mailto:aidaly@dapperdriver.com?subject=Partner%20with%20DapperDriver&body=Hi%20DapperDriver%20team%2C%0A%0AI%27d%20like%20to%20list%20my%20boutique.%0A%0ABoutique%20name%3A%0ACity%20%26%20neighborhood%3A%0AInstagram%20%2F%20website%3A%0ANumber%20of%20SKUs%3A%0A%0AThanks%21" class="btn-primary">
+        Apply to partner
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
+      </a>
+    </div>
+
+    <div class="partner-col reveal">
+      <div class="eyebrow mono">For Drivers</div>
+      <h3>Earn between<br/><em>fittings.</em></h3>
+      <p>
+        Quick neighborhood runs, never more than a few miles. Pick up from a boutique,
+        drop at a customer's door. The most beautiful courier work in the city.
+      </p>
+      <ul>
+        <li>Choose your own hours</li>
+        <li>Short routes, big tips</li>
+      </ul>
+      <a href="mailto:aidaly@dapperdriver.com?subject=Drive%20for%20DapperDriver&body=Hi%20DapperDriver%2C%0A%0AI%27d%20like%20to%20drive.%0A%0ACity%20%26%20neighborhood%3A%0AVehicle%20type%3A%0AAvailability%3A%0A%0AThanks%21" class="btn-primary">
+        Apply to drive
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
+      </a>
+    </div>
+
+    <div class="partner-col reveal">
+      <div class="eyebrow mono">For Customers</div>
+      <h3>Want us<br/><em>on your block?</em></h3>
+      <p>
+        DapperDriver opens neighborhood by neighborhood. Tell us where
+        you live and what kind of shops you'd love to order from. Cities with the loudest
+        wait-lists go first.
+      </p>
+      <ul>
+        <li>Get notified the day we land in your city</li>
+        <li>Suggest the boutiques you want on the app</li>
+      </ul>
+      <a href="mailto:aidaly@dapperdriver.com?subject=Bring%20DapperDriver%20to%20my%20city&body=Hi%20DapperDriver%20team%2C%0A%0AI%27d%20love%20DapperDriver%20in%20my%20city.%0A%0ACity%20%26%20neighborhood%3A%0ABoutiques%20I%27d%20order%20from%3A%0A%0AThanks%21" class="btn-primary">
+        Request your city
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- ─── DOWNLOAD ──────────────────────────── -->
+<section id="download" class="download">
+  <div class="section-header reveal">
+    <div class="eyebrow mono">The App</div>
+    <h2>The boutique<br/><em>in your pocket.</em></h2>
+    <p>iOS first. Android soon. Free, with no subscription.</p>
+  </div>
+
+  <div class="download-row">
+    <a href="#waitlist" class="store-btn" data-store="ios">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M17.05 20.28c-.98.95-2.05.8-3.08.35-1.09-.46-2.09-.48-3.24 0-1.44.62-2.2.44-3.06-.35C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.54 4.09zM12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z"/></svg>
+      <div><div class="small">Coming this season to</div><div class="big">App Store</div></div>
+    </a>
+    <a href="#waitlist" class="store-btn" data-store="android">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M3.609 1.814L13.792 12 3.61 22.186a.996.996 0 01-.61-.92V2.734a1 1 0 01.609-.92zm10.89 10.893l2.302 2.302-10.937 6.333 8.635-8.635zm3.196-3.196l2.713 1.572a1 1 0 010 1.732l-2.713 1.572-2.768-2.768 2.768-2.768zM5.864 2.658l10.938 6.333-2.302 2.302L5.863 2.658z"/></svg>
+      <div><div class="small">Coming soon to</div><div class="big">Google Play</div></div>
+    </a>
+  </div>
+</section>
+
+<!-- ─── WAITLIST ───────────────────────────── -->
+<section id="waitlist" class="waitlist reveal">
+  <div class="waitlist-inner">
+    <div class="eyebrow mono">The First-Look List</div>
+    <h2>Get the morning notes,<br/><em>before anyone else.</em></h2>
+    <p>A weekly letter from the boutiques we partner with: new arrivals, vintage finds, the occasional love note. Mostly silk. No spam.</p>
+    <form class="waitlist-form" id="waitlist-form" novalidate>
+      <input type="email" placeholder="your name, your email…" required aria-label="Your email" />
+      <button type="submit">
+        Subscribe
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
+      </button>
+    </form>
+    <div class="waitlist-success" id="waitlist-success">Received with a smile.</div>
+  </div>
+</section>
+
+<!-- ─── BOUTIQUE MODAL ─────────────────────── -->
+<div class="modal-backdrop" id="boutique-modal" role="dialog" aria-hidden="true">
+  <div class="modal">
+    <button class="modal-close" id="modal-close" aria-label="Close">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 6l12 12M6 18L18 6"/></svg>
+    </button>
+    <div class="modal-image" id="modal-image"></div>
+    <div class="modal-body">
+      <div class="city" id="modal-city"></div>
+      <h3 id="modal-name"></h3>
+      <p>Full boutique pages, with lookbooks, stories, and live inventory, open with the app. Tap below to be the first inside.</p>
+      <a href="#download" class="modal-cta" id="modal-cta">
+        Get the app
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
+      </a>
+    </div>
+  </div>
+</div>
+
+</main>
+
+<!-- ─── FOOTER ─────────────────────────────── -->
+<footer>
+  <div class="footer-grid">
+    <div class="footer-brand">
+      <span class="wordmark"><em>dapperdriver</em></span>
+      <p>A door-to-door boutique. Bringing the world's most beautiful small shops to your block, one delivery at a time.</p>
+    </div>
+    <div>
+      <h4>Shop</h4>
+      <ul>
+        <li><a href="#boutiques">Boutiques</a></li>
+        <li><a href="#boutiques">New Arrivals</a></li>
+        <li><a href="#cities">By City</a></li>
+        <li><a href="#waitlist">First-Look List</a></li>
+      </ul>
+    </div>
+    <div>
+      <h4>Partner</h4>
+      <ul>
+        <li><a href="#partner">For Boutiques</a></li>
+        <li><a href="#partner">For Drivers</a></li>
+        <li><a href="#press">Press</a></li>
+      </ul>
+    </div>
+    <div>
+      <h4>Company</h4>
+      <ul>
+        <li><a href="#story">About</a></li>
+        <li><a href="mailto:aidaly@dapperdriver.com">Help</a></li>
+        <li><a href="mailto:aidaly@dapperdriver.com">Contact</a></li>
+      </ul>
+    </div>
+  </div>
+  <div class="footer-bottom">
+    <span>© MMXXIII–MMXXVI DapperDriver, Inc.</span>
+    <span>
+      <a href="/privacy.html">Privacy</a> ·
+      <a href="/terms.html">Terms</a> ·
+      <a href="/privacy.html#cookies">Cookies</a>
+    </span>
+  </div>
+</footer>
+
+<script>
+  // Scroll-reveal animations
+  (function () {
+    const els = document.querySelectorAll('.reveal');
+    if (!('IntersectionObserver' in window)) {
+      els.forEach(el => el.classList.add('in-view'));
+      return;
+    }
+    const obs = new IntersectionObserver((entries) => {
+      entries.forEach(e => {
+        if (e.isIntersecting) {
+          e.target.classList.add('in-view');
+          obs.unobserve(e.target);
+        }
+      });
+    }, { threshold: 0.15, rootMargin: '0px 0px -8% 0px' });
+    els.forEach(el => obs.observe(el));
+  })();
+
+  // Boutique modal
+  (function () {
+    const backdrop = document.getElementById('boutique-modal');
+    const modalImg = document.getElementById('modal-image');
+    const modalCity = document.getElementById('modal-city');
+    const modalName = document.getElementById('modal-name');
+    const closeBtn = document.getElementById('modal-close');
+    if (!backdrop) return;
+
+    function open(card) {
+      modalImg.style.backgroundImage = `url('${card.dataset.img}')`;
+      modalCity.textContent = card.dataset.city;
+      modalName.textContent = card.dataset.name;
+      backdrop.classList.add('open');
+      backdrop.setAttribute('aria-hidden', 'false');
+      document.body.style.overflow = 'hidden';
+    }
+    function close() {
+      backdrop.classList.remove('open');
+      backdrop.setAttribute('aria-hidden', 'true');
+      document.body.style.overflow = '';
+    }
+
+    document.querySelectorAll('.ed-tile').forEach(card => {
+      card.style.cursor = 'pointer';
+      card.addEventListener('click', () => open(card));
+    });
+    closeBtn.addEventListener('click', close);
+    backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+  })();
+
+  // Mobile nav drawer
+  (function () {
+    const toggle = document.getElementById('nav-toggle');
+    const drawer = document.getElementById('mobile-nav');
+    if (!toggle || !drawer) return;
+    function setOpen(open) {
+      document.body.classList.toggle('nav-open', open);
+      toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+      toggle.setAttribute('aria-label', open ? 'Close menu' : 'Open menu');
+      drawer.setAttribute('aria-hidden', open ? 'false' : 'true');
+    }
+    toggle.addEventListener('click', () => setOpen(!document.body.classList.contains('nav-open')));
+    drawer.querySelectorAll('a').forEach(a => a.addEventListener('click', () => setOpen(false)));
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') setOpen(false); });
+  })();
+
+  // Waitlist form — TODO(launch): replace WAITLIST_ENDPOINT with Formspree / Resend / API.
+  // Until then, leads are kept in localStorage as a safety net so we never lose one.
+  (function () {
+    const WAITLIST_ENDPOINT = ''; // e.g. 'https://formspree.io/f/xxxxxx'
+    const form = document.getElementById('waitlist-form');
+    const success = document.getElementById('waitlist-success');
+    if (!form) return;
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const input = form.querySelector('input');
+      const email = input.value.trim();
+      if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+        input.focus();
+        return;
+      }
+      // local backup so a lead is never silently dropped
+      try {
+        const stored = JSON.parse(localStorage.getItem('dd_waitlist') || '[]');
+        stored.push({ email, at: new Date().toISOString() });
+        localStorage.setItem('dd_waitlist', JSON.stringify(stored));
+      } catch (_) {}
+      // best-effort POST if endpoint is configured
+      if (WAITLIST_ENDPOINT) {
+        try {
+          await fetch(WAITLIST_ENDPOINT, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+            body: JSON.stringify({ email, source: 'web-waitlist' })
+          });
+        } catch (_) { /* fail silently — local backup still has it */ }
+      }
+      form.reset();
+      success.classList.add('show');
+      setTimeout(() => success.classList.remove('show'), 6000);
+    });
+  })();
+
+  // Lightweight analytics placeholder — drop in Plausible/GA snippet when ready.
+  // Example (Plausible): <script defer data-domain="dapperdriver.com" src="https://plausible.io/js/script.js"></script>
+</script>
+</body>
+</html>

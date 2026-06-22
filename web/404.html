@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Not found — DapperDriver</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<meta name="theme-color" content="#F5F1EA" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;1,400&family=Josefin+Sans:wght@300;400&family=JetBrains+Mono:wght@300&display=swap" rel="stylesheet" />
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    background:#F5F1EA;
+    color:#1A1812;
+    font-family:'Josefin Sans',-apple-system,sans-serif;
+    font-weight:300;
+    min-height:100vh;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding:2rem;
+    background-image:
+      radial-gradient(ellipse 80% 60% at 75% 20%, rgba(212,145,95,0.18), transparent 55%),
+      radial-gradient(ellipse 70% 60% at 15% 85%, rgba(120,80,60,0.10), transparent 60%);
+  }
+  .wrap{max-width:560px;text-align:center}
+  .eyebrow{font-family:'JetBrains Mono',monospace;font-size:0.7rem;letter-spacing:0.28em;text-transform:uppercase;color:#4A453B;margin-bottom:2rem}
+  .num{font-family:'Cormorant Garamond',serif;font-style:italic;font-size:clamp(5rem,18vw,10rem);line-height:1;color:#1A1812;margin-bottom:1.5rem}
+  h1{font-family:'Cormorant Garamond',serif;font-weight:400;font-size:clamp(1.6rem,3vw,2.2rem);line-height:1.2;margin-bottom:1.2rem}
+  h1 em{font-style:italic;color:#C9885E}
+  p{color:#4A453B;line-height:1.7;font-size:1rem;margin-bottom:2.5rem;max-width:38ch;margin-left:auto;margin-right:auto}
+  a.home{
+    display:inline-flex;align-items:center;gap:0.7rem;
+    background:#1A1812;color:#F5F1EA;
+    padding:1rem 2.2rem;border-radius:999px;
+    font-size:0.78rem;letter-spacing:0.2em;text-transform:uppercase;
+    text-decoration:none;transition:all 0.3s
+  }
+  a.home:hover{background:#C9885E}
+  a.home svg{width:14px;height:14px}
+</style>
+</head>
+<body>
+  <main class="wrap">
+    <div class="eyebrow">Page Not Found · 404</div>
+    <div class="num">04⚘04</div>
+    <h1>This boutique is <em>closed for the season.</em></h1>
+    <p>The page you're looking for has wandered off. Let's walk you back to the front door.</p>
+    <a class="home" href="/">
+      Return Home
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
+    </a>
+  </main>
+</body>
+</html>
