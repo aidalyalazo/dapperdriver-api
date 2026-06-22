@@ -83,14 +83,30 @@ router.post(
 
     const actualAmount = refundAmount ? amount : parseFloat(order.total_amount);
 
-    // Update order
-    await supabaseAdmin
+    // Update order. Marking payment_status='refunded' also makes the order
+    // ineligible for any FUTURE cash-out (payoutService now requires
+    // payment_status='paid'). The remaining risk is an order ALREADY paid out
+    // before the refund — that's a real platform loss with no auto-reversal, so
+    // surface it immediately (the daily money-reconcile job is the backstop).
+    const { data: refundedRow } = await supabaseAdmin
       .from('orders')
       .update({
         refund_amount: actualAmount,
         payment_status: 'refunded',
       })
-      .eq('id', orderId);
+      .eq('id', orderId)
+      .select('boutique_paid, driver_paid, boutique_earnings, driver_earnings')
+      .single();
+
+    if (refundedRow && (refundedRow.boutique_paid || refundedRow.driver_paid)) {
+      const { notifyAdmins } = require('../utils/adminAlerts');
+      await notifyAdmins({
+        type: 'refund_after_payout',
+        title: '🔴 Refund on an already-paid-out order',
+        body: `Order ${String(orderId).slice(0, 8)} refunded $${Number(actualAmount).toFixed(2)} but was already cashed out (boutique_paid=${refundedRow.boutique_paid}, driver_paid=${refundedRow.driver_paid}). No auto-reversal — claw back from the recipient's next payout manually.`,
+        data: { order_id: orderId, refund_amount: actualAmount, boutique_paid: refundedRow.boutique_paid, driver_paid: refundedRow.driver_paid },
+      }).catch(() => {});
+    }
 
     // Log to timeline (fire-and-forget)
     supabaseAdmin

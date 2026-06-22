@@ -51,6 +51,7 @@ async function cashOut({ recipientId, recipientType }) {
     .update(paidUpdate)
     .eq(orderFilter, tableRowId)
     .in('status', ['delivered', 'completed'])
+    .eq('payment_status', 'paid') // ONLY pay out money actually captured (not authorized/failed/REFUNDED)
     .eq(paidCol, false)
     .select(`id, ${earningsCol}, tip`))
     .catch(() => ({ data: [] }));
@@ -206,6 +207,7 @@ async function getAvailableBalance({ recipientId, recipientType }) {
     .select(`${earningsCol}, tip`)
     .eq(orderFilter, recipient.id)
     .in('status', ['delivered', 'completed'])
+    .eq('payment_status', 'paid') // withdrawable = captured only (excludes authorized/failed/refunded)
     .eq(paidCol, false))
     .catch(() => ({ data: [] }));
 

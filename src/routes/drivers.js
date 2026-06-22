@@ -183,12 +183,14 @@ router.get(
         .from('orders')
         .select('driver_earnings, tip')
         .eq('driver_id', driverId)
-        .eq('status', 'delivered'),
+        .in('status', ['delivered', 'completed'])
+        .eq('payment_status', 'paid')   // only captured money is a real pending payout
+        .eq('driver_paid', false),       // cashed-out orders must drop off the balance
       supabaseAdmin
         .from('orders')
         .select('id', { count: 'exact', head: true })
         .eq('driver_id', driverId)
-        .eq('status', 'delivered'),
+        .in('status', ['delivered', 'completed']),
       supabaseAdmin
         .from('drivers')
         .select('rating, review_count')
