@@ -196,6 +196,21 @@ function summarizeDemographics(shoppers) {
   const genders = tally(list.map((s) => s.gender || 'Unknown'));
   const budgets = tally(list.map((s) => s.price_tier).filter(Boolean));
   const withAny = list.filter((s) => s.date_of_birth || s.gender || (s.style_preferences || []).length).length;
+  // Audience SIZES + MEASUREMENTS — the actionable buying/grading signal for boutiques.
+  const sizeDist = (key) => tally(list.map((s) => s[key]).filter(Boolean));
+  const mAcc = { bust: [], waist: [], hips: [] };
+  let mCount = 0;
+  for (const s of list) {
+    const m = s.body_measurements;
+    if (!m || typeof m !== 'object') continue;
+    const cm = m.unit === 'cm'; let has = false;
+    for (const d of ['bust', 'waist', 'hips']) {
+      const v = Number(m[d]);
+      if (isFinite(v) && v > 0) { mAcc[d].push(cm ? v / 2.54 : v); has = true; }
+    }
+    if (has) mCount++;
+  }
+  const avg = (a) => a.length ? Math.round((a.reduce((x, y) => x + y, 0) / a.length) * 10) / 10 : null;
   return {
     shoppers_analyzed: n,
     coverage_pct: Math.round((withAny / n) * 100),
@@ -207,6 +222,13 @@ function summarizeDemographics(shoppers) {
     top_occasions: top(tally(list.flatMap((s) => s.shopping_occasions || []))),
     most_common_budget: mostCommon(budgets),
     budget_tiers: budgets,
+    sizes: {
+      tops: top(sizeDist('size_tops')),
+      bottoms: top(sizeDist('size_bottoms')),
+      shoes: top(sizeDist('size_shoes')),
+      dresses: top(sizeDist('size_dresses')),
+    },
+    measurements: { count: mCount, avg_bust: avg(mAcc.bust), avg_waist: avg(mAcc.waist), avg_hips: avg(mAcc.hips), unit: 'in' },
   };
 }
 
@@ -215,8 +237,8 @@ function summarizeDemographics(shoppers) {
 async function fetchShopperDemographics(userIds) {
   const ids = [...new Set((userIds || []).filter(Boolean))];
   if (!ids.length) return [];
-  const FULL = 'date_of_birth, gender, style_preferences, category_prefs, shopping_occasions, price_tier';
-  const BASE = 'date_of_birth, gender, style_preferences, category_prefs, price_tier';
+  const FULL = 'date_of_birth, gender, style_preferences, category_prefs, shopping_occasions, price_tier, size_tops, size_bottoms, size_shoes, size_dresses, body_measurements';
+  const BASE = 'date_of_birth, gender, style_preferences, category_prefs, price_tier, size_tops, size_bottoms, size_shoes, size_dresses, body_measurements';
   let r = await supabaseAdmin.from('shoppers').select(FULL).in('user_id', ids);
   if (r.error) r = await supabaseAdmin.from('shoppers').select(BASE).in('user_id', ids);
   return r.data || [];
@@ -224,8 +246,8 @@ async function fetchShopperDemographics(userIds) {
 
 // Platform-wide demographic fetch (all shoppers), same resilience.
 async function fetchAllShopperDemographics() {
-  const FULL = 'date_of_birth, gender, style_preferences, category_prefs, shopping_occasions, price_tier';
-  const BASE = 'date_of_birth, gender, style_preferences, category_prefs, price_tier';
+  const FULL = 'date_of_birth, gender, style_preferences, category_prefs, shopping_occasions, price_tier, size_tops, size_bottoms, size_shoes, size_dresses, body_measurements';
+  const BASE = 'date_of_birth, gender, style_preferences, category_prefs, price_tier, size_tops, size_bottoms, size_shoes, size_dresses, body_measurements';
   let r = await supabaseAdmin.from('shoppers').select(FULL);
   if (r.error) r = await supabaseAdmin.from('shoppers').select(BASE);
   return r.data || [];
@@ -1178,6 +1200,16 @@ function fallbackReport(d) {
   for (const r of d.stock_out_risk.slice(0, 3)) {
     recommendations.push(`Restock ${r.product} in size ${r.size} — only ${r.units_left} left and that size sells.`);
   }
+  // Buy depth to the audience's STATED sizes/measurements (complements sales-by-size).
+  if (d.audience && d.audience.measurements && d.audience.measurements.count > 0) {
+    const sz = d.audience.sizes || {};
+    const lbl = (a) => (a && a[0] ? a[0].label : null);
+    const bits = [lbl(sz.tops) && `top ${lbl(sz.tops)}`, lbl(sz.bottoms) && `bottom ${lbl(sz.bottoms)}`, lbl(sz.shoes) && `shoe ${lbl(sz.shoes)}`].filter(Boolean).join(' / ');
+    const m = d.audience.measurements;
+    if (bits) {
+      recommendations.push(`Grade size runs to your audience — they skew ${bits}${m.avg_waist ? ` (avg waist ~${m.avg_waist}")` : ''} (${m.count} profiled shoppers). Buy depth there, not evenly across the curve.`);
+    }
+  }
   if (d.low_keep_rate_products && d.low_keep_rate_products.length) {
     const p = d.low_keep_rate_products[0];
     recommendations.push(`Fix the listing/sizing on ${p.product} — only ${p.keep_rate_pct}% of try-ons keep it${p.top_reason ? ` ("${p.top_reason.replace('_', ' ')}")` : ''}.`);
@@ -1244,7 +1276,7 @@ async function getBoutiqueReport(boutiqueId, { refresh = false } = {}) {
       BENCHMARKS + '\n\n' +
       'Use the season_context field to make timing advice city-correct and current (e.g. what to buy deeper or clear right now for their market) — never give generic seasonal advice.\n\n' +
       'End with a prioritized, numbered action list: the specific marketing / merchandising / operations moves that will most improve their sales, each tied to the exact number that motivates it ("Restock the Wide Leg Trouser in M — 2 left, your #1 size"; "Bundle the Linen Set + Straw Tote — bought together 6×"; "Email past buyers ~day 28, your repeat cadence"; "Mark down the 5 items under 40% sell-through to free trapped cash"). Cite exact numbers; NEVER invent data; every claim must trace to a value in the data. The owner should finish reading and know exactly what to do Monday morning.',
-    prompt: `This boutique's full shopper + boutique dataset. Analyze it holistically — find the patterns across blocks, compare metrics to the benchmarks, and use season_context for timing. The "audience" block is WHO actually buys here (age, gender, style vibes, occasions, budget) — use it to tailor buying/merchandising advice to this boutique's real customer base; if audience is null or low coverage, say the demographic signal is still thin:\n${JSON.stringify(data, null, 1)}\n\nWrite the intelligence report.`,
+    prompt: `This boutique's full shopper + boutique dataset. Analyze it holistically — find the patterns across blocks, compare metrics to the benchmarks, and use season_context for timing. The "audience" block is WHO actually buys here (age, gender, style vibes, occasions, budget, plus stated SIZES and average body MEASUREMENTS) — use it to tailor buying/merchandising advice to this boutique's real customer base, and specifically use audience.sizes + audience.measurements to recommend how deep to buy each size and how to grade fit (e.g. "your shoppers skew size S top / 27 waist — buy depth there"); if audience is null or low coverage, say the demographic signal is still thin:\n${JSON.stringify(data, null, 1)}\n\nWrite the intelligence report.`,
     schema: REPORT_SCHEMA,
   });
 
