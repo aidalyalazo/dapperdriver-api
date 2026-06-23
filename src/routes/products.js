@@ -37,7 +37,7 @@ router.get(
       .from('products')
       .select(
         `id, name, price, compare_price, images, category, colors, sizes, stock, status, source, boutique_id, description, tags, total_sold, material_composition, created_at,
-         boutiques(id, name, logo_url, logo_initials, city_id)`,
+         boutiques(id, name, logo_url, logo_initials, city_id, style_tags)`,
         { count: 'exact' }
       )
       .eq('status', 'active')
@@ -126,7 +126,7 @@ router.get(
     const { data, error } = await supabaseAdmin
       .from('products')
       .select(
-        `*, boutiques(id, name, logo_url, logo_initials, city_id)`
+        `*, boutiques(id, name, logo_url, logo_initials, city_id, style_tags)`
       )
       .eq('id', req.params.id)
       .single();
