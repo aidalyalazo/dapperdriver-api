@@ -607,11 +607,29 @@ async function createOrder({
     const { data: stockResult, error: stockErr } = await supabaseAdmin.rpc(
       'fn_apply_order_stock', { p_items: stockItems }
     );
+    // DIAGNOSTIC (2026-06-23): live orders were observed NOT decrementing stock
+    // despite this path running and the RPC working in isolation. Log the exact
+    // payload + result/error so the next order reveals the cause. Remove once fixed.
+    console.log('[ORDER][stock-diag]', JSON.stringify({
+      order_id: orderId,
+      stockItems,
+      stockResult: stockResult || null,
+      stockErr: stockErr ? { message: stockErr.message, code: stockErr.code, details: stockErr.details, hint: stockErr.hint } : null,
+    }));
     if (stockErr) {
-      // Fail OPEN: if the RPC itself errors (e.g. migration 020 not yet run on
-      // this environment), don't break checkout — log and proceed without the
-      // atomic decrement (same as pre-fix behavior). Sold-out is handled below.
-      console.error('[ORDER] fn_apply_order_stock unavailable — skipping atomic decrement:', stockErr.message);
+      // Fail OPEN: if the RPC itself errors, don't break checkout — BUT this means
+      // a paid order completed WITHOUT decrementing inventory. Alert admins loudly
+      // instead of swallowing it silently (the silent skip is how this hid).
+      console.error('[ORDER] fn_apply_order_stock FAILED — order proceeding WITHOUT stock decrement:', stockErr.message, '| code:', stockErr.code, '| details:', stockErr.details);
+      try {
+        const { notifyAdmins } = require('../utils/adminAlerts');
+        await notifyAdmins({
+          type: 'inventory_decrement_failed',
+          title: '⚠️ Inventory not decremented',
+          body: `Order ${orderId} was placed but fn_apply_order_stock errored — stock was NOT decremented. Inventory counts may be stale.`,
+          data: { order_id: orderId, error: stockErr.message, code: stockErr.code, stockItems },
+        });
+      } catch (_) { /* never block checkout on alerting */ }
     } else if (stockResult && stockResult.success === false) {
       await supabaseAdmin.from('orders').update({ status: 'cancelled', cancelled_at: new Date().toISOString() }).eq('id', orderId);
       const unavailableIds = (stockResult.failures || []).map((f) => f.product_id);
