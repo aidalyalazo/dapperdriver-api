@@ -740,6 +740,205 @@ router.get(
   })
 );
 
+// ─────────────────────────────────────────────────────────────────────────────
+// SUPPORT / DISPUTES
+//
+// Admin-side ticket triage. All writes go through here (service role) — the
+// panel reading support_tickets directly with the anon key can SELECT but RLS
+// blocks UPDATE, which is why the "Mark …" buttons silently did nothing. The DB
+// status vocabulary is open|in_progress|resolved|closed (the panel used the
+// non-existent 'in_review' — normalized here so it can keep that label).
+// ─────────────────────────────────────────────────────────────────────────────
+
+const TICKET_STATUSES = ['open', 'in_progress', 'resolved', 'closed'];
+const normalizeTicketStatus = (s) => (s === 'in_review' ? 'in_progress' : s);
+
+/** Resolve {name, phone, email} for a set of (user_id, role) pairs in one pass. */
+async function getContactMap(tickets) {
+  const need = { shopper: false, driver: false, boutique: false };
+  for (const t of tickets) if (t.user_role in need) need[t.user_role] = true;
+
+  const [shoppers, drivers, boutiques] = await Promise.all([
+    need.shopper
+      ? Promise.resolve(supabaseAdmin.from('shoppers').select('user_id, display_name, full_name, phone, email')).catch(() => ({ data: [] }))
+      : Promise.resolve({ data: [] }),
+    need.driver
+      ? Promise.resolve(supabaseAdmin.from('drivers').select('user_id, full_name, phone, email')).catch(() => ({ data: [] }))
+      : Promise.resolve({ data: [] }),
+    need.boutique
+      ? Promise.resolve(supabaseAdmin.from('boutiques').select('user_id, name, owner_name, phone, email')).catch(() => ({ data: [] }))
+      : Promise.resolve({ data: [] }),
+  ]);
+
+  const map = {};
+  for (const s of shoppers.data || []) map[s.user_id] = { name: s.display_name || s.full_name || null, phone: s.phone || null, email: s.email || null };
+  for (const d of drivers.data || []) map[d.user_id] = { name: d.full_name || null, phone: d.phone || null, email: d.email || null };
+  for (const b of boutiques.data || []) map[b.user_id] = { name: b.name || b.owner_name || null, phone: b.phone || null, email: b.email || null };
+  return map;
+}
+
+/**
+ * GET /api/v1/admin/support/tickets
+ * Ticket list enriched with the reporter's contact info (name/phone/email).
+ * Query: status, limit (≤200).
+ */
+router.get(
+  '/support/tickets',
+  asyncHandler(async (req, res) => {
+    const limit = Math.min(parseInt(req.query.limit, 10) || 100, 200);
+    let q = supabaseAdmin
+      .from('support_tickets')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    if (req.query.status) q = q.eq('status', normalizeTicketStatus(req.query.status));
+
+    const { data: tickets, error } = await q;
+    if (error) throw new Error(error.message);
+
+    const contacts = await getContactMap(tickets || []);
+    res.json({
+      tickets: (tickets || []).map((t) => {
+        const c = contacts[t.user_id] || {};
+        return {
+          ...t,
+          contact_name: c.name || null,
+          contact_phone: c.phone || null,
+          // user_email is captured on the ticket; fall back to the profile email.
+          contact_email: t.user_email || c.email || null,
+        };
+      }),
+    });
+  })
+);
+
+/**
+ * PATCH /api/v1/admin/support/tickets/:id
+ * Update ticket status (and optionally priority / admin_notes).
+ */
+router.patch(
+  '/support/tickets/:id',
+  [
+    param('id').isUUID(),
+    body('status').optional().customSanitizer(normalizeTicketStatus).isIn(TICKET_STATUSES),
+    body('priority').optional().isIn(['low', 'medium', 'high']),
+    body('admin_notes').optional().isString(),
+  ],
+  validate,
+  asyncHandler(async (req, res) => {
+    const patch = {};
+    if (req.body.status) patch.status = normalizeTicketStatus(req.body.status);
+    if (req.body.priority) patch.priority = req.body.priority;
+    if (typeof req.body.admin_notes === 'string') patch.admin_notes = req.body.admin_notes;
+    if (Object.keys(patch).length === 0) throw Object.assign(new Error('Nothing to update.'), { status: 400 });
+
+    const { data, error } = await supabaseAdmin
+      .from('support_tickets')
+      .update(patch)
+      .eq('id', req.params.id)
+      .select()
+      .single();
+    if (error) throw new Error(error.message);
+    res.json(data);
+  })
+);
+
+/**
+ * POST /api/v1/admin/support/tickets/:id/message
+ * Reply to the reporter via the in-app inbox and/or email.
+ *   channel: 'app' | 'email' | 'both'
+ * In-app delivery is immediate (notifications row + push on next poll). Email is
+ * sent server-side via Resend when RESEND_API_KEY is set; otherwise the endpoint
+ * returns a prefilled mailto: link for the admin's own mail client (zero-infra
+ * fallback). Sending a reply auto-advances an 'open' ticket to 'in_progress' and
+ * is appended to admin_notes as an audit trail.
+ */
+router.post(
+  '/support/tickets/:id/message',
+  [
+    param('id').isUUID(),
+    body('subject').trim().isLength({ min: 1, max: 200 }),
+    body('body').trim().isLength({ min: 1, max: 5000 }),
+    body('channel').optional().isIn(['app', 'email', 'both']),
+  ],
+  validate,
+  asyncHandler(async (req, res) => {
+    const channel = req.body.channel || 'both';
+    const { subject, body: messageBody } = req.body;
+
+    const { data: ticket, error: tErr } = await supabaseAdmin
+      .from('support_tickets')
+      .select('*')
+      .eq('id', req.params.id)
+      .single();
+    if (tErr || !ticket) throw Object.assign(new Error('Ticket not found.'), { status: 404 });
+
+    const toEmail = ticket.user_email;
+    const result = { app_sent: false, email_sent: false, needs_mailto: false, mailto: null };
+
+    // In-app inbox + push
+    if (channel === 'app' || channel === 'both') {
+      const { error: nErr } = await Promise.resolve(supabaseAdmin
+        .from('notifications')
+        .insert({
+          user_id: ticket.user_id,
+          type: 'support_reply',
+          title: subject,
+          body: messageBody,
+          data: { ticket_id: ticket.id, ticket_number: ticket.ticket_number },
+          is_read: false,
+          sent_push: false,
+        })).catch((e) => ({ error: e }));
+      result.app_sent = !nErr;
+    }
+
+    // Email — Resend if configured, else hand back a mailto for the admin.
+    if (channel === 'email' || channel === 'both') {
+      const apiKey = process.env.RESEND_API_KEY;
+      const from = process.env.SUPPORT_FROM_EMAIL || 'DapperDriver Support <support@dapperdriver.com>';
+      if (apiKey && toEmail) {
+        try {
+          const r = await fetch('https://api.resend.com/emails', {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              from,
+              to: [toEmail],
+              subject,
+              text: messageBody,
+              reply_to: process.env.SUPPORT_REPLY_TO || undefined,
+            }),
+          });
+          result.email_sent = r.ok;
+          if (!r.ok) {
+            const detail = await r.text().catch(() => '');
+            console.error('[support] Resend failed:', r.status, detail.slice(0, 300));
+          }
+        } catch (e) {
+          console.error('[support] Resend error:', e.message);
+        }
+      }
+      // No provider (or send failed) → fall back to a mailto the panel can open.
+      if (!result.email_sent && toEmail) {
+        result.needs_mailto = true;
+        result.mailto = `mailto:${toEmail}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(messageBody)}`;
+      }
+    }
+
+    // Audit + reply record; auto-advance open → in_progress.
+    const stamp = new Date().toISOString();
+    const logLine = `[${stamp}] reply via ${channel} — ${subject}`;
+    const patch = {
+      admin_reply: messageBody,
+      admin_notes: ticket.admin_notes ? `${ticket.admin_notes}\n${logLine}` : logLine,
+    };
+    if (ticket.status === 'open') patch.status = 'in_progress';
+    await Promise.resolve(supabaseAdmin.from('support_tickets').update(patch).eq('id', ticket.id)).catch(() => {});
+
+    res.json({ ...result, status: patch.status || ticket.status });
+  })
+);
+
 /**
  * PATCH /api/v1/admin/orders/:id/status
  */
