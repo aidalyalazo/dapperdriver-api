@@ -848,10 +848,28 @@ router.delete(
   requireRole('shopper'),
   asyncHandler(async (req, res) => {
     const { stripe } = require('../config/stripe');
-    const { pm } = await getOwnedPaymentMethod(req.userId, req.params.id);
+    const { customerId, pm } = await getOwnedPaymentMethod(req.userId, req.params.id);
     if (!pm) return res.status(404).json({ error: 'Payment method not found' });
 
     await stripe.paymentMethods.detach(pm.id);
+
+    // Detaching the default clears invoice_settings.default_payment_method. If other
+    // cards remain, promote one so off-session charges (post-delivery tips, reorders)
+    // keep working without the shopper having to re-pick a default.
+    try {
+      const cust = await stripe.customers.retrieve(customerId);
+      if (!cust.invoice_settings?.default_payment_method) {
+        const remaining = await stripe.paymentMethods.list({ customer: customerId, type: 'card' });
+        if ((remaining.data || []).length > 0) {
+          await stripe.customers.update(customerId, {
+            invoice_settings: { default_payment_method: remaining.data[0].id },
+          });
+        }
+      }
+    } catch (e) {
+      console.warn('[PAYMENT] post-delete default promotion failed:', e.message);
+    }
+
     res.json({ deleted: true });
   })
 );
