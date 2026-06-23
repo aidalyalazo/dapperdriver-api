@@ -266,7 +266,9 @@ router.get(
     const active    = rows.filter((o) => ACTIVE.includes(o.status) && (o.status !== 'pending' || isPaid(o)));
     const received  = rows.filter((o) => RECEIVED.includes(o.status) && (o.status !== 'pending' || isPaid(o)));
     const netCompleted = completed.reduce(
-      (s, o) => s + parseFloat(o.boutique_earnings ?? (parseFloat(o.total_amount || 0) * 0.75)), 0);
+      // boutique_earnings is always written at order time; the fallback is dormant —
+      // use 0.80 to match the 20% platform-commission default, not the legacy 25%.
+      (s, o) => s + parseFloat(o.boutique_earnings ?? (parseFloat(o.total_amount || 0) * 0.80)), 0);
 
     res.json({
       // New, correctly-bucketed fields

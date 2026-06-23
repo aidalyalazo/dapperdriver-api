@@ -1685,13 +1685,17 @@ router.get(
       tryOnItemsRes, ordersRes, orderItemsRes, searchRes,
       interactionsRes, shoppersRes, productsRes, citiesRes,
     ] = await Promise.all([
+      // Explicit high caps so PostgREST's default 1000-row limit can't silently
+      // truncate these aggregates (keep_rate, units-by-size, size_coverage_pct …).
       supabaseAdmin.from('try_on_session_items')
-        .select('status, selected_size, return_reason, return_fit_detail, product_id'),
+        .select('status, selected_size, return_reason, return_fit_detail, product_id')
+        .limit(100000),
       supabaseAdmin.from('orders')
         .select('id, status, total_amount, city_id, created_at')
         .gte('created_at', since),
       supabaseAdmin.from('order_items')
-        .select('order_id, product_id, name, quantity, unit_price, selected_size'),
+        .select('order_id, product_id, name, quantity, unit_price, selected_size')
+        .limit(100000),
       supabaseAdmin.from('search_logs')
         .select('query, result_count, created_at')
         .gte('created_at', since),
@@ -1699,9 +1703,11 @@ router.get(
         .select('action, duration_seconds, product_id, created_at')
         .gte('created_at', since),
       supabaseAdmin.from('shoppers')
-        .select('id, body_measurements, style_preferences, date_of_birth, gender, price_tier, size_tops, size_bottoms, size_shoes, size_dresses'),
+        .select('id, body_measurements, style_preferences, date_of_birth, gender, price_tier, size_tops, size_bottoms, size_shoes, size_dresses')
+        .limit(100000),
       supabaseAdmin.from('products')
-        .select('id, name, variant_stock, sizes'),
+        .select('id, name, variant_stock, sizes')
+        .limit(100000),
       supabaseAdmin.from('cities').select('id, name'),
     ]);
 

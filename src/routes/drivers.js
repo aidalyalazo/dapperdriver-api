@@ -283,6 +283,10 @@ router.get(
     // Flatten boutique info into each delivery
     const deliveries = (data || []).map(d => ({
       ...d,
+      // Privacy: once an order is delivered/completed the driver must no longer
+      // retain the customer's home address (matches orderController.js + the
+      // hosted privacy policy). Active deliveries still need it for navigation.
+      delivery_address: ['delivered', 'completed'].includes(d.status) ? null : d.delivery_address,
       boutique_name: d.boutiques?.name || 'Store',
       boutique_logo: d.boutiques?.logo_url || null,
       boutique_address: d.boutiques?.address || null,

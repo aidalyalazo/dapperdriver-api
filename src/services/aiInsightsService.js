@@ -546,7 +546,10 @@ async function gatherBoutiqueData(boutiqueId) {
         .select('id, status, total_amount, fulfillment_type, created_at, shopper_id')
         .eq('boutique_id', boutiqueId).gte('created_at', since90),
       supabaseAdmin.from('order_items')
-        .select('order_id, product_id, name, quantity, unit_price, selected_size'),
+        // Filtered to this boutique's done orders in JS below; explicit high cap so
+        // PostgREST's default 1000-row limit can't silently truncate the size/sales curve.
+        .select('order_id, product_id, name, quantity, unit_price, selected_size')
+        .limit(100000),
       supabaseAdmin.from('products')
         .select('id, name, price, status, category, variant_stock, created_at', { count: 'exact' })
         .eq('boutique_id', boutiqueId),
