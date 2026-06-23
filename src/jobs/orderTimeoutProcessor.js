@@ -2,6 +2,7 @@ const cron = require('node-cron');
 const { supabaseAdmin } = require('../config/supabase');
 const { stripe } = require('../config/stripe');
 const { sendOrderNotification } = require('../services/fcmService');
+const { getPlatformSettingJson } = require('../utils/platformSettings');
 
 /**
  * DapperDriver — Order Timeout Refund Processor
@@ -43,6 +44,17 @@ async function processTimedOutRefunds() {
 
     console.log(`[TIMEOUT PROCESSOR] Processing ${orders.length} refund(s)...`);
 
+    // These orders were cancelled directly in the DB by the no-driver sweep or the
+    // boutique-accept pg_cron — both bypass the API's updateOrderStatus, so stock
+    // decremented at creation was never returned. Restore it here (once, after the
+    // refund is recorded). Only when holds are OFF (then stock was decremented at
+    // creation, matching fn_restore_order_stock); holds-on uses a different model.
+    let restoreStock = true;
+    try {
+      const holds = await getPlatformSettingJson('orders_holds_enabled', { enabled: false });
+      restoreStock = holds.enabled !== true;
+    } catch (_) { /* fail open — default to restoring */ }
+
     for (const order of orders) {
       try {
         // Issue Stripe refund
@@ -52,10 +64,17 @@ async function processTimedOutRefunds() {
         });
 
         // Mark refunded in DB
-        await supabaseAdmin
+        const { error: updErr } = await supabaseAdmin
           .from('orders')
           .update({ payment_status: 'refunded', refunded_at: new Date().toISOString() })
           .eq('id', order.id);
+
+        // Return inventory once the order is safely marked refunded (so a retry
+        // can't double-restore — a still-refund_pending row would be re-processed).
+        if (!updErr && restoreStock) {
+          await supabaseAdmin.rpc('fn_restore_order_stock', { p_order_id: order.id })
+            .then(() => {}, (e) => console.warn(`[TIMEOUT PROCESSOR] stock restore failed for ${order.id}:`, e?.message));
+        }
 
         // FCM push to shopper (disabled — push_token not yet implemented)
         const token = null;

@@ -9,18 +9,21 @@ const { notifyAdmins } = require('../utils/adminAlerts');
  * and after max retries the order used to sit in ready_for_pickup forever
  * with nobody told. This job turns that timer into state:
  *
- *  1. ready_for_pickup + no driver for > STALL_MINUTES  → restart the driver
- *     search (max RESTART_LIMIT times) and alert admins on first restart.
- *  2. ready_for_pickup + no driver for > HARD_TIMEOUT_MINUTES → cancel the
- *     order, queue the refund (payment_status=refund_pending is picked up by
- *     orderTimeoutProcessor), notify shopper + admins.
+ *  1. ready_for_pickup + no driver for > STALL_MINUTES  → re-broadcast the driver
+ *     search (repeats every ~STALL_MINUTES) and alert admins on the first restart.
+ *  2. ready_for_pickup + no driver past the speed-based hard timeout
+ *     (express 60 min, standard 2.5 h) → cancel the order, queue the refund
+ *     (payment_status=refund_pending → orderTimeoutProcessor refunds + restores
+ *     stock), notify shopper + admins.
  *
  * Restart attempts are tracked in order_timeline (status=driver_search_restarted)
  * so the sweep is deploy-safe and never spams.
  */
-const STALL_MINUTES = 12;
-const HARD_TIMEOUT_MINUTES = 60;
-const RESTART_LIMIT = 3;
+const STALL_MINUTES = 12; // start re-broadcasting the driver search after this long with no driver
+// No-driver HARD timeout → cancel + refund. Standard gets a wide window so a driver
+// can batch the pickup with other orders; express stays tight to keep its promise.
+const STANDARD_TIMEOUT_MINUTES = 150; // 2.5 hours
+const EXPRESS_TIMEOUT_MINUTES  = 60;
 
 async function sweepStalledOrders() {
   try {
@@ -28,7 +31,7 @@ async function sweepStalledOrders() {
 
     const { data: stalled, error } = await supabaseAdmin
       .from('orders')
-      .select('id, created_at, boutique_id, shopper_id, city_id, fulfillment_type')
+      .select('id, created_at, boutique_id, shopper_id, city_id, fulfillment_type, delivery_speed')
       .eq('status', 'ready_for_pickup')
       .eq('fulfillment_type', 'delivery')
       .is('driver_id', null)
@@ -58,11 +61,15 @@ async function sweepStalledOrders() {
         Date.now() - new Date(lastRestartAt).getTime() < 11 * 60 * 1000;
 
       // ── Hard timeout: cancel + refund ────────────────────────────────────
-      if (ageMinutes >= HARD_TIMEOUT_MINUTES || restartCount >= RESTART_LIMIT) {
+      // Express cancels fast (60 min); standard gets 2.5 h so a driver can batch
+      // the pickup. Refund + inventory restore happen in orderTimeoutProcessor.
+      const isExpress = order.delivery_speed === 'express';
+      const hardTimeout = isExpress ? EXPRESS_TIMEOUT_MINUTES : STANDARD_TIMEOUT_MINUTES;
+      if (ageMinutes >= hardTimeout) {
         // Atomic status gate — only one sweep run wins
         const { data: cancelled } = await supabaseAdmin
           .from('orders')
-          .update({ status: 'cancelled', payment_status: 'refund_pending' })
+          .update({ status: 'cancelled', payment_status: 'refund_pending', cancelled_at: new Date().toISOString(), decline_reason: 'no_driver' })
           .eq('id', order.id)
           .eq('status', 'ready_for_pickup')
           .select('id')
@@ -72,7 +79,7 @@ async function sweepStalledOrders() {
         await Promise.resolve(supabaseAdmin.from('order_timeline').insert({
           order_id: order.id,
           status: 'cancelled',
-          notes: `Auto-cancelled: no driver found after ${Math.round(ageMinutes)} min (${restartCount} search restarts). Refund queued.`,
+          notes: `Auto-cancelled: no driver found after ${Math.round(ageMinutes)} min (${isExpress ? 'express' : 'standard'}, ${restartCount} search restarts). Refund queued.`,
         })).catch(() => {});
 
         await Promise.resolve(supabaseAdmin.from('notifications').insert({
@@ -100,7 +107,7 @@ async function sweepStalledOrders() {
       await Promise.resolve(supabaseAdmin.from('order_timeline').insert({
         order_id: order.id,
         status: 'driver_search_restarted',
-        notes: `Driver search restarted by sweep (attempt ${restartCount + 1}/${RESTART_LIMIT}).`,
+        notes: `Driver search re-broadcast by sweep (attempt ${restartCount + 1}).`,
       })).catch(() => {});
 
       if (restartCount === 0) {
