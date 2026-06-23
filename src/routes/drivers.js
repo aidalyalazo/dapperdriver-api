@@ -171,26 +171,45 @@ router.get(
     // so a fallback query silently returns $0 instead of surfacing the problem.
     if (!driverId) return res.status(404).json({ error: 'Driver profile not found' });
 
-    const [payoutsRes, unpaidRes, deliveredCountRes, driverRes] = await Promise.all([
+    // Period scope for the activity stats (Today / Week / Month / All Time).
+    const period = String(req.query.period || 'all').toLowerCase();
+    const now = new Date();
+    let since = null;
+    if (period === 'today') { const d = new Date(now); d.setUTCHours(0, 0, 0, 0); since = d.toISOString(); }
+    else if (period === 'week')  { since = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString(); }
+    else if (period === 'month') { since = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString(); }
+
+    // Captured (paid) deliveries in the period — the basis for delivery count, tips
+    // earned, and gross earned. Filtering to payment_status='paid' keeps the count in
+    // step with the money (a delivered-but-never-captured order earned the driver $0).
+    let periodQ = supabaseAdmin
+      .from('orders')
+      .select('driver_earnings, tip')
+      .eq('driver_id', driverId)
+      .in('status', ['delivered', 'completed'])
+      .eq('payment_status', 'paid');
+    if (since) periodQ = periodQ.gte('created_at', since);
+
+    const [payoutsRes, unpaidRes, periodRes, driverRes] = await Promise.all([
       supabaseAdmin
         .from('payouts')
         .select('amount, paid_at, stripe_transfer_id')
-        .eq('recipient_id', driverId)
+        // payouts.recipient_id is the AUTH USER id, but orders/driver use drivers.id.
+        // Match on driver_id (the table-row id stamped on the payout) or total_paid
+        // is always $0 even after a real cash-out.
+        .eq('driver_id', driverId)
         .eq('recipient_type', 'driver')
         .order('paid_at', { ascending: false })
         .limit(52),
+      // CURRENT withdrawable (NOT period-scoped) — drives the Pending Payout card + cash out.
       supabaseAdmin
         .from('orders')
         .select('driver_earnings, tip')
         .eq('driver_id', driverId)
         .in('status', ['delivered', 'completed'])
-        .eq('payment_status', 'paid')   // only captured money is a real pending payout
-        .eq('driver_paid', false),       // cashed-out orders must drop off the balance
-      supabaseAdmin
-        .from('orders')
-        .select('id', { count: 'exact', head: true })
-        .eq('driver_id', driverId)
-        .in('status', ['delivered', 'completed']),
+        .eq('payment_status', 'paid')
+        .eq('driver_paid', false),
+      periodQ,
       supabaseAdmin
         .from('drivers')
         .select('rating, review_count')
@@ -202,18 +221,20 @@ router.get(
 
     const payouts = payoutsRes.data || [];
     const unpaidOrders = unpaidRes.data || [];
+    const periodOrders = periodRes.data || [];
 
-    const totalPaid = payouts.reduce((s, p) => s + parseFloat(p.amount || 0), 0);
-
+    // Pending payout = current withdrawable (always "now", not period-scoped).
     const pendingAmount = unpaidOrders.reduce(
-      (s, o) => s + parseFloat(o.driver_earnings || 0) + parseFloat(o.tip || 0),
-      0
-    );
-
-    const totalTips = unpaidOrders.reduce(
-      (s, o) => s + parseFloat(o.tip || 0),
-      0
-    );
+      (s, o) => s + parseFloat(o.driver_earnings || 0) + parseFloat(o.tip || 0), 0);
+    // Period activity — deliveries, tips earned, and gross earned (paid orders only).
+    const totalDeliveries = periodOrders.length;
+    const totalTips = periodOrders.reduce((s, o) => s + parseFloat(o.tip || 0), 0);
+    const earned = periodOrders.reduce(
+      (s, o) => s + parseFloat(o.driver_earnings || 0) + parseFloat(o.tip || 0), 0);
+    // Paid out within the period (lifetime for 'all').
+    const totalPaid = payouts
+      .filter((p) => !since || (p.paid_at && p.paid_at >= since))
+      .reduce((s, p) => s + parseFloat(p.amount || 0), 0);
 
     const driver = driverRes.data || {};
 
@@ -221,7 +242,8 @@ router.get(
       total_paid:       totalPaid.toFixed(2),
       pending_payout:   pendingAmount.toFixed(2),
       total_tips:       totalTips.toFixed(2),
-      total_deliveries: deliveredCountRes.count || 0,
+      total_deliveries: totalDeliveries,
+      earned:           earned.toFixed(2),
       avg_rating:       parseFloat(driver.rating || 0),
       review_count:     parseInt(driver.review_count || 0, 10),
       payout_history:   payouts,
