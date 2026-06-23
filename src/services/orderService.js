@@ -607,15 +607,6 @@ async function createOrder({
     const { data: stockResult, error: stockErr } = await supabaseAdmin.rpc(
       'fn_apply_order_stock', { p_items: stockItems }
     );
-    // DIAGNOSTIC (2026-06-23): live orders were observed NOT decrementing stock
-    // despite this path running and the RPC working in isolation. Log the exact
-    // payload + result/error so the next order reveals the cause. Remove once fixed.
-    console.log('[ORDER][stock-diag]', JSON.stringify({
-      order_id: orderId,
-      stockItems,
-      stockResult: stockResult || null,
-      stockErr: stockErr ? { message: stockErr.message, code: stockErr.code, details: stockErr.details, hint: stockErr.hint } : null,
-    }));
     if (stockErr) {
       // Fail OPEN: if the RPC itself errors, don't break checkout — BUT this means
       // a paid order completed WITHOUT decrementing inventory. Alert admins loudly
