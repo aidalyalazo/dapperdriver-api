@@ -240,11 +240,23 @@ router.get(
                       'driver_assigned', 'picked_up', 'out_for_delivery'];
     const RECEIVED = ['pending', 'confirmed', 'preparing'];
 
-    const { data: allOrders } = await supabaseAdmin
+    // Period scope for the KPI tiles (Today / Week / Month / All Time). Filters by
+    // order created_at — for same-day delivery this ≈ when the earning was realized.
+    // 'all' (or anything else) = no date filter.
+    const period = String(req.query.period || 'all').toLowerCase();
+    const now = new Date();
+    let since = null;
+    if (period === 'today') { const d = new Date(now); d.setUTCHours(0, 0, 0, 0); since = d.toISOString(); }
+    else if (period === 'week')  { since = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString(); }
+    else if (period === 'month') { since = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString(); }
+
+    let ordersQuery = supabaseAdmin
       .from('orders')
       .select('status, payment_status, total_amount, boutique_earnings')
       .eq('boutique_id', boutiqueId)
       .neq('status', 'cancelled');
+    if (since) ordersQuery = ordersQuery.gte('created_at', since);
+    const { data: allOrders } = await ordersQuery;
 
     const rows = allOrders || [];
     const sum = (list, field) => list.reduce((s, o) => s + parseFloat(o[field] || 0), 0);
