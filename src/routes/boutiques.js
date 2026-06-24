@@ -41,6 +41,7 @@ router.get(
       .range((page - 1) * limit, page * limit - 1);
 
     if (status)          q = q.eq('status', status);
+    else                 q = q.eq('status', 'active'); // public browse: only active boutiques (hide suspended/pending/inactive)
     if (try_on_enabled)  q = q.eq('try_on_enabled', try_on_enabled === 'true');
     // Search boutique name, description, primary category, and category/style tag arrays.
     // category_tags.cs.{X} = "array contains X" (exact match, case-sensitive).
