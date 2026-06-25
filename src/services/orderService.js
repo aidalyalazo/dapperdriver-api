@@ -284,7 +284,7 @@ async function createOrder({
 
     // Boutique-specific commission rate
     supabaseAdmin.from('boutiques')
-      .select('commission_rate, state, name, address')
+      .select('commission_rate, state, name, address, city_id')
       .eq('id', boutiqueId)
       .single()
       .then((r) => r.data)
@@ -383,16 +383,29 @@ async function createOrder({
 
   const trustedProductsMap = Object.fromEntries((productsData || []).map((p) => [p.id, p]));
 
-  // Tax rate: prefer city-specific, fall back to platform default
+  // Tax rate: prefer city-specific, fall back to platform default.
+  //  • Delivery → destination city (resolved from the delivery address above).
+  //  • Pickup   → origin city (the boutique's own city). Pickup has no delivery
+  //    address, so without this it would fall through to the platform default
+  //    rate and over/under-tax the order vs the boutique's actual city.
+  let taxCity = cityData;
+  if (isPickup && boutiqueData?.city_id) {
+    try {
+      const { data: bCity } = await supabaseAdmin
+        .from('cities').select('id, tax_rate').eq('id', boutiqueData.city_id).single();
+      if (bCity) taxCity = bCity;
+    } catch (_) { /* fall through to the platform default below */ }
+  }
+
   let taxRate;
-  if (cityData?.tax_rate != null) {
-    taxRate = parseFloat(cityData.tax_rate);
+  if (taxCity?.tax_rate != null) {
+    taxRate = parseFloat(taxCity.tax_rate);
   } else {
     const taxSetting = await getPlatformSettingJson('tax_rate', { default: 0.0875 });
     taxRate = parseFloat(taxSetting.default || 0.0875);
   }
 
-  const cityId = cityData?.id || null;
+  const cityId = taxCity?.id || null;
 
   // Delivery fee = base (driver keeps 100% via delivery_fee_cut) + express
   // premium when express (platform keeps the premium minus any express driver
@@ -561,6 +574,9 @@ async function createOrder({
       promo_discount: promoDiscount,
       total_amount: totalAmount,
       dd_commission_amount: ddCommissionAmount,
+      // Record the rate ACTUALLY applied (pickup uses the pickup rate, not the
+      // boutique's delivery rate) so the stored rate matches the amount.
+      dd_commission_rate: Math.round(commissionRate * 10000) / 100,
       boutique_earnings: boutiqueEarnings,
       driver_earnings: driverEarnings,
       city_id: cityId,
@@ -894,6 +910,27 @@ async function updateOrderStatus({ orderId, newStatus, actorId, driverId }) {
     } catch (e) {
       console.warn('[ORDER] Payment capture on delivery/completion failed:', e.message);
     }
+
+    // Refresh the shopper's denormalized lifetime stats (best-effort; never blocks
+    // completion). Recomputed from their delivered/completed orders so it stays
+    // idempotent even if completion is somehow re-run. shoppers is keyed on
+    // user_id, which equals orders.shopper_id.
+    supabaseAdmin
+      .from('orders')
+      .select('total_amount, completed_at, delivered_at, created_at')
+      .eq('shopper_id', order.shopper_id)
+      .in('status', ['delivered', 'completed'])
+      .then(({ data }) => {
+        const rows = data || [];
+        const totalOrders = rows.length;
+        const totalSpent = Math.round(rows.reduce((s, r) => s + (parseFloat(r.total_amount) || 0), 0) * 100) / 100;
+        const avg = totalOrders ? Math.round((totalSpent / totalOrders) * 100) / 100 : 0;
+        const lastAt = rows.map(r => r.completed_at || r.delivered_at || r.created_at).filter(Boolean).sort().pop() || null;
+        return supabaseAdmin.from('shoppers')
+          .update({ total_orders: totalOrders, total_spent: totalSpent, avg_order_value: avg, last_order_at: lastAt })
+          .eq('user_id', order.shopper_id);
+      })
+      .then(() => {}, (e) => console.warn('[ORDER] shopper stats refresh failed (non-fatal):', e?.message));
   }
 
   // If ready_for_pickup: NOTIFY drivers the order is available (manual accept).
