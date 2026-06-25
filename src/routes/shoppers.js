@@ -679,10 +679,14 @@ router.get(
   '/me/following',
   requireRole('shopper'),
   asyncHandler(async (req, res) => {
+    // !inner + status filter: only surface ACTIVE followed boutiques (a followed
+    // boutique that's since been suspended is hidden everywhere else, so hide it
+    // here too). campaign_images included so the Following cards match the browse.
     const { data, error } = await supabaseAdmin
       .from('boutique_follows')
-      .select('boutiques(id, name, slug, description, logo_url, logo_initials, logo_bg, rating, review_count, follower_count, primary_category, category_tags, style_tags, price_tier, status, city_id)')
+      .select('boutiques!inner(id, name, slug, description, logo_url, logo_initials, logo_bg, campaign_images, rating, review_count, follower_count, primary_category, category_tags, style_tags, price_tier, status, city_id)')
       .eq('shopper_id', req.userId)
+      .eq('boutiques.status', 'active')
       .order('created_at', { ascending: false });
 
     if (error) throw new Error(error.message);
