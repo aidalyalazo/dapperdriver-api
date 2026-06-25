@@ -36,7 +36,7 @@ router.get(
     let query = supabaseAdmin
       .from('products')
       .select(
-        `id, name, price, compare_price, images, category, colors, sizes, stock, status, source, boutique_id, description, tags, total_sold, material_composition, created_at,
+        `id, name, price, compare_price, images, category, colors, sizes, stock, size_inventory, status, source, boutique_id, description, tags, total_sold, material_composition, created_at,
          boutiques(id, name, logo_url, logo_initials, city_id, style_tags)`,
         { count: 'exact' }
       )
