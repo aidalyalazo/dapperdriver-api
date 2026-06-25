@@ -200,20 +200,34 @@ async function syncProducts(integrationId) {
 
         // Get inventory count if location is set
         let stockCount = 0;
+        const sizeInventory = {};
         if (location_id && variations.length > 0) {
           const catalogObjectIds = variations.map(v => v.id);
           const invResult = await squareApiPost('/inventory/counts/batch-retrieve', {
             catalog_object_ids: catalogObjectIds,
             location_ids: [location_id],
           }, access_token);
-          stockCount = (invResult.counts || [])
-            .reduce((s, c) => s + parseInt(c.quantity || 0), 0);
+          const countByVar = {};
+          for (const c of invResult.counts || []) {
+            countByVar[c.catalog_object_id] = (countByVar[c.catalog_object_id] || 0) + parseInt(c.quantity || 0);
+          }
+          // Per-size inventory keyed by variation (size) name — same { size: qty }
+          // shape as a manual product, so synced products track per-size stock
+          // (letter OR numeric sizes) identically. POS stays the source of truth.
+          for (const v of variations) {
+            const name = v.item_variation_data?.name;
+            if (name && name !== 'Regular' && name !== 'Default') {
+              sizeInventory[name] = (sizeInventory[name] || 0) + (countByVar[v.id] || 0);
+            }
+          }
+          stockCount = Object.values(countByVar).reduce((s, q) => s + q, 0);
         }
+        const sizeInv = Object.keys(sizeInventory).length ? sizeInventory : null;
 
         if (existing?.dapper_product_id) {
           await supabaseAdmin
             .from('products')
-            .update({ stock: stockCount, updated_at: new Date().toISOString() })
+            .update({ stock: stockCount, size_inventory: sizeInv, updated_at: new Date().toISOString() })
             .eq('id', existing.dapper_product_id);
           await supabaseAdmin
             .from('integration_product_map')
@@ -240,6 +254,7 @@ async function syncProducts(integrationId) {
                 category,
                 images,
                 sizes,
+                size_inventory: sizeInv,
               },
             });
             if (adopted) skipped++; else imported++;

@@ -170,6 +170,17 @@ async function syncProducts(integrationId) {
         const totalStock = sp.variants?.reduce((s, v) =>
           s + (parseInt(v.inventory_quantity || 0)), 0) || 0;
 
+        // Per-size inventory keyed by size label — same { size: qty } shape as a
+        // manual product's size_inventory, so synced products track per-size stock
+        // (letter OR numeric sizes) identically. POS stays the source of truth.
+        const sizeInventory = {};
+        for (const v of sp.variants || []) {
+          if (v.option1 && v.option1 !== 'Default Title') {
+            sizeInventory[v.option1] = (sizeInventory[v.option1] || 0) + (parseInt(v.inventory_quantity || 0) || 0);
+          }
+        }
+        const sizeInv = Object.keys(sizeInventory).length ? sizeInventory : null;
+
         const images = (sp.images || []).map(img => img.src).filter(Boolean);
 
         // Check if we already imported this product
@@ -184,7 +195,7 @@ async function syncProducts(integrationId) {
           // Update stock only
           await supabaseAdmin
             .from('products')
-            .update({ stock: totalStock, updated_at: new Date().toISOString() })
+            .update({ stock: totalStock, size_inventory: sizeInv, updated_at: new Date().toISOString() })
             .eq('id', existing.dapper_product_id);
 
           await supabaseAdmin
@@ -215,6 +226,7 @@ async function syncProducts(integrationId) {
                 category:      mapShopifyCategory(sp.product_type, sp.tags),
                 images,
                 sizes,
+                size_inventory: sizeInv,
                 tags:          sp.tags ? sp.tags.split(',').map(t => t.trim()) : [],
               },
             });
