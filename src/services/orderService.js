@@ -351,10 +351,20 @@ async function createOrder({
   // Fail OPEN when either ZIP is missing/unknown — never block an order on
   // incomplete location data (mirrors the same-state rule's null handling).
   if (!isPickup) {
-    const ba = (boutiqueData?.address && typeof boutiqueData.address === 'object')
-      ? boutiqueData.address : null;
+    // boutiques.address is a TEXT column holding a JSON string (not JSONB), so it
+    // arrives here as a string; deliveryAddress is normally already an object.
+    // Parse either shape before reading the zip.
+    const asObj = (v) => {
+      if (v && typeof v === 'object') return v;
+      if (typeof v === 'string') {
+        try { const o = JSON.parse(v); return (o && typeof o === 'object') ? o : null; } catch { return null; }
+      }
+      return null;
+    };
+    const ba = asObj(boutiqueData?.address);
+    const da = asObj(deliveryAddress);
     const boutiqueZip = ba?.zip ? String(ba.zip).trim() : null;
-    const deliveryZip = deliveryAddress?.zip ? String(deliveryAddress.zip).trim() : null;
+    const deliveryZip = da?.zip ? String(da.zip).trim() : null;
     const maxMiles = Number(maxRadiusSetting?.miles) || 10;
     if (boutiqueZip && deliveryZip) {
       const miles = require('zipcodes').distance(boutiqueZip, deliveryZip);
