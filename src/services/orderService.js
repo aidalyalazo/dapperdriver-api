@@ -254,6 +254,7 @@ async function createOrder({
     pickupCommissionSetting,
     serviceFeeSetting,
     expressFeeSetting,
+    maxRadiusSetting,
   ] = await Promise.all([
     // Server-side prices — never trust client-submitted unit_price.
     // Products table stores images as an array column named 'images', not 'image_url'.
@@ -283,7 +284,7 @@ async function createOrder({
 
     // Boutique-specific commission rate
     supabaseAdmin.from('boutiques')
-      .select('commission_rate, state, name')
+      .select('commission_rate, state, name, address')
       .eq('id', boutiqueId)
       .single()
       .then((r) => r.data)
@@ -318,6 +319,11 @@ async function createOrder({
     isExpress
       ? getPlatformSettingJson('express_delivery_fee', { premium: 8.0, driver_cut_pct: 0 })
       : Promise.resolve(null),
+
+    // Max delivery radius in miles from the boutique — admin-configurable (delivery only).
+    isPickup
+      ? Promise.resolve(null)
+      : getPlatformSettingJson('delivery_max_radius_miles', { miles: 10 }),
   ]);
 
   // ── Process Phase 1 results ───────────────────────────────────────────────
@@ -337,6 +343,31 @@ async function createOrder({
         ),
         { status: 422, code: 'OUT_OF_STATE_DELIVERY' }
       );
+    }
+  }
+
+  // Delivery radius rule: the delivery address must be within the admin-configured
+  // max miles of the boutique (ZIP-centroid distance via the `zipcodes` package).
+  // Fail OPEN when either ZIP is missing/unknown — never block an order on
+  // incomplete location data (mirrors the same-state rule's null handling).
+  if (!isPickup) {
+    const ba = (boutiqueData?.address && typeof boutiqueData.address === 'object')
+      ? boutiqueData.address : null;
+    const boutiqueZip = ba?.zip ? String(ba.zip).trim() : null;
+    const deliveryZip = deliveryAddress?.zip ? String(deliveryAddress.zip).trim() : null;
+    const maxMiles = Number(maxRadiusSetting?.miles) || 10;
+    if (boutiqueZip && deliveryZip) {
+      const miles = require('zipcodes').distance(boutiqueZip, deliveryZip);
+      if (typeof miles === 'number' && isFinite(miles) && miles > maxMiles) {
+        throw Object.assign(
+          new Error(
+            `${boutiqueData?.name || 'This boutique'} delivers within ${maxMiles} miles. ` +
+            `Your delivery address is about ${Math.round(miles)} miles away — ` +
+            `choose a closer boutique or switch to pickup.`
+          ),
+          { status: 422, code: 'OUT_OF_DELIVERY_RADIUS' }
+        );
+      }
     }
   }
 
