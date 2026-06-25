@@ -23,7 +23,7 @@ function normName(s) {
  */
 async function importSyncedProduct({
   boutiqueId, integrationId, source,
-  externalProductId, externalVariantId,
+  externalProductId, externalVariantId, variantMap,
   sku, stock, fields,
 }) {
   // 1. Find an adoptable existing product (manual / not yet integration-linked).
@@ -81,6 +81,7 @@ async function importSyncedProduct({
     dapper_product_id:   productId,
     external_product_id: externalProductId,
     external_variant_id: externalVariantId || null,
+    variant_map:         variantMap || null,   // { size: external_variant_id } for per-size decrement
     last_stock_sync:     new Date().toISOString(),
   });
 

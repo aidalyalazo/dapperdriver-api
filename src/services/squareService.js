@@ -224,6 +224,17 @@ async function syncProducts(integrationId) {
         }
         const sizeInv = Object.keys(sizeInventory).length ? sizeInventory : null;
 
+        // size (variation name) → variation id (catalog_object_id), so the order
+        // decrement targets the exact variation for the ordered size.
+        const variantMap = {};
+        for (const v of variations) {
+          const name = v.item_variation_data?.name;
+          if (name && name !== 'Regular' && name !== 'Default' && v.id) {
+            variantMap[name] = String(v.id);
+          }
+        }
+        const varMap = Object.keys(variantMap).length ? variantMap : null;
+
         if (existing?.dapper_product_id) {
           await supabaseAdmin
             .from('products')
@@ -231,7 +242,7 @@ async function syncProducts(integrationId) {
             .eq('id', existing.dapper_product_id);
           await supabaseAdmin
             .from('integration_product_map')
-            .update({ last_stock_sync: new Date().toISOString() })
+            .update({ variant_map: varMap, last_stock_sync: new Date().toISOString() })
             .eq('integration_id', integrationId)
             .eq('external_product_id', item.id);
           skipped++;
@@ -245,6 +256,7 @@ async function syncProducts(integrationId) {
               source: 'square',
               externalProductId: item.id,
               externalVariantId: variations[0]?.id || null,
+              variantMap: varMap,
               sku: variations[0]?.item_variation_data?.sku || null,
               stock: stockCount,
               fields: {
@@ -287,14 +299,16 @@ async function syncProducts(integrationId) {
 /**
  * Adjust Square inventory when an order is placed.
  */
-async function decrementStock(dapperProductId, quantity = 1) {
+async function decrementStock(dapperProductId, quantity = 1, size = null) {
   const { data: mapping } = await supabaseAdmin
     .from('integration_product_map')
-    .select('external_variant_id, integration_id, boutique_integrations(access_token, location_id)')
+    .select('external_variant_id, variant_map, integration_id, boutique_integrations(access_token, location_id)')
     .eq('dapper_product_id', dapperProductId)
     .single();
 
-  if (!mapping?.external_variant_id) return;
+  // Target the variation for the ordered size; fall back to the stored first variation.
+  const variationId = (size && mapping?.variant_map && mapping.variant_map[size]) || mapping?.external_variant_id;
+  if (!variationId) return;
 
   const { location_id } = mapping.boutique_integrations;
   const access_token = require('../utils/tokenCrypto').decrypt(mapping.boutique_integrations.access_token);
@@ -307,7 +321,7 @@ async function decrementStock(dapperProductId, quantity = 1) {
     changes: [{
       type: 'ADJUSTMENT',
       adjustment: {
-        catalog_object_id: mapping.external_variant_id,
+        catalog_object_id: variationId,
         location_id,
         from_state: 'IN_STOCK',
         to_state: 'SOLD',
@@ -317,7 +331,7 @@ async function decrementStock(dapperProductId, quantity = 1) {
     }],
   }, access_token);
 
-  console.log(`[Square] Decremented ${quantity} from variation ${mapping.external_variant_id}`);
+  console.log(`[Square] Decremented ${quantity} from variation ${variationId}${size ? ` (size ${size})` : ''}`);
 }
 
 module.exports = { buildInstallUrl, exchangeToken, refreshToken, syncProducts, decrementStock };

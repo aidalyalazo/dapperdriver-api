@@ -181,6 +181,16 @@ async function syncProducts(integrationId) {
         }
         const sizeInv = Object.keys(sizeInventory).length ? sizeInventory : null;
 
+        // size label → POS variant id, so the order decrement targets the exact
+        // variant for the ordered size (not just the first variant).
+        const variantMap = {};
+        for (const v of sp.variants || []) {
+          if (v.option1 && v.option1 !== 'Default Title' && v.id != null) {
+            variantMap[v.option1] = String(v.id);
+          }
+        }
+        const varMap = Object.keys(variantMap).length ? variantMap : null;
+
         const images = (sp.images || []).map(img => img.src).filter(Boolean);
 
         // Check if we already imported this product
@@ -200,7 +210,7 @@ async function syncProducts(integrationId) {
 
           await supabaseAdmin
             .from('integration_product_map')
-            .update({ last_stock_sync: new Date().toISOString() })
+            .update({ variant_map: varMap, last_stock_sync: new Date().toISOString() })
             .eq('integration_id', integrationId)
             .eq('external_product_id', String(sp.id));
 
@@ -216,6 +226,7 @@ async function syncProducts(integrationId) {
               source: 'shopify',
               externalProductId: String(sp.id),
               externalVariantId: String(variant.id || ''),
+              variantMap: varMap,
               sku: variant.sku || null,
               stock: totalStock,
               fields: {
@@ -293,21 +304,23 @@ async function getLiveStock(dapperProductId) {
  * Decrement stock in Shopify when an order is placed.
  * Called from orderService after successful payment.
  */
-async function decrementStock(dapperProductId, quantity = 1) {
+async function decrementStock(dapperProductId, quantity = 1, size = null) {
   const { data: mapping } = await supabaseAdmin
     .from('integration_product_map')
-    .select('external_variant_id, integration_id, boutique_integrations(shop_domain, access_token)')
+    .select('external_variant_id, variant_map, integration_id, boutique_integrations(shop_domain, access_token)')
     .eq('dapper_product_id', dapperProductId)
     .single();
 
-  if (!mapping?.external_variant_id) return;
+  // Target the variant for the ordered size; fall back to the stored first variant.
+  const variantId = (size && mapping?.variant_map && mapping.variant_map[size]) || mapping?.external_variant_id;
+  if (!variantId) return;
 
   const { shop_domain } = mapping.boutique_integrations;
   const access_token = require('../utils/tokenCrypto').decrypt(mapping.boutique_integrations.access_token);
 
   // Get current inventory item ID
   const variantResult = await shopifyGet(shop_domain, access_token,
-    `/variants/${mapping.external_variant_id}.json?fields=id,inventory_item_id,inventory_quantity`);
+    `/variants/${variantId}.json?fields=id,inventory_item_id,inventory_quantity`);
 
   const variant = variantResult.variant;
   if (!variant) return;
@@ -324,7 +337,7 @@ async function decrementStock(dapperProductId, quantity = 1) {
     available_adjustment: -quantity,
   });
 
-  console.log(`[Shopify] Decremented ${quantity} from variant ${mapping.external_variant_id}`);
+  console.log(`[Shopify] Decremented ${quantity} from variant ${variantId}${size ? ` (size ${size})` : ''}`);
 }
 
 module.exports = { buildInstallUrl, exchangeToken, syncProducts, getLiveStock, decrementStock };

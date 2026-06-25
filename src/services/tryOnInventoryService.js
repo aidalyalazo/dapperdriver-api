@@ -130,6 +130,22 @@ async function convertHolds(sessionOrOrderId, holdType, keptProductIds) {
     return;
   }
 
+  // Per-product QUEUE of ordered sizes (one entry per order line) so each hold maps
+  // to the right size — correct even when one product is ordered in several sizes
+  // (each same-product hold decrements qty 1, so distributing the size multiset is exact).
+  // Holds are per-product; the size lives on order_items.
+  const sizeQueueByProduct = {};
+  if (holdType === 'order') {
+    const { data: items } = await supabaseAdmin
+      .from('order_items')
+      .select('product_id, selected_size')
+      .eq('order_id', sessionOrOrderId);
+    for (const it of (items || [])) {
+      if (!it.product_id) continue;
+      (sizeQueueByProduct[it.product_id] = sizeQueueByProduct[it.product_id] || []).push(it.selected_size || null);
+    }
+  }
+
   for (const hold of (holds || [])) {
     const isKept = keptSet.has(hold.product_id);
 
@@ -139,8 +155,11 @@ async function convertHolds(sessionOrOrderId, holdType, keptProductIds) {
       .eq('id', hold.id);
 
     if (isKept) {
-      // Call platform decrementStock; fall back to direct products.stock for manual items
-      await _decrementStockForProduct(hold.product_id, 1);
+      // Call platform decrementStock; fall back to direct products.stock for manual items.
+      // Pop one ordered size for this product so multi-size orders hit the right variants.
+      const q = sizeQueueByProduct[hold.product_id];
+      const size = (q && q.length) ? q.shift() : null;
+      await _decrementStockForProduct(hold.product_id, 1, size);
     }
   }
 }
@@ -227,7 +246,7 @@ async function computeAvailableBatch(productIds) {
  * Decrement stock for a product via its integrated POS platform.
  * Falls back to direct products.stock decrement for manual products.
  */
-async function _decrementStockForProduct(productId, quantity) {
+async function _decrementStockForProduct(productId, quantity, size = null) {
   try {
     // Check if this product has a POS integration
     const { data: mapping } = await supabaseAdmin
@@ -238,9 +257,11 @@ async function _decrementStockForProduct(productId, quantity) {
 
     const platform = mapping?.boutique_integrations?.platform;
 
-    if (platform === 'shopify')    await shopify.decrementStock(productId, quantity);
-    else if (platform === 'square')     await square.decrementStock(productId, quantity);
-    else if (platform === 'lightspeed') await lightspeed.decrementStock(productId, quantity);
+    if (platform === 'shopify')    await shopify.decrementStock(productId, quantity, size);
+    else if (platform === 'square')     await square.decrementStock(productId, quantity, size);
+    // Lightspeed: per-size variant targeting not yet wired — the size arg is ignored
+    // (decrements its internally-resolved variant). Wire variant_map there to enable it.
+    else if (platform === 'lightspeed') await lightspeed.decrementStock(productId, quantity, size);
     else {
       // Manual product — decrement products.stock directly
       await supabaseAdmin.rpc('fn_decrement_manual_stock', {
