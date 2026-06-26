@@ -85,25 +85,60 @@ const STATUS_NOTIFICATIONS = {
  *  - If the boutique is currently closed, the clock starts at next opening time.
  *  - Returns { estimatedAt: Date, isOutsideHours: bool, nextOpenTime: string|null, queueDepth: number }
  */
+// ── Timezone helpers ─────────────────────────────────────────────────────────
+// boutique_hours are stored as LOCAL wall-clock times but the server runs in UTC.
+// These evaluate "now" against those hours in the boutique's own timezone, so an
+// afternoon order isn't wrongly flagged after-close (the old code compared the UTC
+// clock against close_time as if close_time were UTC).
+const STATE_TZ = {
+  IL: 'America/Chicago', FL: 'America/New_York', NY: 'America/New_York',
+  CA: 'America/Los_Angeles', TX: 'America/Chicago',
+};
+function boutiqueTimezone(state) {
+  return STATE_TZ[String(state || '').toUpperCase().trim()] || 'America/Chicago';
+}
+// Wall-clock parts of an instant in an IANA timezone.
+function partsInTz(instant, tz) {
+  const f = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz, weekday: 'short', year: 'numeric', month: '2-digit',
+    day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
+  });
+  const p = Object.fromEntries(f.formatToParts(instant).map((x) => [x.type, x.value]));
+  const dowMap = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  let hour = parseInt(p.hour, 10); if (hour === 24) hour = 0; // Intl renders midnight as 24 in some envs
+  return { dow: dowMap[p.weekday], year: +p.year, month: +p.month, day: +p.day, minutes: hour * 60 + parseInt(p.minute, 10) };
+}
+// The UTC instant for a given LOCAL wall-clock (y/mo/d hh:mm) in tz (DST-correct).
+function utcFromWallClock(year, month, day, hour, minute, tz) {
+  const guessUTC = Date.UTC(year, month - 1, day, hour, minute);
+  const p = partsInTz(new Date(guessUTC), tz);
+  const renderedUTC = Date.UTC(p.year, p.month - 1, p.day, Math.floor(p.minutes / 60), p.minutes % 60);
+  return new Date(guessUTC - (renderedUTC - guessUTC));
+}
+
 /**
- * Find the next time a boutique opens, on or after the day AFTER `dayOfWeek`.
+ * Find the next time a boutique opens, AFTER the current local day/time.
+ * @param hoursRows boutique_hours rows
+ * @param np        partsInTz(now, tz) — the boutique-LOCAL "now"
+ * @param tz        IANA timezone
  * @returns {{ at: Date, label: string } | null} null when no day is ever open.
  */
-function findNextOpen(hoursRows, dayOfWeek, now) {
+function findNextOpen(hoursRows, np, tz) {
   const sorted = (hoursRows || [])
     .filter((r) => !r.is_closed && r.open_time)
     .sort((a, b) => {
-      const da = (a.day_of_week - dayOfWeek + 7) % 7 || 7;
-      const db = (b.day_of_week - dayOfWeek + 7) % 7 || 7;
+      const da = (a.day_of_week - np.dow + 7) % 7 || 7;
+      const db = (b.day_of_week - np.dow + 7) % 7 || 7;
       return da - db;
     });
   if (sorted.length === 0) return null;
   const next = sorted[0];
-  const daysAhead = (next.day_of_week - dayOfWeek + 7) % 7 || 7;
-  const at = new Date(now);
-  at.setDate(at.getDate() + daysAhead);
+  const daysAhead = (next.day_of_week - np.dow + 7) % 7 || 7;
   const [nh, nm] = next.open_time.split(':').map(Number);
-  at.setHours(nh, nm, 0, 0);
+  // next-open LOCAL calendar date = today's local date + daysAhead
+  const d = new Date(Date.UTC(np.year, np.month - 1, np.day));
+  d.setUTCDate(d.getUTCDate() + daysAhead);
+  const at = utcFromWallClock(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate(), nh, nm, tz);
   const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   return { at, label: `${dayNames[next.day_of_week]} at ${next.open_time.slice(0, 5)}` };
 }
@@ -112,11 +147,10 @@ async function calculateEstimatedDelivery(boutiqueId) {
   const BASE_MINUTES   = 45;  // minimum delivery time in minutes
   const PER_ORDER_MINS = 15;  // extra minutes per queued order
 
-  // Fetch today's hours + active queue in parallel
-  const now       = new Date();
-  const dayOfWeek = now.getDay(); // 0 = Sunday
+  const now = new Date();
 
-  const [{ data: hoursRows }, { count: queueDepth }] = await Promise.all([
+  // Fetch hours + active queue + the boutique's state (→ its timezone) in parallel
+  const [{ data: hoursRows }, { count: queueDepth }, boutiqueRes] = await Promise.all([
     supabaseAdmin
       .from('boutique_hours')
       .select('day_of_week, open_time, close_time, is_closed')
@@ -126,74 +160,73 @@ async function calculateEstimatedDelivery(boutiqueId) {
       .select('id', { count: 'exact', head: true })
       .eq('boutique_id', boutiqueId)
       .in('status', ['pending', 'confirmed', 'preparing']),
+    supabaseAdmin
+      .from('boutiques').select('state').eq('id', boutiqueId).single()
+      .then((r) => r, () => ({ data: null })),
   ]);
+
+  // Evaluate hours in the boutique's LOCAL timezone, not the server's UTC clock —
+  // otherwise an afternoon order whose UTC hour is past the local close_time is
+  // wrongly flagged "closed → tomorrow".
+  const tz = boutiqueTimezone(boutiqueRes?.data?.state);
+  const np = partsInTz(now, tz); // boutique-local now: { dow, year, month, day, minutes }
+  const dayOfWeek = np.dow;
 
   const depth = queueDepth || 0;
   const totalExtraMinutes = depth * PER_ORDER_MINS;
 
-  // Find today's hours row
   const todayHours = (hoursRows || []).find((r) => r.day_of_week === dayOfWeek);
   const isClosedToday = !todayHours || todayHours.is_closed || !todayHours.open_time || !todayHours.close_time;
-
-  // Parse "HH:MM:SS" time string to today's Date object
-  function todayAt(timeStr) {
-    const [h, m] = timeStr.split(':').map(Number);
-    const d = new Date(now);
-    d.setHours(h, m, 0, 0);
-    return d;
-  }
+  const toMinutes = (t) => { const [h, m] = t.split(':').map(Number); return h * 60 + m; };
 
   let isOutsideHours = false;
   let nextOpenTime   = null;
-  let nextOpenAt     = null; // Date when the boutique next opens (null = open now)
+  let nextOpenAt     = null;          // Date the boutique next opens (null = open now)
   let clockStart     = new Date(now); // when the delivery clock starts ticking
 
   // A boutique with NO configured open hours has no schedule to be "closed"
-  // against — treat it as open now (deliver in the base window). Without this
-  // guard, an unconfigured boutique fell through every branch with
-  // clockStart=now but isOutsideHours=true → "closed, but delivering in 2h
-  // today", which is nonsense.
+  // against — treat it as open now (deliver in the base window).
   const hasOpenHours = (hoursRows || [])
     .some((r) => !r.is_closed && r.open_time && r.close_time);
 
   if (hasOpenHours && !isClosedToday) {
-    const openTime  = todayAt(todayHours.open_time);
-    const closeTime = todayAt(todayHours.close_time);
+    const openMins  = toMinutes(todayHours.open_time);
+    const closeMins = toMinutes(todayHours.close_time);
 
-    if (now < openTime) {
-      // Too early today — order queues for today's opening time (same day)
+    if (np.minutes < openMins) {
+      // Too early today — order queues for today's opening time (same local day)
       isOutsideHours = true;
-      clockStart     = openTime;
-      nextOpenAt     = openTime;
+      clockStart     = utcFromWallClock(np.year, np.month, np.day, Math.floor(openMins / 60), openMins % 60, tz);
+      nextOpenAt     = clockStart;
       nextOpenTime   = todayHours.open_time.slice(0, 5); // "HH:MM"
-    } else if (now >= closeTime) {
-      // After close — order is delivered the NEXT day the boutique opens
+    } else if (np.minutes >= closeMins) {
+      // After close — order is delivered the NEXT local day the boutique opens
       isOutsideHours = true;
-      const next = findNextOpen(hoursRows, dayOfWeek, now);
+      const next = findNextOpen(hoursRows, np, tz);
       if (next) { clockStart = next.at; nextOpenAt = next.at; nextOpenTime = next.label; }
     }
-    // else: currently open — clockStart stays as now
+    // else: currently open in local time — clockStart stays as now
   } else if (hasOpenHours) {
     // Closed all day today — find the next open day
     isOutsideHours = true;
-    const next = findNextOpen(hoursRows, dayOfWeek, now);
+    const next = findNextOpen(hoursRows, np, tz);
     if (next) { clockStart = next.at; nextOpenAt = next.at; nextOpenTime = next.label; }
   }
   // else (no hasOpenHours): no schedule configured → open now, defaults stand.
 
   // Delivery window. When open, base + queue. When queued for a future opening,
   // the offset from opening is capped at 120 min so the timestamp stays tidy —
-  // but the clock starts at the real next-open time, so a Tuesday-night order
-  // for a shop that reopens Wednesday lands Wednesday, not the same night.
+  // but the clock starts at the real next-open time.
   const deliveryOffsetMins = isOutsideHours
     ? Math.min(BASE_MINUTES + totalExtraMinutes, 120)
     : BASE_MINUTES + totalExtraMinutes;
 
   const estimatedAt = new Date(clockStart.getTime() + deliveryOffsetMins * 60 * 1000);
 
-  // True only when the order will actually be delivered on a later calendar day.
+  // Next-day only when the estimate lands on a later LOCAL calendar day than now.
+  const estParts = partsInTz(estimatedAt, tz);
   const isNextDay = nextOpenAt != null &&
-    estimatedAt.toDateString() !== now.toDateString();
+    !(estParts.year === np.year && estParts.month === np.month && estParts.day === np.day);
 
   return { estimatedAt, isOutsideHours, isNextDay, nextOpenTime, queueDepth: depth };
 }
