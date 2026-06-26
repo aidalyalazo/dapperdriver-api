@@ -13,7 +13,7 @@ const { getPlatformSetting } = require('../utils/platformSettings');
  *
  * Driver earnings model:
  *   Per-delivery flat fee ('driver_delivery_fee' from platform_settings) + optional tip.
- *   The platform retains the 25% commission from the boutique side;
+ *   The platform retains the 20% commission from the boutique side;
  *   driver pay is a separate line item already accounted for in total_amount.
  */
 
@@ -26,7 +26,7 @@ async function runMondayPayouts() {
     // Read driver payout settings from platform_settings
     const driverPayoutSetting = await require('../utils/platformSettings').getPlatformSettingJson(
       'driver_payout_rate',
-      { delivery_fee_cut: 80, tip_cut: 100 }
+      { delivery_fee_cut: 100, tip_cut: 100 }
     );
 
     // Fetch all delivered, unpaid orders that have an assigned driver
@@ -41,6 +41,7 @@ async function runMondayPayouts() {
         drivers (id, full_name, stripe_account_id, fcm_token)
       `)
       .in('status', ['delivered', 'completed'])
+      .eq('payment_status', 'paid') // L3: only pay out orders whose charge was actually captured (never refunded/uncaptured)
       .eq('driver_paid', false)
       .not('driver_id', 'is', null);
 

@@ -229,33 +229,34 @@ router.post(
       return res.status(402).json({ error: 'Could not charge the tip. Please try again.' });
     }
 
-    // Charge succeeded — persist the cumulative tip with a compare-and-set retry so
-    // two concurrent tips on the same order accumulate instead of overwriting each
-    // other (a lost update would mean charging the shopper but underpaying the driver).
-    let persistedTip = null;
-    for (let attempt = 0; attempt < 5 && persistedTip === null; attempt++) {
-      let base = oldTip;
-      if (attempt > 0) {
-        const { data: cur } = await supabaseAdmin
-          .from('orders').select('tip').eq('id', orderId).single();
-        base = parseFloat(cur?.tip || 0);
-      }
-      const next = Math.round((base + amount) * 100) / 100;
-      const { data: updated } = await supabaseAdmin
-        .from('orders')
-        .update({ tip: next })
-        .eq('id', orderId)
-        .eq('tip', base) // CAS: only if tip hasn't changed since we read it
-        .select('tip');
-      if (updated && updated.length) persistedTip = next;
-    }
-    if (persistedTip === null) {
-      // CAS kept losing the race (or tip was NULL) — fall back to a plain increment
-      // off the freshest read so the already-charged tip is never dropped.
+    // Charge succeeded — persist the tip. M2: the Stripe charge is idempotent on
+    // (orderId, oldTip, amount), so two truly-concurrent IDENTICAL tips create only
+    // ONE charge. We therefore move tip to the fixed target (oldTip + amount) with a
+    // CAS on the old value and DO NOT re-add on conflict — the old accumulate-loop
+    // double-credited the driver against a single deduped charge (platform loss). A
+    // conflict means a concurrent identical tip already applied the same delta, so we
+    // accept the current value; the worst case is conservative (never an over-credit).
+    const target = Math.round((oldTip + amount) * 100) / 100;
+    const { data: applied } = await supabaseAdmin
+      .from('orders')
+      .update({ tip: target })
+      .eq('id', orderId)
+      .eq('tip', oldTip) // CAS: only apply if tip is still what this charge was based on
+      .select('tip');
+    let persistedTip = target;
+    if (!applied || !applied.length) {
       const { data: fresh } = await supabaseAdmin
         .from('orders').select('tip').eq('id', orderId).single();
-      persistedTip = Math.round((parseFloat(fresh?.tip || 0) + amount) * 100) / 100;
-      await supabaseAdmin.from('orders').update({ tip: persistedTip }).eq('id', orderId);
+      const cur = parseFloat(fresh?.tip || 0);
+      if (cur === 0) {
+        // CAS missed only because tip was NULL (no tip yet) — apply the first tip.
+        await supabaseAdmin.from('orders').update({ tip: target }).eq('id', orderId);
+        persistedTip = target;
+      } else {
+        // A concurrent identical tip already landed this delta (single deduped charge)
+        // — accept it; re-adding would over-credit the driver for money never collected.
+        persistedTip = cur;
+      }
     }
 
     // Safety net: if the driver was ALREADY paid out for this order, the payout path
