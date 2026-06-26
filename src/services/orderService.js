@@ -863,6 +863,25 @@ async function updateOrderStatus({ orderId, newStatus, actorId, driverId }) {
     } catch (e) {
       console.warn('[ORDER] stock restore on cancel failed:', orderId, e.message);
     }
+
+    // Release the customer's payment hold on ANY cancellation path. Voiding an
+    // UNCAPTURED PaymentIntent (requires_capture) drops the authorization off the
+    // card. We only handle the uncaptured case here — a captured PI is refunded by
+    // the dedicated cancel controller, so handling it here too would double-refund.
+    // Without this, cancelling via PATCH /orders/:id/status (e.g. a boutique
+    // declining an order) left the hold live on the shopper's card.
+    if (order.stripe_payment_intent_id) {
+      try {
+        const pi = await stripe.paymentIntents.retrieve(order.stripe_payment_intent_id);
+        if (pi.status === 'requires_capture') {
+          await stripe.paymentIntents.cancel(pi.id);
+          await supabaseAdmin.from('orders')
+            .update({ payment_status: 'cancelled' }).eq('id', orderId);
+        }
+      } catch (e) {
+        console.error('[ORDER] hold release on cancel failed:', orderId, e.message);
+      }
+    }
   }
 
   // Log to order_timeline (fire-and-forget, non-critical)
