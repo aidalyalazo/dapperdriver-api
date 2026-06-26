@@ -1884,13 +1884,19 @@ router.post(
     }
 
     const now = new Date().toISOString();
+    // M6: gate the assignment — only a ready_for_pickup, still-unclaimed order can
+    // be assigned. Prevents dragging a terminal/in-flight order into driver_assigned,
+    // stealing an order already owned by another driver, or skipping the payment gate.
     const { data: updated, error } = await supabaseAdmin
       .from('orders')
       .update({ driver_id: driverId, status: 'driver_assigned', driver_assigned_at: now })
       .eq('id', orderId)
+      .eq('status', 'ready_for_pickup')
+      .is('driver_id', null)
       .select()
-      .single();
+      .maybeSingle();
     if (error) throw new Error(error.message);
+    if (!updated) return res.status(409).json({ error: 'Order is not ready for pickup or already has a driver assigned.' });
 
     await Promise.resolve(supabaseAdmin.from('order_timeline').insert({
       order_id: orderId,
@@ -1941,8 +1947,13 @@ router.post(
         driver_assigned_at: now,
       })
       .in('id', orderIds)
+      .eq('status', 'ready_for_pickup') // M6: only ready, unclaimed orders — never steal/drag terminal orders
+      .is('driver_id', null)
       .select('id');
     if (ordErr) throw new Error(ordErr.message);
+    // M6: surface any requested orders that weren't eligible (already assigned / not ready)
+    const assignedIds = (orders || []).map((o) => o.id);
+    const skipped = orderIds.filter((oid) => !assignedIds.includes(oid));
 
     await Promise.resolve(supabaseAdmin.from('order_timeline').insert(
       (orders || []).map((o) => ({
@@ -1952,7 +1963,7 @@ router.post(
       }))
     )).catch(() => {});
 
-    res.status(201).json({ batch, assigned_orders: (orders || []).map((o) => o.id) });
+    res.status(201).json({ batch, assigned_orders: assignedIds, skipped_orders: skipped });
   })
 );
 

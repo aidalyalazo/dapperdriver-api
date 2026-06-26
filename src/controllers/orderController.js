@@ -223,7 +223,9 @@ const listOrders = asyncHandler(async (req, res) => {
   // A driver can't see customer addresses for completed deliveries in history.
   if (role === 'driver' && Array.isArray(result.orders)) {
     for (const o of result.orders) {
-      if (['delivered', 'completed'].includes(o.status)) o.delivery_address = null;
+      if (['delivered', 'completed'].includes(o.status)) {
+        o.delivery_address = null; o.delivery_city = null; o.delivery_state = null; o.delivery_zip = null;
+      }
     }
   }
   res.json(result);
@@ -272,6 +274,7 @@ const getOrder = asyncHandler(async (req, res) => {
     // A driver can no longer see the delivery address once the order is done.
     if (role === 'driver' && ['delivered', 'completed'].includes(order.status)) {
       order.delivery_address = null;
+      order.delivery_city = null; order.delivery_state = null; order.delivery_zip = null;
     }
   }
 
@@ -346,6 +349,14 @@ const updateStatus = [
       if (!driver || driver.id !== order.driver_id) {
         return res.status(403).json({ error: 'Forbidden' });
       }
+    }
+
+    // M5: driver_assigned is only reachable via the dedicated accept-delivery /
+    // assign-driver path (which atomically sets driver_id via CAS). Reaching it
+    // through this generic status update would orphan the order — status leaves the
+    // available feed while driver_id stays NULL, and no one can claim or cancel it.
+    if (status === 'driver_assigned') {
+      return res.status(400).json({ error: 'Use the accept-delivery flow to assign a driver to an order.' });
     }
 
     const updated = await orderService.updateOrderStatus({
