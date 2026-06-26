@@ -884,16 +884,11 @@ async function updateOrderStatus({ orderId, newStatus, actorId, driverId }) {
     }
   }
 
-  // Log to order_timeline (fire-and-forget, non-critical)
-  supabaseAdmin
-    .from('order_timeline')
-    .insert({
-      order_id: orderId,
-      status: newStatus,
-      created_by: actorId,
-      timestamp: new Date().toISOString(),
-    })
-    .then(() => {}, () => {});
+  // NOTE: order_timeline is written by a DB trigger on orders.status changes
+  // (actor='system', with a label) — see the populated timeline for every status.
+  // We deliberately do NOT insert from here: doing so would duplicate every entry.
+  // (A prior version inserted a non-existent `created_by` column, which failed
+  // silently and hid the fact that the trigger already covers this.)
 
   // If delivered or completed (pickup): capture payment, THEN transfer to boutique.
   if (newStatus === 'delivered' || newStatus === 'completed') {
