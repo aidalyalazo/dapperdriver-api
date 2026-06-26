@@ -58,7 +58,7 @@ router.post(
 
     const { data: order } = await supabaseAdmin
       .from('orders')
-      .select('stripe_payment_intent_id, total_amount')
+      .select('stripe_payment_intent_id, total_amount, shopper_id, order_number')
       .eq('id', orderId)
       .single();
 
@@ -93,6 +93,7 @@ router.post(
       .update({
         refund_amount: actualAmount,
         payment_status: 'refunded',
+        refunded_at: new Date().toISOString(),
       })
       .eq('id', orderId)
       .select('boutique_paid, driver_paid, boutique_earnings, driver_earnings')
@@ -119,6 +120,32 @@ router.post(
         timestamp: new Date().toISOString(),
       })
       .then(() => {}, () => {});
+
+    // Notify the shopper of the refund — otherwise the money just reappears on
+    // their card with no in-app explanation. Best-effort (never fail the refund).
+    try {
+      if (order.shopper_id) {
+        const title = '💸 Refund Issued';
+        const body  = `You've been refunded $${Number(actualAmount).toFixed(2)} for order ${order.order_number || ''}`.trim() + '.';
+        const { data: sh } = await supabaseAdmin
+          .from('shoppers').select('fcm_token').eq('user_id', order.shopper_id).maybeSingle();
+        if (sh?.fcm_token) {
+          require('../services/fcmService')
+            .sendOrderNotification({ tokens: [sh.fcm_token], title, body, orderId }).catch(() => {});
+        }
+        await supabaseAdmin.from('notifications').insert({
+          user_id:   order.shopper_id,
+          type:      'order_refunded',
+          title,
+          body,
+          data:      { order_id: orderId, refund_amount: actualAmount },
+          is_read:   false,
+          sent_push: !!sh?.fcm_token,
+        });
+      }
+    } catch (e) {
+      console.warn('[REFUND] shopper notification failed (non-fatal):', e?.message);
+    }
 
     res.json({ refund, amount: actualAmount });
   })
