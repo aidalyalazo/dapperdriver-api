@@ -236,8 +236,19 @@ async function createOrder({
       .eq('idempotency_key', idempotencyKey)
       .maybeSingle();
     if (existing) {
-      existing._idempotent_replay = true;
-      return existing;
+      // Only replay a STILL-LIVE order (a genuine double-tap). If the matching order
+      // was CANCELLED (e.g. the payment sheet failed on a prior attempt), replaying it
+      // hands back a dead order whose PaymentIntent — created under the Stripe
+      // idempotency key `order_<id>_pi` — is also cancelled, so the payment sheet
+      // errors on every retry: a permanent deadlock. Instead, release the dead order's
+      // key so this attempt creates a genuinely fresh order + PaymentIntent.
+      if (existing.status === 'cancelled') {
+        await supabaseAdmin.from('orders')
+          .update({ idempotency_key: null }).eq('id', existing.id);
+      } else {
+        existing._idempotent_replay = true;
+        return existing;
+      }
     }
   }
 
