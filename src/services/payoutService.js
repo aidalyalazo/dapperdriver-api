@@ -116,7 +116,16 @@ async function cashOut({ recipientId, recipientType }) {
         data: { recipient_id: recipientId, recipient_type: recipientType, order_ids: claimedIds, amount: total },
       }).catch(() => {});
     }
-    throw Object.assign(new Error(`Stripe transfer failed: ${err.message}`), { status: 500 });
+    // Log the raw Stripe error for debugging, but NEVER surface it to the
+    // driver/boutique — it can include internal detail and test-card hints. Map
+    // to a friendly, actionable message. The most common case is insufficient
+    // PLATFORM available balance: captured charges haven't settled to available yet.
+    console.error('[PAYOUT] Stripe transfer failed:', { recipientType, recipientId, code: err.code, message: err.message });
+    const insufficient = err.code === 'balance_insufficient' || /insufficient/i.test(err.message || '');
+    const friendly = insufficient
+      ? "Your payout couldn't be sent yet. Funds from your recent orders are still settling with our payments processor, which usually takes 1-2 business days. Your earnings are safe and still here; please try again then."
+      : "We couldn't complete your payout right now. Please try again shortly, or contact support if it keeps happening.";
+    throw Object.assign(new Error(friendly), { status: insufficient ? 503 : 500, code: 'PAYOUT_TRANSFER_FAILED' });
   }
 
   // Transfer succeeded — create the payout record (has the stripe_transfer_id the
