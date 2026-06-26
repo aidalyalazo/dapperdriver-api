@@ -46,15 +46,36 @@ async function cashOut({ recipientId, recipientType }) {
   const paidUpdate = {};
   paidUpdate[paidCol] = true;
 
-  const { data: claimed } = await Promise.resolve(supabaseAdmin
-    .from('orders')
-    .update(paidUpdate)
-    .eq(orderFilter, tableRowId)
-    .in('status', ['delivered', 'completed'])
-    .eq('payment_status', 'paid') // ONLY pay out money actually captured (not authorized/failed/REFUNDED)
-    .eq(paidCol, false)
-    .select(`id, ${earningsCol}, tip`))
-    .catch(() => ({ data: [] }));
+  // M7: PostgREST caps any single query at 1000 rows. Gather all unpaid order ids in
+  // read-pages, then claim them in batches by id — so a recipient with >1000 unpaid
+  // orders is fully paid in one cash-out (previously only the first ≤1000 were summed
+  // and transferred). The .eq(paidCol,false) guard on the claim still partitions two
+  // concurrent cash-outs, so there's no double-pay.
+  let unpaidIds = [];
+  for (let from = 0; ; from += 1000) {
+    const { data: page } = await Promise.resolve(supabaseAdmin
+      .from('orders').select('id')
+      .eq(orderFilter, tableRowId)
+      .in('status', ['delivered', 'completed'])
+      .eq('payment_status', 'paid') // ONLY pay out money actually captured (not authorized/failed/REFUNDED)
+      .eq(paidCol, false)
+      .range(from, from + 999))
+      .catch(() => ({ data: [] }));
+    if (!page || page.length === 0) break;
+    unpaidIds = unpaidIds.concat(page.map((o) => o.id));
+    if (page.length < 1000) break;
+  }
+  let claimed = [];
+  for (let i = 0; i < unpaidIds.length; i += 1000) {
+    const { data: batch } = await Promise.resolve(supabaseAdmin
+      .from('orders')
+      .update(paidUpdate)
+      .in('id', unpaidIds.slice(i, i + 1000))
+      .eq(paidCol, false) // concurrency guard: skip any a parallel cash-out just claimed
+      .select(`id, ${earningsCol}, tip`))
+      .catch(() => ({ data: [] }));
+    if (batch) claimed = claimed.concat(batch);
+  }
 
   const claimedIds = (claimed || []).map((o) => o.id);
 
@@ -211,14 +232,22 @@ async function getAvailableBalance({ recipientId, recipientType }) {
 
   if (!recipient) return { available: 0, order_count: 0, has_stripe_account: false };
 
-  const { data: orders } = await Promise.resolve(supabaseAdmin
-    .from('orders')
-    .select(`${earningsCol}, tip`)
-    .eq(orderFilter, recipient.id)
-    .in('status', ['delivered', 'completed'])
-    .eq('payment_status', 'paid') // withdrawable = captured only (excludes authorized/failed/refunded)
-    .eq(paidCol, false))
-    .catch(() => ({ data: [] }));
+  // M7: page the read so a recipient with >1000 unpaid orders sees their true balance.
+  let orders = [];
+  for (let from = 0; ; from += 1000) {
+    const { data: page } = await Promise.resolve(supabaseAdmin
+      .from('orders')
+      .select(`${earningsCol}, tip`)
+      .eq(orderFilter, recipient.id)
+      .in('status', ['delivered', 'completed'])
+      .eq('payment_status', 'paid') // withdrawable = captured only (excludes authorized/failed/refunded)
+      .eq(paidCol, false)
+      .range(from, from + 999))
+      .catch(() => ({ data: [] }));
+    if (!page || page.length === 0) break;
+    orders = orders.concat(page);
+    if (page.length < 1000) break;
+  }
 
   let total = 0;
   for (const o of orders || []) {
