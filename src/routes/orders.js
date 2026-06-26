@@ -76,25 +76,40 @@ router.post(
     }
 
     const refundAmount = amount ? Math.round(amount * 100) : undefined;
-    const refund = await stripe.refunds.create({
-      payment_intent: order.stripe_payment_intent_id,
-      amount: refundAmount,
-    });
+    // L7: an uncaptured (requires_capture) PI has no charge to refund — refunds.create
+    // would 500. Catch it and return a clean error pointing to cancel/void instead.
+    let refund;
+    try {
+      refund = await stripe.refunds.create({
+        payment_intent: order.stripe_payment_intent_id,
+        amount: refundAmount,
+      });
+    } catch (e) {
+      console.warn('[REFUND] Stripe refund failed:', e.message);
+      return res.status(400).json({
+        error: 'No captured payment to refund. If the order is still pending/uncaptured, cancel it instead.',
+      });
+    }
 
     const actualAmount = refundAmount ? amount : parseFloat(order.total_amount);
+    const isFullRefund = !refundAmount || actualAmount >= parseFloat(order.total_amount);
 
-    // Update order. Marking payment_status='refunded' also makes the order
-    // ineligible for any FUTURE cash-out (payoutService now requires
-    // payment_status='paid'). The remaining risk is an order ALREADY paid out
-    // before the refund — that's a real platform loss with no auto-reversal, so
-    // surface it immediately (the daily money-reconcile job is the backstop).
+    // M3: only a FULL refund flips payment_status to 'refunded' (which removes the
+    // order from cash-out — payoutService requires payment_status='paid'). A PARTIAL
+    // refund must leave the order payout-eligible; otherwise the boutique/driver lose
+    // the ENTIRE unrefunded remainder, not just their share of the refund. refund_amount
+    // records the partial either way. (Allocating a partial refund across
+    // boutique/platform/driver via reduced earnings is a tracked policy follow-up.)
+    const updatePayload = { refund_amount: actualAmount };
+    if (isFullRefund) {
+      updatePayload.payment_status = 'refunded';
+      updatePayload.refunded_at = new Date().toISOString();
+    }
+    // If already paid out before the refund it's a real loss with no auto-reversal —
+    // surfaced below (the daily money-reconcile job is the backstop).
     const { data: refundedRow } = await supabaseAdmin
       .from('orders')
-      .update({
-        refund_amount: actualAmount,
-        payment_status: 'refunded',
-        refunded_at: new Date().toISOString(),
-      })
+      .update(updatePayload)
       .eq('id', orderId)
       .select('boutique_paid, driver_paid, boutique_earnings, driver_earnings')
       .single();

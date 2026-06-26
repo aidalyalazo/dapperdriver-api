@@ -167,12 +167,23 @@ router.post(
           const charge = event.data.object;
           const pi = charge.payment_intent;
 
-          // Idempotent: duplicate webhook deliveries must not re-stamp refunded_at
-          await supabaseAdmin
-            .from('orders')
-            .update({ payment_status: 'refunded', refunded_at: new Date().toISOString() })
-            .eq('stripe_payment_intent_id', pi)
-            .neq('payment_status', 'refunded');
+          // M4: only mark FULLY refunded when the whole charge was refunded. A partial
+          // refund must leave the order payout-eligible (payoutService requires
+          // payment_status='paid') — otherwise the boutique/driver lose the unrefunded
+          // remainder. Idempotent: never re-stamp an already-refunded order.
+          if (charge.amount_refunded >= charge.amount) {
+            await supabaseAdmin
+              .from('orders')
+              .update({ payment_status: 'refunded', refunded_at: new Date().toISOString() })
+              .eq('stripe_payment_intent_id', pi)
+              .neq('payment_status', 'refunded');
+          } else {
+            // Partial refund: record the amount, keep the order payout-eligible.
+            await supabaseAdmin
+              .from('orders')
+              .update({ refund_amount: charge.amount_refunded / 100 })
+              .eq('stripe_payment_intent_id', pi);
+          }
           break;
         }
 
@@ -200,10 +211,10 @@ router.post(
         }
 
         // ── Transfer paid to boutique ─────────────────────────────────────
-        // NOTE: transferToBoutique() is already called inside updateOrderStatus()
-        // when the order reaches 'delivered' or 'completed'. We do NOT call it
-        // again here — doing so would double-transfer funds to the boutique.
-        // This handler exists only for logging / audit purposes.
+        // NOTE: boutique payouts are ON-DEMAND via cashOut() (payoutService.js),
+        // guarded by a boutique_paid CAS. updateOrderStatus() only CAPTURES the
+        // PaymentIntent — it does NOT transfer. So we do NOT transfer here either;
+        // this handler exists only for logging / audit of Stripe-side transfers.
         case 'transfer.created': {
           const transfer = event.data.object;
           console.log(`[WEBHOOK] Transfer created: ${transfer.id} → destination ${transfer.destination}, amount $${(transfer.amount / 100).toFixed(2)}`);
