@@ -29,7 +29,7 @@ router.get(
   '/',
   asyncHandler(async (req, res) => {
     const { search, city, page = 1, limit = 20 } = req.query;
-    const { status, category, try_on_enabled } = req.query;
+    const { category, try_on_enabled } = req.query;
     let q = supabaseAdmin
       .from('boutiques')
       // NB: campaign_image_fit intentionally NOT selected here — listing this
@@ -40,8 +40,9 @@ router.get(
       .order('rating', { ascending: false })
       .range((page - 1) * limit, page * limit - 1);
 
-    if (status)          q = q.eq('status', status);
-    else                 q = q.eq('status', 'active'); // public browse: only active boutiques (hide suspended/pending/inactive)
+    // Public browse: ALWAYS active-only — ignore any caller-supplied ?status so anon
+    // callers can't enumerate suspended/pending/inactive boutiques.
+    q = q.eq('status', 'active');
     if (try_on_enabled)  q = q.eq('try_on_enabled', try_on_enabled === 'true');
     // Search boutique name, description, primary category, and category/style tag arrays.
     // category_tags.cs.{X} = "array contains X" (exact match, case-sensitive).
@@ -95,6 +96,7 @@ router.get(
       .from('boutiques')
       .select('id, name, slug, description, logo_url, logo_initials, logo_bg, campaign_images, address, state, city_id, rating, review_count, follower_count, primary_category, category_tags, style_tags, price_tier, status, try_on_enabled, accepts_returns, return_policy')
       .eq('id', req.params.id)
+      .eq('status', 'active') // public: non-active boutiques 404 (don't expose suspended/pending by direct id)
       .single();
 
     if (error) throw Object.assign(new Error('Boutique not found'), { status: 404 });
@@ -416,7 +418,7 @@ router.delete(
     const boutiqueId = await getBoutiqueId(req.userId);
     await supabaseAdmin
       .from('products')
-      .update({ is_active: false })
+      .update({ status: 'inactive' }) // H2: there's no `is_active` column; reads/orders all filter on `status`
       .eq('id', req.params.productId)
       .eq('boutique_id', boutiqueId);
 

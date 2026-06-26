@@ -447,7 +447,7 @@ async function recordItemsDecision({ sessionId, shopperId, keptItemIds = [], ret
     .single();
   const commissionRate = boutique?.commission_rate != null
     ? parseFloat(boutique.commission_rate) / 100
-    : 0.25;
+    : 0.20; // L8: platform default is 20% (matches createOrder + config/fees), not 25%
   const commissionCents = Math.round(revenueCents * commissionRate);
 
   // Inventory: convert kept holds (decrements stock), release returned ones

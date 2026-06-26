@@ -125,8 +125,9 @@ router.get(
   asyncHandler(async (req, res) => {
     const { data, error } = await supabaseAdmin
       .from('products')
+      // L9: explicit columns on this PUBLIC endpoint — excludes confidential wholesale `cost`.
       .select(
-        `*, boutiques(id, name, logo_url, logo_initials, city_id, style_tags)`
+        `id, boutique_id, name, description, category, price, compare_price, stock, low_stock_threshold, sku, images, colors, sizes, tags, status, total_sold, created_at, updated_at, source, rating, review_count, available_sizes, style_tags, color_tags, is_on_sale, sale_price, size_inventory, material_composition, variant_stock, boutiques(id, name, logo_url, logo_initials, city_id, style_tags)`
       )
       .eq('id', req.params.id)
       .single();

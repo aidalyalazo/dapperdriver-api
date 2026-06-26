@@ -938,7 +938,7 @@ router.delete(
       supabaseAdmin.from('cart_items').delete().eq('shopper_id', userId),
       supabaseAdmin.from('saved_items').delete().eq('shopper_id', userId),
       supabaseAdmin.from('outfit_posts').delete().eq('shopper_id', userId),
-      supabaseAdmin.from('shopper_follows').delete().or(`follower_id.eq.${userId},followed_id.eq.${userId}`),
+      supabaseAdmin.from('shopper_follows').delete().or(`follower_id.eq.${userId},following_id.eq.${userId}`),
       supabaseAdmin.from('try_on_queue').update({ status: 'cancelled' })
         .eq('shopper_id', userId).eq('status', 'waiting'),
     ];

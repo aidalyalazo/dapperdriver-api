@@ -1,5 +1,5 @@
 const router = require('express').Router();
-const { authenticate } = require('../middleware/auth');
+const { authenticate, resolveRole } = require('../middleware/auth');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { body, param } = require('express-validator');
 const { validate } = require('../middleware/validate');
@@ -43,7 +43,9 @@ router.post(
     const { category, subject, description, order_id } = req.body;
     const userId = req.userId;
     const userEmail = req.user.email;
-    const userRole = req.user.user_metadata?.role || 'shopper';
+    // M1: authorize off app_metadata (resolveRole returns null for a forged
+    // user_metadata 'admin'), never the self-editable user_metadata.role.
+    const userRole = resolveRole(req) || 'shopper';
 
     // If an order_id was provided, verify it exists AND belongs to the caller —
     // otherwise tickets can be used to probe other users' order ids.
