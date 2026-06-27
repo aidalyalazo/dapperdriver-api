@@ -319,20 +319,18 @@ router.get(
     if (error) throw new Error(error.message);
 
     // Pre-accept privacy (#14): an UNASSIGNED order is visible to the whole driver
-    // pool, so don't broadcast the customer's exact home. Show only the delivery
-    // AREA (city/state/zip) + the boutique pickup; the full street address + coords +
-    // name are revealed on the assigned-deliveries feed once a driver accepts.
-    const asObj = (v) => {
-      if (v && typeof v === 'object') return v;
-      if (typeof v === 'string') { try { const o = JSON.parse(v); return (o && typeof o === 'object') ? o : null; } catch { return null; } }
-      return null;
-    };
+    // pool, so don't broadcast the customer's exact home. Show only the delivery AREA,
+    // built from the structured delivery_city/state/zip COLUMNS (delivery_address is a
+    // free-form string that includes the street, and isn't always JSON-parseable). The
+    // full address + coords + name are revealed on the assigned feed once a driver
+    // accepts. We put the coarse area into `delivery_address` because that's the field
+    // the driver app's card renders (via formatAddress).
     const deliveries = (data || []).map(d => {
-      const a = asObj(d.delivery_address);
-      const coarse = a ? { city: a.city ?? null, state: a.state ?? null, zip: a.zip ?? null } : null;
+      const hasArea = d.delivery_city || d.delivery_state || d.delivery_zip;
+      const coarse = { city: d.delivery_city ?? null, state: d.delivery_state ?? null, zip: d.delivery_zip ?? null };
       return {
         ...d,
-        delivery_address: (typeof d.delivery_address === 'string' && coarse) ? JSON.stringify(coarse) : coarse,
+        delivery_address: hasArea ? JSON.stringify(coarse) : null,
         delivery_lat: null,
         delivery_lng: null,
         customer_name: null,
