@@ -235,15 +235,10 @@ async function assignDriverToOrder(order, driver, boutiqueLat, boutiqueLng) {
   // so 'online'/'offline' stays the driver's own availability toggle and one
   // driver can carry up to max_active_orders deliveries at once.
 
-  await Promise.resolve(supabaseAdmin
-    .from('order_timeline')
-    .insert({
-      order_id: orderId,
-      status: 'driver_assigned',
-      note: `Driver assigned (${dist.toFixed(1)} miles away)`,
-      created_by: 'system',
-    }))
-    .catch(() => {});
+  // #13: no manual order_timeline insert here — the DB trigger already writes the
+  // 'driver_assigned' row (with its required NOT NULL label) on the status change.
+  // The old manual insert used dead columns (note/created_by) AND omitted label, so it
+  // never landed; it was redundant with the trigger anyway.
 
   // Notify driver
   if (driver.fcm_token) {

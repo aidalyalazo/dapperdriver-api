@@ -107,7 +107,7 @@ router.patch(
 
 /**
  * PATCH /api/v1/drivers/me/status
- * Toggle driver availability (available | offline | on_delivery).
+ * Toggle driver availability (online | offline | busy).
  */
 router.patch(
   '/me/status',
@@ -318,12 +318,30 @@ router.get(
 
     if (error) throw new Error(error.message);
 
-    const deliveries = (data || []).map(d => ({
-      ...d,
-      boutique_name: d.boutiques?.name || 'Store',
-      boutique_logo: d.boutiques?.logo_url || null,
-      boutique_address: d.boutiques?.address || null,
-    }));
+    // Pre-accept privacy (#14): an UNASSIGNED order is visible to the whole driver
+    // pool, so don't broadcast the customer's exact home. Show only the delivery
+    // AREA (city/state/zip) + the boutique pickup; the full street address + coords +
+    // name are revealed on the assigned-deliveries feed once a driver accepts.
+    const asObj = (v) => {
+      if (v && typeof v === 'object') return v;
+      if (typeof v === 'string') { try { const o = JSON.parse(v); return (o && typeof o === 'object') ? o : null; } catch { return null; } }
+      return null;
+    };
+    const deliveries = (data || []).map(d => {
+      const a = asObj(d.delivery_address);
+      const coarse = a ? { city: a.city ?? null, state: a.state ?? null, zip: a.zip ?? null } : null;
+      return {
+        ...d,
+        delivery_address: (typeof d.delivery_address === 'string' && coarse) ? JSON.stringify(coarse) : coarse,
+        delivery_lat: null,
+        delivery_lng: null,
+        customer_name: null,
+        customer_phone: null,
+        boutique_name: d.boutiques?.name || 'Store',
+        boutique_logo: d.boutiques?.logo_url || null,
+        boutique_address: d.boutiques?.address || null,
+      };
+    });
 
     res.json({ deliveries });
   })
@@ -373,6 +391,12 @@ router.post(
         error: 'Order cannot be declined — it may already be picked up or assigned to someone else.',
       });
     }
+
+    // #11: re-broadcast the released order so other drivers are offered it again,
+    // instead of it sitting in the pool until the stalled sweep eventually notices.
+    require('../services/driverAssignmentService')
+      .broadcastAvailableOrder(req.params.orderId).catch(() => {});
+
     res.json(data);
   })
 );
@@ -428,7 +452,9 @@ router.get(
     let q = supabaseAdmin
       .from('drivers')
       .select('id, user_id, full_name, phone, city_id, rating, vehicle_make, vehicle_color, license_plate')
-      .eq('status', 'available');
+      // #5: drivers set 'online' when available (see PATCH /me/status) — never 'available',
+      // so this list was always empty. 'busy' = on a delivery (at capacity), excluded.
+      .eq('status', 'online');
 
     if (city) q = q.eq('city_id', city);
 

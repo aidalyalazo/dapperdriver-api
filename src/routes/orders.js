@@ -132,17 +132,10 @@ router.post(
       if (tipsRefunded) console.log(`[REFUND] also refunded ${tipsRefunded} tip charge(s) for order ${orderId}`);
     }
 
-    // Log to timeline (fire-and-forget)
-    supabaseAdmin
-      .from('order_timeline')
-      .insert({
-        order_id: orderId,
-        status: 'refunded',
-        note: `Refund of $${actualAmount.toFixed(2)} processed`,
-        created_by: req.userId,
-        timestamp: new Date().toISOString(),
-      })
-      .then(() => {}, () => {});
+    // #13: no order_timeline row here — the order_status enum has no 'refunded' value
+    // (the old insert also used dead columns note/created_by), so it never landed. The
+    // refund is already recorded via refund_amount/refunded_at, the shopper notification
+    // below, the after-payout admin alert above, and the Stripe refund record.
 
     // Notify the shopper of the refund — otherwise the money just reappears on
     // their card with no in-app explanation. Best-effort (never fail the refund).
