@@ -29,7 +29,8 @@ async function processTimedOutRefunds() {
       .select(`
         id,
         stripe_payment_intent_id,
-        shopper_id
+        shopper_id,
+        decline_reason
       `)
       .eq('status', 'cancelled')
       .eq('payment_status', 'refund_pending')
@@ -76,23 +77,33 @@ async function processTimedOutRefunds() {
             .then(() => {}, (e) => console.warn(`[TIMEOUT PROCESSOR] stock restore failed for ${order.id}:`, e?.message));
         }
 
-        // FCM push to shopper (disabled — push_token not yet implemented)
-        const token = null;
+        // Reason-aware message — this processor handles boutique-timeout, no-driver,
+        // AND uncollected-pickup cancels, so the copy must not always blame the boutique.
+        const msg =
+          order.decline_reason === 'no_driver'
+            ? { title: '❌ Order Cancelled', body: 'We couldn\'t find an available driver. A full refund is on its way.' }
+          : order.decline_reason === 'uncollected_pickup'
+            ? { title: '❌ Pickup Cancelled', body: 'Your pickup order wasn\'t collected in time, so we cancelled it — you haven\'t been charged.' }
+            : { title: '❌ Order Cancelled', body: 'The boutique didn\'t respond in time. A full refund is on its way.' };
+
+        // FCM push to shopper (was hardcoded null → no push ever sent). Looks up the
+        // shopper's token; actually delivers once APNs/Firebase is configured.
+        let token = null;
+        try {
+          const { data: sh } = await supabaseAdmin
+            .from('shoppers').select('fcm_token').eq('user_id', order.shopper_id).maybeSingle();
+          token = sh?.fcm_token || null;
+        } catch (_) { /* non-fatal */ }
         if (token) {
-          await sendOrderNotification({
-            tokens: [token],
-            title: '❌ Order Cancelled',
-            body: 'The boutique didn\'t respond in time. Full refund on its way.',
-            orderId: order.id,
-          }).catch(() => {});
+          await sendOrderNotification({ tokens: [token], title: msg.title, body: msg.body, orderId: order.id }).catch(() => {});
         }
 
         // Notification table row
         await Promise.resolve(supabaseAdmin.from('notifications').insert({
           user_id:   order.shopper_id,
           type:      'order_cancelled',
-          title:     '❌ Order Cancelled',
-          body:      'Boutique did not respond in time. Full refund on its way.',
+          title:     msg.title,
+          body:      msg.body,
           data:      { order_id: order.id },
           is_read:   false,
           sent_push: !!token,

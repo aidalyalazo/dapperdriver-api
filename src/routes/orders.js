@@ -124,6 +124,14 @@ router.post(
       }).catch(() => {});
     }
 
+    // #4: a FULL refund must also reverse any separate post-delivery tip charges —
+    // they're off-session PIs, not part of the order PI the refund above touched.
+    // (Partial refunds keep the tip: the order was still delivered.)
+    if (isFullRefund) {
+      const tipsRefunded = await require('../utils/tipRefund').refundOrderTips(orderId);
+      if (tipsRefunded) console.log(`[REFUND] also refunded ${tipsRefunded} tip charge(s) for order ${orderId}`);
+    }
+
     // Log to timeline (fire-and-forget)
     supabaseAdmin
       .from('order_timeline')

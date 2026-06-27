@@ -148,7 +148,12 @@ router.get(
     const { category, in_stock, page = 1, limit = 40 } = req.query;
     let q = supabaseAdmin
       .from('products')
-      .select('*', { count: 'exact' })
+      // Explicit columns on this PUBLIC endpoint — excludes confidential wholesale `cost`
+      // (mirrors the allow-list in products.js; this boutique-scoped route was missed).
+      .select(
+        `id, boutique_id, name, description, category, price, compare_price, stock, low_stock_threshold, sku, images, colors, sizes, tags, status, total_sold, created_at, updated_at, source, rating, review_count, available_sizes, style_tags, color_tags, is_on_sale, sale_price, size_inventory, material_composition, variant_stock`,
+        { count: 'exact' }
+      )
       .eq('boutique_id', req.params.id)
       .range((page - 1) * limit, page * limit - 1);
 

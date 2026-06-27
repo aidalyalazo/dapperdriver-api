@@ -24,6 +24,9 @@ const STALL_MINUTES = 12; // start re-broadcasting the driver search after this 
 // can batch the pickup with other orders; express stays tight to keep its promise.
 const STANDARD_TIMEOUT_MINUTES = 150; // 2.5 hours
 const EXPRESS_TIMEOUT_MINUTES  = 60;
+// Pickup never collected → cancel + void the auth before Stripe's ~7-day auth expiry.
+// Generous customer grace while staying safely under the 168 h hard limit. (Business knob.)
+const PICKUP_UNCOLLECTED_HOURS = 120; // 5 days
 
 async function sweepStalledOrders() {
   try {
@@ -125,6 +128,46 @@ async function sweepStalledOrders() {
       Promise.resolve(broadcastAvailableOrder(order.id)).catch((e) =>
         console.error('[STALLED SWEEP] Re-broadcast failed:', order.id, e.message)
       );
+    }
+
+    // ── Pickup orders the shopper never collected ───────────────────────────
+    // A pickup order sits at ready_for_pickup until the shopper marks it picked_up.
+    // If they never collect, nothing rescues it (the no-driver sweep above is
+    // delivery-only; the cancel endpoint can't touch ready_for_pickup), so the Stripe
+    // auth (requires_capture) would silently expire at ~7 days — boutique unpaid,
+    // inventory still decremented. Cancel before that: orderTimeoutProcessor then voids
+    // the uncaptured auth (no charge), restores stock, and notifies the shopper.
+    const pickupCutoff = new Date(Date.now() - PICKUP_UNCOLLECTED_HOURS * 3600 * 1000).toISOString();
+    const { data: stuckPickups, error: pickupErr } = await supabaseAdmin
+      .from('orders')
+      .select('id, boutique_id')
+      .eq('status', 'ready_for_pickup')
+      .eq('fulfillment_type', 'pickup')
+      .lt('updated_at', pickupCutoff);
+
+    if (pickupErr) {
+      console.error('[STALLED SWEEP] Pickup query failed:', pickupErr.message);
+    } else {
+      for (const order of stuckPickups || []) {
+        // Atomic status gate — only one sweep run wins
+        const { data: cancelled } = await supabaseAdmin
+          .from('orders')
+          .update({ status: 'cancelled', payment_status: 'refund_pending', cancelled_at: new Date().toISOString(), decline_reason: 'uncollected_pickup' })
+          .eq('id', order.id)
+          .eq('status', 'ready_for_pickup')
+          .select('id')
+          .single();
+        if (!cancelled) continue;
+
+        // 'cancelled' timeline row is written by the DB trigger; the void + stock
+        // restore + reason-aware shopper notification are handled by orderTimeoutProcessor.
+        await notifyAdmins({
+          type: 'pickup_uncollected_cancelled',
+          title: '🚨 Pickup auto-cancelled — not collected',
+          body: `Pickup order ${order.id.slice(0, 8)} was not collected within ${PICKUP_UNCOLLECTED_HOURS}h. Auth voided, stock restored.`,
+          data: { order_id: order.id, boutique_id: order.boutique_id },
+        });
+      }
     }
 
     // NOTE: "stuck in active delivery" (picked up but not marked delivered) is no
