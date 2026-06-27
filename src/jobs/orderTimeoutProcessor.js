@@ -58,11 +58,29 @@ async function processTimedOutRefunds() {
 
     for (const order of orders) {
       try {
-        // Issue Stripe refund
-        await stripe.paymentIntents.cancel(order.stripe_payment_intent_id).catch(async () => {
-          // Already captured — issue a refund instead
-          await stripe.refunds.create({ payment_intent: order.stripe_payment_intent_id });
-        });
+        // Reverse the payment based on the PI's ACTUAL state, tolerating terminal cases
+        // so an order can never get stuck retrying forever (found in E2E testing: an
+        // already-canceled auth threw 'no successful charge' on every run, re-processing
+        // the same order every 2 min indefinitely):
+        //   - authorized (requires_capture/etc.) -> void the auth (no charge)
+        //   - captured (succeeded w/ amount)      -> refund it
+        //   - already canceled / no charge        -> nothing to reverse (never charged)
+        let reversed = true;
+        try {
+          const pi = await stripe.paymentIntents.retrieve(order.stripe_payment_intent_id);
+          if (['requires_capture', 'requires_confirmation', 'requires_payment_method', 'requires_action', 'processing'].includes(pi.status)) {
+            await stripe.paymentIntents.cancel(order.stripe_payment_intent_id);
+          } else if (pi.status === 'succeeded' && (pi.amount_received || 0) > 0) {
+            await stripe.refunds.create({ payment_intent: order.stripe_payment_intent_id });
+          }
+          // pi.status === 'canceled' -> already void, customer never charged: nothing to do.
+        } catch (e) {
+          // already-canceled / already-refunded / no-charge are terminal-good (money not
+          // owed); anything else is a real failure — leave refund_pending to retry next run.
+          const benign = /already.*cancel|already.*refund|no such|does not have a successful charge|already been captured/i.test(e.message || '');
+          if (!benign) { reversed = false; console.error(`[TIMEOUT PROCESSOR] reverse failed for ${order.id}:`, e.message); }
+        }
+        if (!reversed) continue;
 
         // Mark refunded in DB
         const { error: updErr } = await supabaseAdmin

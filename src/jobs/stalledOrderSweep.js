@@ -44,9 +44,9 @@ async function sweepStalledOrders() {
       console.error('[STALLED SWEEP] Query failed:', error.message);
       return;
     }
-    if (!stalled || stalled.length === 0) return;
-
-    for (const order of stalled) {
+    // Do NOT early-return on no stalled deliveries — the pickup sweep further down
+    // must still run. Just skip the delivery loop when it's empty.
+    for (const order of (stalled || [])) {
       const ageMinutes = (Date.now() - new Date(order.created_at).getTime()) / 60000;
 
       const { data: restarts } = await supabaseAdmin
