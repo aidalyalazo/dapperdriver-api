@@ -287,6 +287,9 @@ router.get(
       // retain the customer's home address (matches orderController.js + the
       // hosted privacy policy). Active deliveries still need it for navigation.
       delivery_address: ['delivered', 'completed'].includes(d.status) ? null : d.delivery_address,
+      delivery_city:  ['delivered', 'completed'].includes(d.status) ? null : d.delivery_city,
+      delivery_state: ['delivered', 'completed'].includes(d.status) ? null : d.delivery_state,
+      delivery_zip:   ['delivered', 'completed'].includes(d.status) ? null : d.delivery_zip,
       boutique_name: d.boutiques?.name || 'Store',
       boutique_logo: d.boutiques?.logo_url || null,
       boutique_address: d.boutiques?.address || null,
