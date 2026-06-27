@@ -476,7 +476,7 @@ const cancelOrder = [
     // charges (off-session PIs, not covered by the order void/refund above). A tip
     // can only exist if the order had a PI. Best-effort; never blocks the cancel.
     if (orderRow.stripe_payment_intent_id) {
-      const tipsRefunded = await require('../utils/tipRefund').refundOrderTips(orderId);
+      const tipsRefunded = await require('../utils/tipRefund').refundOrderTips(orderId, orderRow.stripe_payment_intent_id);
       if (tipsRefunded) console.log(`[ORDER] Cancel also refunded ${tipsRefunded} tip charge(s) for ${orderId}`);
     }
 

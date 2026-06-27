@@ -128,7 +128,7 @@ router.post(
     // they're off-session PIs, not part of the order PI the refund above touched.
     // (Partial refunds keep the tip: the order was still delivered.)
     if (isFullRefund) {
-      const tipsRefunded = await require('../utils/tipRefund').refundOrderTips(orderId);
+      const tipsRefunded = await require('../utils/tipRefund').refundOrderTips(orderId, order.stripe_payment_intent_id);
       if (tipsRefunded) console.log(`[REFUND] also refunded ${tipsRefunded} tip charge(s) for order ${orderId}`);
     }
 
