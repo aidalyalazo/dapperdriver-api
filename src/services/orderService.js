@@ -964,9 +964,24 @@ async function updateOrderStatus({ orderId, newStatus, actorId, driverId }) {
         console.error('[ORDER] Payment not captured at delivery — review needed', {
           orderId: order.id, boutiqueId: order.boutique_id,
         });
+        // #5: the order is delivered but payment is still 'authorized' — it will NEVER
+        // pay out (cashOut requires payment_status='paid') and no job retries the
+        // capture. Alert admins to capture/refund manually instead of losing it silently.
+        require('../utils/adminAlerts').notifyAdmins({
+          type: 'capture_failed_at_delivery',
+          title: '🔴 Payment NOT captured at delivery — money at risk',
+          body: `Order ${String(orderId).slice(0, 8)} is marked ${newStatus} but its payment is still authorized (capture did not settle) — it will NOT pay out until captured. Capture or refund it manually in Stripe.`,
+          data: { order_id: orderId, boutique_id: order.boutique_id, payment_intent: order.stripe_payment_intent_id },
+        }).catch(() => {});
       }
     } catch (e) {
-      console.warn('[ORDER] Payment capture on delivery/completion failed:', e.message);
+      console.error('[ORDER] Payment capture on delivery/completion FAILED:', e.message);
+      require('../utils/adminAlerts').notifyAdmins({
+        type: 'capture_failed_at_delivery',
+        title: '🔴 Payment capture threw at delivery — money at risk',
+        body: `Order ${String(orderId).slice(0, 8)} is marked ${newStatus} but capturing its payment threw: ${e.message}. It will NOT pay out until resolved. Capture or refund manually in Stripe.`,
+        data: { order_id: orderId, boutique_id: order.boutique_id, payment_intent: order.stripe_payment_intent_id },
+      }).catch(() => {});
     }
 
     // Refresh the shopper's denormalized lifetime stats (best-effort; never blocks
@@ -1058,11 +1073,32 @@ async function assignDriver({ orderId, driverId }) {
   // Resolve drivers.id from drivers.user_id (auth UUID)
   const { data: driverRow } = await supabaseAdmin
     .from('drivers')
-    .select('id')
+    .select('id, is_approved, max_active_orders')
     .eq('user_id', driverId)
     .single();
 
   const driverTableId = driverRow?.id || driverId; // fallback keeps existing behaviour
+
+  // #9: the live accept path must enforce approval + capacity. assignDriver was the only
+  // assign path that skipped both, so drivers.max_active_orders was effectively unenforced
+  // and an unapproved driver could self-accept. (Only block on EXPLICIT is_approved=false
+  // so legacy rows with a null flag aren't locked out; the capacity gate still applies.)
+  if (driverRow && driverRow.is_approved === false) {
+    throw Object.assign(new Error('Your driver account is not approved yet.'), { status: 403 });
+  }
+  if (driverRow) {
+    const max = driverRow.max_active_orders || 1;
+    const { count } = await supabaseAdmin
+      .from('orders').select('id', { count: 'exact', head: true })
+      .eq('driver_id', driverTableId)
+      .in('status', ['driver_assigned', 'picked_up', 'out_for_delivery']);
+    if ((count || 0) >= max) {
+      throw Object.assign(
+        new Error('You\'re at your active-delivery limit — finish a current delivery before accepting another.'),
+        { status: 409, code: 'DRIVER_AT_CAPACITY' }
+      );
+    }
+  }
 
   return updateOrderStatus({
     orderId,

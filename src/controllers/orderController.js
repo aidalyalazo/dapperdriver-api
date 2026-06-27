@@ -208,7 +208,10 @@ const listOrders = asyncHandler(async (req, res) => {
       .select('id')
       .eq('user_id', req.userId)
       .single();
-    if (boutique) filters.boutiqueId = boutique.id;
+    // Fail CLOSED: a 'boutique' role with no boutiques row must NOT fall through to an
+    // unscoped query — that returned EVERY order on the platform (cross-tenant PII). #2
+    if (!boutique) return res.json({ orders: [], total: 0, page: filters.page, limit: filters.limit });
+    filters.boutiqueId = boutique.id;
   }
   if (role === 'driver') {
     // orders.driver_id stores drivers.id (not the auth user id) — resolve it.
