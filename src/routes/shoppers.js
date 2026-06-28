@@ -140,9 +140,11 @@ router.post(
   ],
   asyncHandler(async (req, res) => {
     const { street, city, zip, label, is_default } = req.body;
-    // #60: store US state as a 2-letter uppercase code so the same-state delivery rule
-    // (boutique.state vs address.state) compares reliably regardless of input casing.
-    const state = req.body.state ? String(req.body.state).trim().toUpperCase() : req.body.state;
+    // #60: store US state as a canonical 2-letter code (normalizeState resolves both
+    // 'Illinois' and 'il' → 'IL'; falls back to trimmed-uppercase for anything it can't
+    // resolve) so the same-state delivery rule compares reliably.
+    const { normalizeState } = require('../utils/usStates');
+    const state = req.body.state ? (normalizeState(req.body.state) || String(req.body.state).trim().toUpperCase()) : req.body.state;
 
     // If setting as default, unset others
     if (is_default) {
@@ -256,8 +258,11 @@ router.patch(
     const updates = Object.fromEntries(
       Object.entries(req.body).filter(([k]) => allowed.includes(k))
     );
-    // #60: normalize state to 2-letter uppercase (see POST above).
-    if (updates.state) updates.state = String(updates.state).trim().toUpperCase();
+    // #60: normalize state to a canonical 2-letter code (see POST above).
+    if (updates.state) {
+      const { normalizeState } = require('../utils/usStates');
+      updates.state = normalizeState(updates.state) || String(updates.state).trim().toUpperCase();
+    }
 
     // If setting as default, unset others
     if (updates.is_default) {

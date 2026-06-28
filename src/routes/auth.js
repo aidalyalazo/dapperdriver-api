@@ -156,7 +156,7 @@ router.post(
         const { error: addrErr } = await supabaseAdmin.from('shopper_addresses').insert({
           shopper_id: userId,
           street: addr.street || null, city: addr.city || null,
-          state: addr.state ? String(addr.state).trim().toUpperCase() : null, zip: addr.zip || null,
+          state: addr.state ? (require('../utils/usStates').normalizeState(addr.state) || String(addr.state).trim().toUpperCase()) : null, zip: addr.zip || null,
           label: addr.label || 'Home', is_default: true,
         });
         if (addrErr) console.warn('[REGISTER] address save failed (non-fatal):', addrErr.message);

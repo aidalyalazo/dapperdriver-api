@@ -58,7 +58,7 @@ router.post(
 
     const { data: order } = await supabaseAdmin
       .from('orders')
-      .select('stripe_payment_intent_id, total_amount, subtotal, boutique_earnings, dd_commission_amount, shopper_id, order_number')
+      .select('stripe_payment_intent_id, total_amount, subtotal, boutique_earnings, dd_commission_amount, refund_amount, shopper_id, order_number')
       .eq('id', orderId)
       .single();
 
@@ -68,9 +68,10 @@ router.post(
       throw Object.assign(new Error('No payment to refund'), { status: 400 });
     }
 
-    if (amount && amount > parseFloat(order.total_amount)) {
+    const priorRefund = parseFloat(order.refund_amount) || 0;
+    if (amount && priorRefund + amount > parseFloat(order.total_amount) + 0.005) {
       throw Object.assign(
-        new Error(`Refund amount $${amount} exceeds order total $${order.total_amount}`),
+        new Error(`Refund of $${amount} would exceed the remaining refundable balance ($${(parseFloat(order.total_amount) - priorRefund).toFixed(2)})`),
         { status: 400 }
       );
     }
@@ -92,30 +93,36 @@ router.post(
     }
 
     const actualAmount = refundAmount ? amount : parseFloat(order.total_amount);
-    const isFullRefund = !refundAmount || actualAmount >= parseFloat(order.total_amount);
+    // refund_amount is CUMULATIVE — a 2nd partial refund adds to the prior total. (The
+    // Stripe charge.refunded webhook also writes the cumulative figure; writing it here too
+    // keeps it correct even if that webhook is delayed or unregistered.)
+    const cumulativeRefund = Math.round((priorRefund + actualAmount) * 100) / 100;
+    const isFullRefund = !refundAmount || cumulativeRefund >= parseFloat(order.total_amount) - 0.005;
 
-    // M3: only a FULL refund flips payment_status to 'refunded' (which removes the
-    // order from cash-out — payoutService requires payment_status='paid'). A PARTIAL
-    // refund must leave the order payout-eligible; otherwise the boutique/driver lose
-    // the ENTIRE unrefunded remainder, not just their share of the refund. refund_amount
-    // records the partial either way. (Allocating a partial refund across
-    // boutique/platform/driver via reduced earnings is a tracked policy follow-up.)
-    const updatePayload = { refund_amount: actualAmount };
+    // M3: only a FULL refund flips payment_status to 'refunded' (which removes the order
+    // from cash-out — payoutService requires payment_status='paid'). A PARTIAL refund must
+    // leave the order payout-eligible; otherwise the boutique/driver lose the ENTIRE
+    // unrefunded remainder, not just their share of the refund.
+    const updatePayload = { refund_amount: cumulativeRefund };
     if (isFullRefund) {
       updatePayload.payment_status = 'refunded';
       updatePayload.refunded_at = new Date().toISOString();
     } else {
-      // #53/#10: allocate the PARTIAL refund instead of letting the platform absorb it.
-      // Reduce boutique earnings + commission in proportion to the refunded fraction of
-      // the SUBTOTAL (a partial refund is for the boutique's goods; the driver fee, tip,
-      // and tax are untouched — the delivery still happened). Previously cash-out paid the
-      // boutique its FULL pre-refund earnings and the platform ate the whole refund.
-      const subtotal = parseFloat(order.subtotal) || parseFloat(order.total_amount) || 0;
-      if (subtotal > 0 && order.boutique_earnings != null) {
-        const frac = Math.min(1, actualAmount / subtotal);
-        updatePayload.boutique_earnings = Math.round(parseFloat(order.boutique_earnings) * (1 - frac) * 100) / 100;
+      // #53/#10: claw THIS refund back from the boutique's share so the platform doesn't
+      // absorb it at cash-out. Denominator is the REMAINING goods value
+      // (boutique_earnings + commission = subtotal minus what prior refunds already
+      // removed), NOT the original subtotal — so repeat partial refunds subtract
+      // marginally instead of compounding multiplicatively, and a refund that exceeds the
+      // remaining goods (because it also covers delivery/tax/tip) clamps to the goods
+      // rather than over-reducing. Driver fee, tip, and tax are untouched.
+      const curEarn = parseFloat(order.boutique_earnings);
+      const curComm = parseFloat(order.dd_commission_amount) || 0;
+      const remainingGoods = (Number.isFinite(curEarn) ? curEarn : 0) + curComm;
+      if (remainingGoods > 0 && Number.isFinite(curEarn)) {
+        const frac = Math.min(1, actualAmount / remainingGoods);
+        updatePayload.boutique_earnings = Math.round(curEarn * (1 - frac) * 100) / 100;
         if (order.dd_commission_amount != null) {
-          updatePayload.dd_commission_amount = Math.round(parseFloat(order.dd_commission_amount) * (1 - frac) * 100) / 100;
+          updatePayload.dd_commission_amount = Math.round(curComm * (1 - frac) * 100) / 100;
         }
       }
     }

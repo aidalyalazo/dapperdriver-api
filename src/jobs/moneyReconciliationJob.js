@@ -31,7 +31,7 @@ async function reconcileMoney() {
       .from('orders')
       .select('id, status, payment_status, fulfillment_type, stripe_payment_intent_id, ' +
               'subtotal, delivery_fee, service_fee, tax, tip, promo_discount, total_amount, ' +
-              'dd_commission_amount, boutique_earnings, driver_earnings, boutique_paid, driver_paid, updated_at')
+              'dd_commission_amount, boutique_earnings, driver_earnings, boutique_paid, driver_paid, refund_amount, updated_at')
       .gte('updated_at', since)
       .limit(2000);
 
@@ -45,9 +45,14 @@ async function reconcileMoney() {
     const n = (v) => Number(v || 0);
 
     for (const o of orders) {
-      const splitDrift = Math.abs(n(o.boutique_earnings) + n(o.dd_commission_amount) - n(o.subtotal));
-      if (splitDrift > CENT) {
-        issues.push(`order ${o.id.slice(0, 8)}: boutique_earnings + commission (${(n(o.boutique_earnings) + n(o.dd_commission_amount)).toFixed(2)}) ≠ subtotal (${n(o.subtotal).toFixed(2)})`);
+      // A partial refund intentionally reduces boutique_earnings + commission below
+      // subtotal (the refunded goods are clawed back from the split), so the gross
+      // split-invariant only holds for orders with no refund. (#53)
+      if (!(n(o.refund_amount) > 0)) {
+        const splitDrift = Math.abs(n(o.boutique_earnings) + n(o.dd_commission_amount) - n(o.subtotal));
+        if (splitDrift > CENT) {
+          issues.push(`order ${o.id.slice(0, 8)}: boutique_earnings + commission (${(n(o.boutique_earnings) + n(o.dd_commission_amount)).toFixed(2)}) ≠ subtotal (${n(o.subtotal).toFixed(2)})`);
+        }
       }
 
       const expectedTotal = n(o.subtotal) + n(o.delivery_fee) + n(o.service_fee) + n(o.tax) + n(o.tip) - n(o.promo_discount);

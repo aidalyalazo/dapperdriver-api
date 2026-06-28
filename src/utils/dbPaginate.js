@@ -9,12 +9,14 @@
  * builder can't be re-ranged after it's been awaited), e.g.:
  *   fetchAllRows(() => supabaseAdmin.from('orders').select('x').eq('y', z))
  *
- * Returns the same `{ data, error }` shape as a normal query so callers stay unchanged.
+ * A stable `.order('id')` is applied internally so .range() pages don't overlap or skip
+ * rows under concurrent writes — every paginated table here (orders, product_reviews) has
+ * an `id` column. Returns the same `{ data, error }` shape so callers stay unchanged.
  */
 async function fetchAllRows(buildQuery, pageSize = 1000) {
   const all = [];
   for (let from = 0; ; from += pageSize) {
-    const { data, error } = await buildQuery().range(from, from + pageSize - 1);
+    const { data, error } = await buildQuery().order('id', { ascending: true }).range(from, from + pageSize - 1);
     if (error) return { data: all, error };
     if (!data || data.length === 0) break;
     all.push(...data);
