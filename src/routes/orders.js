@@ -58,7 +58,7 @@ router.post(
 
     const { data: order } = await supabaseAdmin
       .from('orders')
-      .select('stripe_payment_intent_id, total_amount, shopper_id, order_number')
+      .select('stripe_payment_intent_id, total_amount, subtotal, boutique_earnings, dd_commission_amount, shopper_id, order_number')
       .eq('id', orderId)
       .single();
 
@@ -104,6 +104,20 @@ router.post(
     if (isFullRefund) {
       updatePayload.payment_status = 'refunded';
       updatePayload.refunded_at = new Date().toISOString();
+    } else {
+      // #53/#10: allocate the PARTIAL refund instead of letting the platform absorb it.
+      // Reduce boutique earnings + commission in proportion to the refunded fraction of
+      // the SUBTOTAL (a partial refund is for the boutique's goods; the driver fee, tip,
+      // and tax are untouched — the delivery still happened). Previously cash-out paid the
+      // boutique its FULL pre-refund earnings and the platform ate the whole refund.
+      const subtotal = parseFloat(order.subtotal) || parseFloat(order.total_amount) || 0;
+      if (subtotal > 0 && order.boutique_earnings != null) {
+        const frac = Math.min(1, actualAmount / subtotal);
+        updatePayload.boutique_earnings = Math.round(parseFloat(order.boutique_earnings) * (1 - frac) * 100) / 100;
+        if (order.dd_commission_amount != null) {
+          updatePayload.dd_commission_amount = Math.round(parseFloat(order.dd_commission_amount) * (1 - frac) * 100) / 100;
+        }
+      }
     }
     // If already paid out before the refund it's a real loss with no auto-reversal —
     // surfaced below (the daily money-reconcile job is the backstop).
