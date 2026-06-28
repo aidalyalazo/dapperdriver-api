@@ -955,16 +955,21 @@ router.patch(
   validate,
   asyncHandler(async (req, res) => {
     const { status } = req.body;
-
-    const { data, error } = await supabaseAdmin
-      .from('orders')
-      .update({ status })
-      .eq('id', req.params.id)
-      .select()
-      .single();
-
-    if (error) throw new Error(error.message);
-    res.json(data);
+    const orderService = require('../services/orderService');
+    // #4: route through the state machine so an admin status change gets the same
+    // transition validation + payment-capture/refund + inventory side-effects the role
+    // endpoints get. The old raw .update bypassed all of it — e.g. setting 'delivered'
+    // never captured the PI, 'cancelled' never refunded or restored stock.
+    try {
+      const updated = await orderService.updateOrderStatus({
+        orderId: req.params.id,
+        newStatus: status,
+        actorId: req.userId,
+      });
+      res.json(updated);
+    } catch (e) {
+      return res.status(e.status || 400).json({ error: e.message, code: e.code });
+    }
   })
 );
 
@@ -1897,6 +1902,26 @@ router.post(
       .maybeSingle();
     if (error) throw new Error(error.message);
     if (!updated) return res.status(409).json({ error: 'Order is not ready for pickup or already has a driver assigned.' });
+
+    // #6: notify the driver + shopper of the manual assignment (this path previously
+    // sent nothing, unlike the auto-assign and driver self-accept paths).
+    try {
+      const { sendOrderNotification } = require('../services/fcmService');
+      const [{ data: drv }, { data: shp }] = await Promise.all([
+        supabaseAdmin.from('drivers').select('user_id, fcm_token').eq('id', driverId).maybeSingle(),
+        supabaseAdmin.from('shoppers').select('fcm_token').eq('user_id', updated.shopper_id).maybeSingle(),
+      ]);
+      const dBody = `Order ${updated.order_number || ''} is ready for pickup.`.trim();
+      if (drv?.user_id) {
+        if (drv.fcm_token) sendOrderNotification({ tokens: [drv.fcm_token], title: '🚗 New delivery assigned', body: dBody, orderId }).catch(() => {});
+        await supabaseAdmin.from('notifications').insert({ user_id: drv.user_id, type: 'delivery_assigned', title: '🚗 New delivery assigned', body: dBody, data: { order_id: orderId }, is_read: false, sent_push: !!drv.fcm_token });
+      }
+      if (updated.shopper_id) {
+        const sBody = 'A driver is on the way to pick up your order.';
+        if (shp?.fcm_token) sendOrderNotification({ tokens: [shp.fcm_token], title: '🚗 Driver Assigned', body: sBody, orderId }).catch(() => {});
+        await supabaseAdmin.from('notifications').insert({ user_id: updated.shopper_id, type: 'driver_assigned', title: '🚗 Driver Assigned', body: sBody, data: { order_id: orderId }, is_read: false, sent_push: !!shp?.fcm_token });
+      }
+    } catch (e) { console.warn('[ADMIN ASSIGN] notification failed (non-fatal):', e?.message); }
 
     await Promise.resolve(supabaseAdmin.from('order_timeline').insert({
       order_id: orderId,

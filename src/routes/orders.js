@@ -203,6 +203,16 @@ router.post(
       throw Object.assign(new Error('This order was cancelled and cannot be tipped'), { status: 400 });
     }
 
+    // #58: only tip once the order is actually on its way or delivered. Tipping an
+    // earlier-stage order (then having it cancelled) charges the card for a delivery
+    // that never happened, and the tip is for the completed delivery anyway.
+    if (!['out_for_delivery', 'delivered', 'completed'].includes(order.status)) {
+      throw Object.assign(
+        new Error('You can add a tip once your order is on the way or delivered.'),
+        { status: 400, code: 'TIP_TOO_EARLY' }
+      );
+    }
+
     if (!order.stripe_payment_intent_id) {
       throw Object.assign(new Error('No payment intent found'), { status: 400 });
     }
