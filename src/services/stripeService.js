@@ -344,7 +344,24 @@ async function payoutDriver({ driverId, amount, stripeAccountId, orderIds }) {
     return null;
   }
 
-  const amountCents = Math.round(amount * 100);
+  // #58: transfer only for the orders we actually CLAIMED. If a concurrent/previous run
+  // already claimed some of orderIds, paying the caller's precomputed full `amount` would
+  // over-pay the driver for deliveries another run is settling. Recompute from the claimed
+  // subset whenever it differs from what was requested.
+  const claimedIds = claimed.map((c) => c.id);
+  let payAmount = amount;
+  if (claimedIds.length !== (Array.isArray(orderIds) ? orderIds.length : claimedIds.length)) {
+    const { data: claimedOrders } = await supabaseAdmin
+      .from('orders')
+      .select('driver_earnings, tip')
+      .in('id', claimedIds);
+    payAmount = (claimedOrders || []).reduce(
+      (s, o) => s + parseFloat(o.driver_earnings || 0) + parseFloat(o.tip || 0), 0
+    );
+    console.warn(`[Stripe] Driver ${driverId}: claimed ${claimedIds.length}/${orderIds.length} orders — paying recomputed $${payAmount.toFixed(2)} (not $${amount.toFixed(2)}).`);
+  }
+
+  const amountCents = Math.round(payAmount * 100);
 
   let transfer;
   try {
@@ -377,10 +394,10 @@ async function payoutDriver({ driverId, amount, stripeAccountId, orderIds }) {
     payout_number:     `PO-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
     period_start:      new Date().toISOString(),
     period_end:        new Date().toISOString(),
-    gross_amount:      amount,
-    net_amount:        amount,
-    amount,
-    order_count:       Array.isArray(orderIds) ? orderIds.length : null,
+    gross_amount:      payAmount,
+    net_amount:        payAmount,
+    amount:            payAmount,
+    order_count:       claimedIds.length,
     stripe_transfer_id: transfer.id,
     status:            'paid',
     paid_at:           new Date().toISOString(),
