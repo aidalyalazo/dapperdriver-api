@@ -69,27 +69,30 @@ router.post(
     }
 
     const priorRefund = parseFloat(order.refund_amount) || 0;
-    // POLICY: a customer refund returns ONLY the product cost (subtotal). The driver's
-    // delivery fee + tip and the service + delivery fees are non-refundable, and the driver
-    // is paid in full for a completed delivery — so the refund is capped at the product and
-    // the order NEVER flips out of payout-eligibility. (Full pre-delivery cancellations,
-    // which DO reverse everything and pay no driver, go through cancelOrder, not here.)
-    const productCost = parseFloat(order.subtotal)
+    // POLICY: a customer refund returns the product cost (subtotal) PLUS the sales tax that
+    // was charged on it. The driver's delivery fee + tip and the service + delivery fees are
+    // non-refundable, and the driver is paid in full for a completed delivery — so the refund
+    // is capped at (product + its tax) and the order NEVER flips out of payout-eligibility.
+    // (Full pre-delivery cancellations, which DO reverse everything and pay no driver, go
+    // through cancelOrder, not here.)
+    const goodsCost = parseFloat(order.subtotal)
       || ((parseFloat(order.boutique_earnings) || 0) + (parseFloat(order.dd_commission_amount) || 0))
       || parseFloat(order.total_amount);
-    const remainingProduct = Math.round((productCost - priorRefund) * 100) / 100;
-    if (remainingProduct <= 0.005) {
-      throw Object.assign(new Error('The product cost on this order has already been fully refunded. Delivery, service fee, and driver tip are non-refundable.'), { status: 400 });
+    const taxOnGoods = parseFloat(order.tax) || 0;
+    const refundableBase = goodsCost + taxOnGoods; // product + its tax
+    const remainingRefundable = Math.round((refundableBase - priorRefund) * 100) / 100;
+    if (remainingRefundable <= 0.005) {
+      throw Object.assign(new Error('The product + its tax on this order has already been fully refunded. Delivery, service fee, and driver tip are non-refundable.'), { status: 400 });
     }
-    if (amount && amount > remainingProduct + 0.005) {
+    if (amount && amount > remainingRefundable + 0.005) {
       throw Object.assign(
-        new Error(`Refunds are limited to the product total. The most refundable here is $${remainingProduct.toFixed(2)} — delivery, service fee, and driver tip are non-refundable, and the driver is paid in full.`),
+        new Error(`Refunds are limited to the product plus its tax. The most refundable here is $${remainingRefundable.toFixed(2)} — delivery, service fee, and driver tip are non-refundable, and the driver is paid in full.`),
         { status: 400 }
       );
     }
 
-    // Omitted/zero amount => refund the full remaining PRODUCT (never the fees/tip/total).
-    const effective = (amount != null && amount > 0) ? amount : remainingProduct;
+    // Omitted/zero amount => refund the full remaining PRODUCT + its tax (never delivery/service/tip).
+    const effective = (amount != null && amount > 0) ? amount : remainingRefundable;
     const refundAmount = Math.round(effective * 100);
     // L7: an uncaptured (requires_capture) PI has no charge to refund — refunds.create
     // would 500. Catch it and return a clean error pointing to cancel/void instead.
@@ -113,11 +116,11 @@ router.post(
     const cumulativeRefund = Math.round((priorRefund + actualAmount) * 100) / 100;
     const isFullRefund = !refundAmount || cumulativeRefund >= parseFloat(order.total_amount) - 0.005;
 
-    // Because the refund is capped at the product (above), a delivery order's cumulative
+    // Because the refund is capped at product + tax (above), a delivery order's cumulative
     // refund can never reach total_amount (which also holds the non-refundable delivery +
     // service fees + tip), so isFullRefund stays false, payment_status stays 'paid', the
     // order remains payout-eligible, and the DRIVER is always paid. 'refunded' is only
-    // reached when subtotal == total (no fees/tip — so there is no driver pay to protect).
+    // reached when product + tax == total (no fees/tip — so there is no driver pay to protect).
     const updatePayload = { refund_amount: cumulativeRefund };
     if (isFullRefund) {
       updatePayload.payment_status = 'refunded';
@@ -129,12 +132,15 @@ router.post(
       // removed), NOT the original subtotal — so repeat partial refunds subtract
       // marginally instead of compounding multiplicatively, and a refund that exceeds the
       // remaining goods (because it also covers delivery/tax/tip) clamps to the goods
-      // rather than over-reducing. Driver fee, tip, and tax are untouched.
+      // rather than over-reducing. Only the GOODS portion of the refund is clawed back from
+      // the boutique — the tax portion is pass-through (collected for the government, never
+      // the boutique's money) — and the driver fee + tip are untouched.
+      const goodsPortion = refundableBase > 0 ? actualAmount * (goodsCost / refundableBase) : actualAmount;
       const curEarn = parseFloat(order.boutique_earnings);
       const curComm = parseFloat(order.dd_commission_amount) || 0;
       const remainingGoods = (Number.isFinite(curEarn) ? curEarn : 0) + curComm;
       if (remainingGoods > 0 && Number.isFinite(curEarn)) {
-        const frac = Math.min(1, actualAmount / remainingGoods);
+        const frac = Math.min(1, goodsPortion / remainingGoods);
         updatePayload.boutique_earnings = Math.round(curEarn * (1 - frac) * 100) / 100;
         if (order.dd_commission_amount != null) {
           updatePayload.dd_commission_amount = Math.round(curComm * (1 - frac) * 100) / 100;
