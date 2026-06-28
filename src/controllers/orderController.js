@@ -223,6 +223,23 @@ const listOrders = asyncHandler(async (req, res) => {
   }
 
   const result = await orderService.listOrders(filters);
+
+  // Resolve the shopper's FIRST NAME for boutique/driver list views (mirrors getOrder —
+  // never expose full name/phone/email). Batched: one lookup for all orders in the page.
+  if ((role === 'boutique' || role === 'driver') && Array.isArray(result.orders) && result.orders.length) {
+    const { supabaseAdmin } = require('../config/supabase');
+    const shopperIds = [...new Set(result.orders.map((o) => o.shopper_id).filter(Boolean))];
+    if (shopperIds.length) {
+      const { data: shoppers } = await supabaseAdmin
+        .from('shoppers').select('user_id, display_name').in('user_id', shopperIds);
+      const firstName = Object.fromEntries((shoppers || []).map((s) => {
+        const dn = (s.display_name || '').trim();
+        return [s.user_id, dn ? dn.split(/\s+/)[0] : 'Customer'];
+      }));
+      for (const o of result.orders) o.customer_name = firstName[o.shopper_id] || 'Customer';
+    }
+  }
+
   // A driver can't see customer addresses for completed deliveries in history.
   if (role === 'driver' && Array.isArray(result.orders)) {
     for (const o of result.orders) {
