@@ -69,14 +69,28 @@ router.post(
     }
 
     const priorRefund = parseFloat(order.refund_amount) || 0;
-    if (amount && priorRefund + amount > parseFloat(order.total_amount) + 0.005) {
+    // POLICY: a customer refund returns ONLY the product cost (subtotal). The driver's
+    // delivery fee + tip and the service + delivery fees are non-refundable, and the driver
+    // is paid in full for a completed delivery — so the refund is capped at the product and
+    // the order NEVER flips out of payout-eligibility. (Full pre-delivery cancellations,
+    // which DO reverse everything and pay no driver, go through cancelOrder, not here.)
+    const productCost = parseFloat(order.subtotal)
+      || ((parseFloat(order.boutique_earnings) || 0) + (parseFloat(order.dd_commission_amount) || 0))
+      || parseFloat(order.total_amount);
+    const remainingProduct = Math.round((productCost - priorRefund) * 100) / 100;
+    if (remainingProduct <= 0.005) {
+      throw Object.assign(new Error('The product cost on this order has already been fully refunded. Delivery, service fee, and driver tip are non-refundable.'), { status: 400 });
+    }
+    if (amount && amount > remainingProduct + 0.005) {
       throw Object.assign(
-        new Error(`Refund of $${amount} would exceed the remaining refundable balance ($${(parseFloat(order.total_amount) - priorRefund).toFixed(2)})`),
+        new Error(`Refunds are limited to the product total. The most refundable here is $${remainingProduct.toFixed(2)} — delivery, service fee, and driver tip are non-refundable, and the driver is paid in full.`),
         { status: 400 }
       );
     }
 
-    const refundAmount = amount ? Math.round(amount * 100) : undefined;
+    // Omitted/zero amount => refund the full remaining PRODUCT (never the fees/tip/total).
+    const effective = (amount != null && amount > 0) ? amount : remainingProduct;
+    const refundAmount = Math.round(effective * 100);
     // L7: an uncaptured (requires_capture) PI has no charge to refund — refunds.create
     // would 500. Catch it and return a clean error pointing to cancel/void instead.
     let refund;
@@ -92,17 +106,18 @@ router.post(
       });
     }
 
-    const actualAmount = refundAmount ? amount : parseFloat(order.total_amount);
+    const actualAmount = effective;
     // refund_amount is CUMULATIVE — a 2nd partial refund adds to the prior total. (The
     // Stripe charge.refunded webhook also writes the cumulative figure; writing it here too
     // keeps it correct even if that webhook is delayed or unregistered.)
     const cumulativeRefund = Math.round((priorRefund + actualAmount) * 100) / 100;
     const isFullRefund = !refundAmount || cumulativeRefund >= parseFloat(order.total_amount) - 0.005;
 
-    // M3: only a FULL refund flips payment_status to 'refunded' (which removes the order
-    // from cash-out — payoutService requires payment_status='paid'). A PARTIAL refund must
-    // leave the order payout-eligible; otherwise the boutique/driver lose the ENTIRE
-    // unrefunded remainder, not just their share of the refund.
+    // Because the refund is capped at the product (above), a delivery order's cumulative
+    // refund can never reach total_amount (which also holds the non-refundable delivery +
+    // service fees + tip), so isFullRefund stays false, payment_status stays 'paid', the
+    // order remains payout-eligible, and the DRIVER is always paid. 'refunded' is only
+    // reached when subtotal == total (no fees/tip — so there is no driver pay to protect).
     const updatePayload = { refund_amount: cumulativeRefund };
     if (isFullRefund) {
       updatePayload.payment_status = 'refunded';
