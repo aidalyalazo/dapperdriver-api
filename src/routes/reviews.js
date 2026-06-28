@@ -90,10 +90,11 @@ router.post(
 
     // Update product average rating
     try {
-      const { data: stats } = await supabaseAdmin
+      const { fetchAllRows } = require('../utils/dbPaginate');
+      const { data: stats } = await fetchAllRows(() => supabaseAdmin
         .from('product_reviews')
         .select('rating')
-        .eq('product_id', product_id);
+        .eq('product_id', product_id));
 
       if (stats && stats.length > 0) {
         const avg = stats.reduce((sum, r) => sum + r.rating, 0) / stats.length;
@@ -154,10 +155,11 @@ router.get(
     }));
 
     // Get aggregate stats
-    const { data: allRatings } = await supabaseAdmin
+    const { fetchAllRows } = require('../utils/dbPaginate');
+    const { data: allRatings } = await fetchAllRows(() => supabaseAdmin
       .from('product_reviews')
       .select('rating')
-      .eq('product_id', productId);
+      .eq('product_id', productId));
 
     const total = allRatings?.length || 0;
     const average = total > 0

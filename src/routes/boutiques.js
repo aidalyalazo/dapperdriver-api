@@ -258,13 +258,16 @@ router.get(
     else if (period === 'week')  { since = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString(); }
     else if (period === 'month') { since = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString(); }
 
-    let ordersQuery = supabaseAdmin
-      .from('orders')
-      .select('status, payment_status, total_amount, boutique_earnings')
-      .eq('boutique_id', boutiqueId)
-      .neq('status', 'cancelled');
-    if (since) ordersQuery = ordersQuery.gte('created_at', since);
-    const { data: allOrders } = await ordersQuery;
+    const { fetchAllRows } = require('../utils/dbPaginate');
+    const { data: allOrders } = await fetchAllRows(() => {
+      let q = supabaseAdmin
+        .from('orders')
+        .select('status, payment_status, total_amount, boutique_earnings')
+        .eq('boutique_id', boutiqueId)
+        .neq('status', 'cancelled');
+      if (since) q = q.gte('created_at', since);
+      return q;
+    });
 
     const rows = allOrders || [];
     const sum = (list, field) => list.reduce((s, o) => s + parseFloat(o[field] || 0), 0);

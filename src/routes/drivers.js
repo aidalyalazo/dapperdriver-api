@@ -5,6 +5,7 @@ const { body } = require('express-validator');
 const { validate } = require('../middleware/validate');
 const { supabaseAdmin } = require('../config/supabase');
 const { getPlatformSetting } = require('../utils/platformSettings');
+const { fetchAllRows } = require('../utils/dbPaginate');
 
 router.use(authenticate);
 
@@ -61,11 +62,11 @@ router.get(
         .select('id', { count: 'exact', head: true })
         .eq('driver_id', driverId)
         .in('status', ['driver_assigned', 'picked_up', 'out_for_delivery']),
-      supabaseAdmin
+      fetchAllRows(() => supabaseAdmin
         .from('orders')
         .select('driver_earnings, tip')
         .eq('driver_id', driverId)
-        .eq('status', 'delivered'),
+        .eq('status', 'delivered')),
     ]);
 
     const totalEarnings = (earningsRes.data || []).reduce(
@@ -182,13 +183,16 @@ router.get(
     // Captured (paid) deliveries in the period — the basis for delivery count, tips
     // earned, and gross earned. Filtering to payment_status='paid' keeps the count in
     // step with the money (a delivered-but-never-captured order earned the driver $0).
-    let periodQ = supabaseAdmin
-      .from('orders')
-      .select('driver_earnings, tip')
-      .eq('driver_id', driverId)
-      .in('status', ['delivered', 'completed'])
-      .eq('payment_status', 'paid');
-    if (since) periodQ = periodQ.gte('created_at', since);
+    const buildPeriodQ = () => {
+      let q = supabaseAdmin
+        .from('orders')
+        .select('driver_earnings, tip')
+        .eq('driver_id', driverId)
+        .in('status', ['delivered', 'completed'])
+        .eq('payment_status', 'paid');
+      if (since) q = q.gte('created_at', since);
+      return q;
+    };
 
     const [payoutsRes, unpaidRes, periodRes, driverRes] = await Promise.all([
       supabaseAdmin
@@ -202,14 +206,14 @@ router.get(
         .order('paid_at', { ascending: false })
         .limit(52),
       // CURRENT withdrawable (NOT period-scoped) — drives the Pending Payout card + cash out.
-      supabaseAdmin
+      fetchAllRows(() => supabaseAdmin
         .from('orders')
         .select('driver_earnings, tip')
         .eq('driver_id', driverId)
         .in('status', ['delivered', 'completed'])
         .eq('payment_status', 'paid')
-        .eq('driver_paid', false),
-      periodQ,
+        .eq('driver_paid', false)),
+      fetchAllRows(buildPeriodQ),
       supabaseAdmin
         .from('drivers')
         .select('rating, review_count')
