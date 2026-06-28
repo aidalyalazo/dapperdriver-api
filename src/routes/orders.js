@@ -58,7 +58,7 @@ router.post(
 
     const { data: order } = await supabaseAdmin
       .from('orders')
-      .select('stripe_payment_intent_id, total_amount, subtotal, boutique_earnings, dd_commission_amount, refund_amount, shopper_id, order_number')
+      .select('stripe_payment_intent_id, total_amount, subtotal, tax, boutique_earnings, dd_commission_amount, refund_amount, shopper_id, order_number')
       .eq('id', orderId)
       .single();
 
