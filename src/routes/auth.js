@@ -146,6 +146,29 @@ router.post(
         await supabaseAdmin.auth.admin.deleteUser(userId);
         return res.status(400).json({ error: updateError.message });
       }
+
+      // Persist the delivery address + onboarding survey HERE, server-side (admin
+      // client, no session needed), so they're never lost when the post-register
+      // client sign-in hiccups (it previously gated these saves and silently dropped
+      // them on a transient failure). Both best-effort — must NOT fail registration.
+      const addr = req.body.address;
+      if (addr && (addr.street || addr.zip)) {
+        const { error: addrErr } = await supabaseAdmin.from('shopper_addresses').insert({
+          shopper_id: userId,
+          street: addr.street || null, city: addr.city || null,
+          state: addr.state || null, zip: addr.zip || null,
+          label: addr.label || 'Home', is_default: true,
+        });
+        if (addrErr) console.warn('[REGISTER] address save failed (non-fatal):', addrErr.message);
+      }
+      const survey = {};
+      for (const k of ['size_tops', 'size_bottoms', 'size_shoes', 'style_preferences', 'category_prefs', 'shopping_occasions', 'price_tier']) {
+        if (req.body[k] != null) survey[k] = req.body[k];
+      }
+      if (Object.keys(survey).length) {
+        const { error: svErr } = await supabaseAdmin.from('shoppers').update(survey).eq('user_id', userId);
+        if (svErr) console.warn('[REGISTER] survey save failed (non-fatal):', svErr.message);
+      }
     }
 
     res.status(201).json({
