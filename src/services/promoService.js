@@ -1,6 +1,18 @@
 const { supabaseAdmin } = require('../config/supabase');
 
 /**
+ * promo_redemptions.shopper_id is a FK → shoppers.id (the profile-row PK), NOT the
+ * auth user id that orders/createOrder pass around. Resolve it so the redemption
+ * insert satisfies the FK and the per-user check matches what was recorded.
+ */
+async function resolveShopperRowId(authUserId) {
+  if (!authUserId) return null;
+  const { data } = await supabaseAdmin
+    .from('shoppers').select('id').eq('user_id', authUserId).maybeSingle();
+  return data?.id || null;
+}
+
+/**
  * Validate a promo code.
  * Checks if it exists, is active, is within valid date range,
  * meets minimum order amount, and shopper hasn't already used it.
@@ -54,20 +66,20 @@ async function validatePromo({ code, boutiqueId, subtotal, shopperId }) {
     throw Object.assign(new Error('Promo code has reached its limit'), { status: 422 });
   }
 
-  // Check if shopper already used it
-  let used = null;
-  try {
-    const { data } = await supabaseAdmin
+  // Check if shopper already used it. promo_redemptions.shopper_id is shoppers.id
+  // (not the auth user id), so resolve it first; if there's no profile row, skip the
+  // per-user check rather than wrongly block. Must use the SAME id recordRedemption writes.
+  const shopperRowId = await resolveShopperRowId(shopperId);
+  if (shopperRowId) {
+    const { data: used } = await supabaseAdmin
       .from('promo_redemptions')
       .select('id')
       .eq('promo_id', promo.id)
-      .eq('shopper_id', shopperId)
-      .single();
-    used = data;
-  } catch (_) {}
-
-  if (used) {
-    throw Object.assign(new Error('You have already used this promo code'), { status: 422 });
+      .eq('shopper_id', shopperRowId)
+      .maybeSingle();
+    if (used) {
+      throw Object.assign(new Error('You have already used this promo code'), { status: 422 });
+    }
   }
 
   return promo;
@@ -106,29 +118,24 @@ function calculateDiscount(promo, subtotal, deliveryFee) {
  * @param {{ promoId: string, orderId: string, shopperId: string, discountAmount: number }} params
  */
 async function recordRedemption({ promoId, orderId, shopperId, discountAmount }) {
+  // shopper_id is FK → shoppers.id; createOrder passes the auth user id, so resolve it.
+  const shopperRowId = await resolveShopperRowId(shopperId);
+  if (!shopperRowId) {
+    throw new Error(`Failed to record promo redemption: no shoppers row for user ${shopperId}`);
+  }
+  // Real column is `discount` (NOT NULL), not `discount_amount`. A DB trigger on
+  // promo_redemptions already bumps promos.uses_count on insert, so we must NOT
+  // increment it here too (that double-counts — verified: one redemption → +2).
+  // The per-user UNIQUE(promo_id, shopper_id) is the real abuse guard.
   const { error } = await supabaseAdmin.from('promo_redemptions').insert({
     promo_id: promoId,
     order_id: orderId,
-    shopper_id: shopperId,
-    discount_amount: discountAmount,
+    shopper_id: shopperRowId,
+    discount: discountAmount,
   });
 
   if (error) {
     throw new Error(`Failed to record promo redemption: ${error.message}`);
-  }
-
-  // Bump the global usage counter so max_uses is actually enforced. Without this
-  // uses_count stays 0 forever and the cap in validatePromo is a no-op (any
-  // number of distinct shoppers could redeem a capped code). Read-modify-write
-  // is fine here — the per-user UNIQUE(promo_id, shopper_id) is the real abuse
-  // guard; this counter is an approximate global budget.
-  try {
-    const { data: cur } = await supabaseAdmin
-      .from('promos').select('uses_count').eq('id', promoId).single();
-    await supabaseAdmin
-      .from('promos').update({ uses_count: (cur?.uses_count || 0) + 1 }).eq('id', promoId);
-  } catch (e) {
-    console.warn('[PROMO] uses_count increment failed:', e.message);
   }
 }
 
