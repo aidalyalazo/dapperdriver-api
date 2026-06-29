@@ -1025,6 +1025,10 @@ async function updateOrderStatus({ orderId, newStatus, actorId, driverId }) {
   if (newStatus === 'picked_up' && isPickup) {
     notif = { title: '✅ Order Picked Up', body: 'Your order has been picked up' };
   }
+  // Pickup orders aren't "waiting for a driver" — the customer collects them in person.
+  if (newStatus === 'ready_for_pickup' && isPickup) {
+    notif = { title: '🎉 Ready for Pickup!', body: 'Your order is ready to collect at the boutique.' };
+  }
   if (notif) {
     const tokens = [
       order.shoppers?.fcm_token,

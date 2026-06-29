@@ -311,12 +311,19 @@ router.get(
   '/me/deliveries/available',
   requireRole('driver'),
   asyncHandler(async (req, res) => {
-    const { data, error } = await supabaseAdmin
+    // Geo-scope to the driver's city so a Miami driver doesn't see Chicago orders. Match on
+    // city_id — the same field the broadcast targets. Fall back to all-cities when the driver
+    // has no city_id set (don't blank the feed for un-geotagged drivers).
+    const { data: drv } = await supabaseAdmin
+      .from('drivers').select('city_id').eq('user_id', req.userId).maybeSingle();
+    let query = supabaseAdmin
       .from('orders')
       .select('*, order_items(*), boutiques!orders_boutique_id_fkey(name, logo_url, address)')
       .eq('status', 'ready_for_pickup')
       .eq('fulfillment_type', 'delivery')
-      .is('driver_id', null)
+      .is('driver_id', null);
+    if (drv?.city_id) query = query.eq('city_id', drv.city_id);
+    const { data, error } = await query
       .order('created_at', { ascending: true })
       .limit(50);
 
