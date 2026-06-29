@@ -952,8 +952,11 @@ async function updateOrderStatus({ orderId, newStatus, actorId, driverId }) {
       // Reflect the capture on the order so it shows 'paid' (not 'authorized')
       // without depending on the payment_intent.succeeded webhook round-trip.
       if (paymentSettled && order.stripe_payment_intent_id) {
-        await supabaseAdmin.from('orders')
-          .update({ payment_status: 'paid' }).eq('id', orderId).catch(() => {});
+        // Promise.resolve(): builder has no .catch (would throw and skip the update,
+        // leaving a captured order stuck at 'authorized' until the webhook).
+        await Promise.resolve(
+          supabaseAdmin.from('orders').update({ payment_status: 'paid' }).eq('id', orderId)
+        ).catch(() => {});
       }
 
       // Boutique payouts are ON-DEMAND only — the boutique taps "Cash Out" (same as

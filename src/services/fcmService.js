@@ -90,7 +90,10 @@ async function notifyAvailableDrivers({ orderId, cityId }) {
     query = query.eq('city_id', cityId);
   }
 
-  const { data: drivers } = await query.catch(() => ({ data: [] }));
+  // Promise.resolve(): the PostgREST builder is a thenable but has no .catch — calling
+  // .catch on it directly throws "query.catch is not a function" and aborts the WHOLE
+  // driver broadcast (no driver ever gets notified of an available order).
+  const { data: drivers } = await Promise.resolve(query).catch(() => ({ data: [] }));
 
   if (!drivers || drivers.length === 0) return;
 
