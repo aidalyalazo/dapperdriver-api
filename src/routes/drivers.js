@@ -294,6 +294,8 @@ router.get(
       delivery_city:  ['delivered', 'completed'].includes(d.status) ? null : d.delivery_city,
       delivery_state: ['delivered', 'completed'].includes(d.status) ? null : d.delivery_state,
       delivery_zip:   ['delivered', 'completed'].includes(d.status) ? null : d.delivery_zip,
+      // delivery_notes can itself hold the unit/gate code — drop it post-delivery too. (SEC-2)
+      delivery_notes: ['delivered', 'completed'].includes(d.status) ? null : d.delivery_notes,
       boutique_name: d.boutiques?.name || 'Store',
       boutique_logo: d.boutiques?.logo_url || null,
       boutique_address: d.boutiques?.address || null,
@@ -322,7 +324,10 @@ router.get(
       .eq('status', 'ready_for_pickup')
       .eq('fulfillment_type', 'delivery')
       .is('driver_id', null);
-    if (drv?.city_id) query = query.eq('city_id', drv.city_id);
+    // Also keep NULL-city orders visible — metro suburbs (Miami Beach, Evanston, Hialeah)
+    // don't ILIKE-match a cities row so they get city_id=NULL; an .eq filter would hide them
+    // from every geotagged driver. (REG-1)
+    if (drv?.city_id) query = query.or(`city_id.eq.${drv.city_id},city_id.is.null`);
     const { data, error } = await query
       .order('created_at', { ascending: true })
       .limit(50);
@@ -346,6 +351,11 @@ router.get(
         delivery_lng: null,
         customer_name: null,
         customer_phone: null,
+        // delivery_notes holds free-form access info (apt/unit, gate/buzzer codes — live data
+        // shows "code 1111 to get in to the house"); must NOT broadcast to the unassigned pool.
+        // Revealed on the assigned feed after a driver accepts. (SEC-1)
+        delivery_notes: null,
+        notes: null,
         boutique_name: d.boutiques?.name || 'Store',
         boutique_logo: d.boutiques?.logo_url || null,
         boutique_address: d.boutiques?.address || null,

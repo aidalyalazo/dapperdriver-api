@@ -1163,15 +1163,18 @@ async function getOrder(orderId) {
     } catch (_) { order.drivers = null; }
   }
 
-  // 5. Get timeline
+  // 5. Get timeline. Column is `actor` (not created_by — that column doesn't exist; the
+  // old name made this query 400 silently, leaving EVERY order's timeline empty). Log the
+  // error instead of swallowing so the next schema drift can't hide.
   try {
-    const { data: timeline } = await supabaseAdmin
+    const { data: timeline, error: tlErr } = await supabaseAdmin
       .from('order_timeline')
-      .select('status, timestamp, created_by')
+      .select('status, timestamp, actor, notes, label')
       .eq('order_id', orderId)
       .order('timestamp', { ascending: true });
+    if (tlErr) console.warn('[ORDER] timeline read failed:', tlErr.message);
     order.order_timeline = timeline || [];
-  } catch (_) { order.order_timeline = []; }
+  } catch (e) { console.warn('[ORDER] timeline read threw:', e.message); order.order_timeline = []; }
 
   return order;
 }

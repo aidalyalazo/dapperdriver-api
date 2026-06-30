@@ -244,7 +244,7 @@ const listOrders = asyncHandler(async (req, res) => {
   if (role === 'driver' && Array.isArray(result.orders)) {
     for (const o of result.orders) {
       if (['delivered', 'completed'].includes(o.status)) {
-        o.delivery_address = null; o.delivery_city = null; o.delivery_state = null; o.delivery_zip = null;
+        o.delivery_address = null; o.delivery_city = null; o.delivery_state = null; o.delivery_zip = null; o.delivery_notes = null; // delivery_notes can hold the unit/gate code (SEC-2)
       }
     }
   }
@@ -294,7 +294,7 @@ const getOrder = asyncHandler(async (req, res) => {
     // A driver can no longer see the delivery address once the order is done.
     if (role === 'driver' && ['delivered', 'completed'].includes(order.status)) {
       order.delivery_address = null;
-      order.delivery_city = null; order.delivery_state = null; order.delivery_zip = null;
+      order.delivery_city = null; order.delivery_state = null; order.delivery_zip = null; order.delivery_notes = null; // (SEC-2)
     }
   }
 
