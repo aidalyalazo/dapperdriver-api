@@ -955,6 +955,11 @@ router.patch(
   validate,
   asyncHandler(async (req, res) => {
     const { status } = req.body;
+    // 'driver_assigned' requires a driver, and this route passes none — it would write a
+    // driver_assigned order with driver_id NULL (broken). Use the dedicated assign endpoint. (REG-2)
+    if (status === 'driver_assigned') {
+      return res.status(400).json({ error: 'Use POST /admin/orders/:id/assign to assign a driver — this endpoint cannot set driver_assigned without one.' });
+    }
     const orderService = require('../services/orderService');
     // #4: route through the state machine so an admin status change gets the same
     // transition validation + payment-capture/refund + inventory side-effects the role

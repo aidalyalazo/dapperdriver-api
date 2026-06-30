@@ -386,9 +386,11 @@ async function payoutDriver({ driverId, amount, stripeAccountId, orderIds }) {
     throw transferErr;
   }
 
-  // Record payout
+  // Record payout. recipient_id must be the AUTH user_id (driver payout history filters on
+  // it); driverId here is drivers.id, so resolve it. driver_id keeps drivers.id. (PAY-2)
+  const { data: drvRow } = await supabaseAdmin.from('drivers').select('user_id').eq('id', driverId).maybeSingle();
   await supabaseAdmin.from('payouts').insert({
-    recipient_id:      driverId,
+    recipient_id:      drvRow?.user_id || driverId,
     recipient_type:    'driver',
     driver_id:         driverId,
     payout_number:     `PO-${Date.now()}-${Math.floor(Math.random() * 1000)}`,

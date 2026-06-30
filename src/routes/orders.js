@@ -58,7 +58,7 @@ router.post(
 
     const { data: order } = await supabaseAdmin
       .from('orders')
-      .select('stripe_payment_intent_id, total_amount, subtotal, tax, boutique_earnings, dd_commission_amount, refund_amount, shopper_id, order_number')
+      .select('stripe_payment_intent_id, total_amount, subtotal, tax, delivery_fee, promo_discount, boutique_earnings, dd_commission_amount, refund_amount, shopper_id, order_number')
       .eq('id', orderId)
       .single();
 
@@ -78,8 +78,13 @@ router.post(
     const goodsCost = parseFloat(order.subtotal)
       || ((parseFloat(order.boutique_earnings) || 0) + (parseFloat(order.dd_commission_amount) || 0))
       || parseFloat(order.total_amount);
-    const taxOnGoods = parseFloat(order.tax) || 0;
-    const refundableBase = goodsCost + taxOnGoods; // product + its tax
+    // Only the GOODS portion of the order tax is refundable — the tax charged on the
+    // (non-refundable) delivery fee isn't. Allocate order.tax proportionally to the goods
+    // within the taxable base (subtotal + delivery_fee - promo). (PAY-3)
+    const taxableBase = (parseFloat(order.subtotal) || 0) + (parseFloat(order.delivery_fee) || 0) - (parseFloat(order.promo_discount) || 0);
+    const fullTax = parseFloat(order.tax) || 0;
+    const taxOnGoods = taxableBase > 0 ? Math.round((fullTax * (goodsCost / taxableBase)) * 100) / 100 : fullTax;
+    const refundableBase = goodsCost + taxOnGoods; // product + its (goods-only) tax
     const remainingRefundable = Math.round((refundableBase - priorRefund) * 100) / 100;
     if (remainingRefundable <= 0.005) {
       throw Object.assign(new Error('The product + its tax on this order has already been fully refunded. Delivery, service fee, and driver tip are non-refundable.'), { status: 400 });
