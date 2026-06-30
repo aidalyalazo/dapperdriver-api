@@ -44,6 +44,7 @@ require('./jobs/tryOnCircuitBreakerJob');
 require('./jobs/stalledOrderSweep');
 require('./jobs/payoutReconciliationJob');
 require('./jobs/moneyReconciliationJob');
+require('./jobs/captureFulfilledOrdersJob');
 require('./jobs/abandonedOrderSweep');
 
 const { errorHandler } = require('./middleware/errorHandler');

@@ -923,8 +923,11 @@ async function updateOrderStatus({ orderId, newStatus, actorId, driverId }) {
   // (A prior version inserted a non-existent `created_by` column, which failed
   // silently and hid the fact that the trigger already covers this.)
 
-  // If delivered or completed (pickup): capture payment, THEN transfer to boutique.
-  if (newStatus === 'delivered' || newStatus === 'completed') {
+  // Capture at fulfillment: delivery → 'delivered'; PICKUP → 'picked_up' (the customer
+  // has the goods — capture now rather than waiting for a 2nd 'MARK COMPLETE' tap that's
+  // easy to forget and would let the auth expire uncaptured). 'completed' still runs this
+  // and is a no-op if the PI was already captured at picked_up. (PAY-1/SM-1)
+  if (newStatus === 'delivered' || newStatus === 'completed' || (newStatus === 'picked_up' && isPickup)) {
     try {
       // Only pay the boutique once the shopper's money is actually captured —
       // otherwise the platform would transfer its own funds with no offsetting
