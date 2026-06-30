@@ -150,7 +150,8 @@ async function findAndAssignDriver(orderId, retryCount = 0) {
         .from('order_timeline')
         .insert({
           order_id: orderId,
-          status: 'no_driver_found',
+          status: 'ready_for_pickup',  // 'no_driver_found' isn't a valid order_status enum
+          label: 'No Driver Found',    // label is NOT NULL (DATA-2)
           notes: 'No available drivers after 10 minutes of broadcasting',
         }))
         .catch(() => {});

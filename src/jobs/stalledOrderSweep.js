@@ -34,7 +34,7 @@ async function sweepStalledOrders() {
 
     const { data: stalled, error } = await supabaseAdmin
       .from('orders')
-      .select('id, created_at, boutique_id, shopper_id, city_id, fulfillment_type, delivery_speed')
+      .select('id, created_at, updated_at, boutique_id, shopper_id, city_id, fulfillment_type, delivery_speed')
       .eq('status', 'ready_for_pickup')
       .eq('fulfillment_type', 'delivery')
       .is('driver_id', null)
@@ -47,13 +47,18 @@ async function sweepStalledOrders() {
     // Do NOT early-return on no stalled deliveries — the pickup sweep further down
     // must still run. Just skip the delivery loop when it's empty.
     for (const order of (stalled || [])) {
-      const ageMinutes = (Date.now() - new Date(order.created_at).getTime()) / 60000;
+      // Measure the no-driver window from when the order became READY (its last update — a
+      // stalled driver-less order isn't touched after going ready), NOT from creation, so a
+      // long boutique prep doesn't eat the driver-search budget and auto-cancel the order the
+      // instant it's ready. (SM-4)
+      const readyAt = order.updated_at || order.created_at;
+      const ageMinutes = (Date.now() - new Date(readyAt).getTime()) / 60000;
 
       const { data: restarts } = await supabaseAdmin
         .from('order_timeline')
         .select('id, created_at')
         .eq('order_id', order.id)
-        .eq('status', 'driver_search_restarted')
+        .eq('label', 'Driver Search Restarted') // 'driver_search_restarted' isn't a valid order_status enum — track by label (SM-3)
         .order('created_at', { ascending: false });
       const restartCount = restarts?.length || 0;
 
@@ -82,6 +87,7 @@ async function sweepStalledOrders() {
         await Promise.resolve(supabaseAdmin.from('order_timeline').insert({
           order_id: order.id,
           status: 'cancelled',
+          label: 'Auto-Cancelled (No Driver)', // label is NOT NULL — omitting it silently dropped this note (SM-3)
           notes: `Auto-cancelled: no driver found after ${Math.round(ageMinutes)} min (${isExpress ? 'express' : 'standard'}, ${restartCount} search restarts). Refund queued.`,
         })).catch(() => {});
 
@@ -109,7 +115,8 @@ async function sweepStalledOrders() {
 
       await Promise.resolve(supabaseAdmin.from('order_timeline').insert({
         order_id: order.id,
-        status: 'driver_search_restarted',
+        status: 'ready_for_pickup',          // the order's real status; 'driver_search_restarted' isn't a valid enum
+        label: 'Driver Search Restarted',    // the throttle counts these by label (SM-3)
         notes: `Driver search re-broadcast by sweep (attempt ${restartCount + 1}).`,
       })).catch(() => {});
 
