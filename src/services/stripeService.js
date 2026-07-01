@@ -149,13 +149,33 @@ async function getOrCreateCustomer(shopperId) {
 
   let customerId = shopper?.stripe_customer_id;
 
+  // Validate the stored customer exists in the CURRENT Stripe mode. A customer
+  // created under the TEST key does not exist under the LIVE key (and vice-
+  // versa), so after a test→live switch every stored id 404s with "No such
+  // customer" and blocks checkout. This also self-heals a customer deleted in
+  // Stripe. On a miss we drop the stale id and create a fresh one below (the
+  // create path also overwrites the stale id in the DB).
+  if (customerId) {
+    try {
+      const existing = await stripe.customers.retrieve(customerId);
+      if (existing.deleted) customerId = null;
+    } catch (e) {
+      if (e.statusCode === 404 || e.code === 'resource_missing') {
+        customerId = null;
+      } else {
+        throw e;
+      }
+    }
+  }
+
   if (!customerId) {
     const customer = await stripe.customers.create({
       email: shopper?.email || undefined,
       metadata: { shopper_id: shopperId },
     });
     customerId = customer.id;
-    // Persist so future orders reuse the same customer (user_id is the FK)
+    // Persist so future orders reuse the same customer (user_id is the FK).
+    // Also overwrites a stale (e.g. test-mode) id that just failed validation.
     await supabaseAdmin
       .from('shoppers')
       .update({ stripe_customer_id: customerId })
