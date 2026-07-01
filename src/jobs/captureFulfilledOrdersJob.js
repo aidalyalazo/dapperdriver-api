@@ -55,6 +55,26 @@ async function captureFulfilledOrders() {
           console.log(`[CAPTURE SAFETY NET] captured ${o.order_number} ($${o.total_amount}) at status=${o.status}`);
         }
       } catch (e) {
+        // resource_missing / 404 = the PaymentIntent does not exist under the current
+        // Stripe key — almost always a TEST-mode PI left over from the test→live cutover
+        // (or a PI deleted in the dashboard). It can NEVER be captured, so mark the order
+        // failed to drop it out of this query and stop retrying+alerting every hour. Alert
+        // ONCE instead of forever. (Real capture failures fall through to the generic path.)
+        if (e?.code === 'resource_missing' || e?.statusCode === 404) {
+          await Promise.resolve(
+            supabaseAdmin.from('orders')
+              .update({ payment_status: 'failed', decline_reason: 'pi_resource_missing' })
+              .eq('id', o.id)
+          ).catch(() => {});
+          console.warn(`[CAPTURE SAFETY NET] ${o.order_number}: PaymentIntent not found under current key — marked failed (stops hourly retries).`);
+          await notifyAdmins({
+            type: 'capture_pi_missing',
+            title: '⚠️ Uncapturable order (PaymentIntent not found)',
+            body: `Order ${o.order_number} ($${o.total_amount}, ${o.status}) has a PaymentIntent that doesn't exist under the current Stripe key (likely test-mode residue). Marked payment_status=failed to stop the hourly retries — no money was captured.`,
+            data: { order_id: o.id },
+          }).catch(() => {});
+          continue;
+        }
         console.error(`[CAPTURE SAFETY NET] capture failed for ${o.order_number}:`, e.message);
         await notifyAdmins({
           type: 'capture_failed',
