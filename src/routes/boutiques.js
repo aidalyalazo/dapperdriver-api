@@ -166,6 +166,60 @@ router.get(
   })
 );
 
+/**
+ * GET /api/v1/boutiques/:id/reviews
+ * Individual boutique reviews (rating + comment) mined from delivered/completed
+ * orders' notes JSON. Surfaces boutique_comment, which was otherwise write-only —
+ * turns the "N reviews" count into a readable list. PUBLIC (like product reviews),
+ * so it must sit ABOVE the router.use(authenticate) gate below.
+ */
+router.get(
+  '/:id/reviews',
+  asyncHandler(async (req, res) => {
+    const boutiqueId = req.params.id;
+    const limit = parseInt(req.query.limit, 10) || 20;
+
+    const { data: orders, error } = await supabaseAdmin
+      .from('orders')
+      .select('shopper_id, notes, updated_at')
+      .eq('boutique_id', boutiqueId)
+      .in('status', ['delivered', 'completed'])
+      .not('notes', 'is', null)
+      .order('updated_at', { ascending: false })
+      .limit(300);
+    if (error) throw new Error(error.message);
+
+    const parsed = [];
+    for (const o of orders || []) {
+      let n;
+      try { n = typeof o.notes === 'string' ? JSON.parse(o.notes) : o.notes; } catch { continue; }
+      if (!n || n.boutique_rating == null) continue;
+      parsed.push({
+        shopper_id: o.shopper_id,
+        rating: n.boutique_rating,
+        comment: n.boutique_comment || '',
+        created_at: o.updated_at,
+      });
+    }
+
+    // Hydrate reviewer name (orders.shopper_id = shoppers.user_id).
+    const ids = [...new Set(parsed.map((p) => p.shopper_id))];
+    let names = {};
+    if (ids.length) {
+      const { data: sh } = await supabaseAdmin
+        .from('shoppers').select('user_id, display_name, avatar_url').in('user_id', ids);
+      if (sh) names = Object.fromEntries(sh.map((s) => [s.user_id, s]));
+    }
+
+    const reviews = parsed.slice(0, limit).map(({ shopper_id, ...r }) => ({
+      ...r,
+      shopper: names[shopper_id] || { display_name: 'Shopper', avatar_url: null },
+    }));
+
+    res.json({ reviews, total: parsed.length });
+  })
+);
+
 // Authenticated boutique-owner routes
 
 router.use(authenticate);
@@ -666,59 +720,6 @@ router.delete(
       data: { role: 'boutique', boutique_id: boutique.id, user_id: userId, name: origName, email: origEmail },
     });
     res.json({ deleted: true });
-  })
-);
-
-/**
- * GET /api/v1/boutiques/:id/reviews
- * Individual boutique reviews (rating + comment) mined from delivered/completed
- * orders' notes JSON. Surfaces boutique_comment, which was otherwise write-only —
- * turns the "N reviews" count into a readable list (public, like product reviews).
- */
-router.get(
-  '/:id/reviews',
-  asyncHandler(async (req, res) => {
-    const boutiqueId = req.params.id;
-    const limit = parseInt(req.query.limit, 10) || 20;
-
-    const { data: orders, error } = await supabaseAdmin
-      .from('orders')
-      .select('shopper_id, notes, updated_at')
-      .eq('boutique_id', boutiqueId)
-      .in('status', ['delivered', 'completed'])
-      .not('notes', 'is', null)
-      .order('updated_at', { ascending: false })
-      .limit(300);
-    if (error) throw new Error(error.message);
-
-    const parsed = [];
-    for (const o of orders || []) {
-      let n;
-      try { n = typeof o.notes === 'string' ? JSON.parse(o.notes) : o.notes; } catch { continue; }
-      if (!n || n.boutique_rating == null) continue;
-      parsed.push({
-        shopper_id: o.shopper_id,
-        rating: n.boutique_rating,
-        comment: n.boutique_comment || '',
-        created_at: o.updated_at,
-      });
-    }
-
-    // Hydrate reviewer name (orders.shopper_id = shoppers.user_id).
-    const ids = [...new Set(parsed.map((p) => p.shopper_id))];
-    let names = {};
-    if (ids.length) {
-      const { data: sh } = await supabaseAdmin
-        .from('shoppers').select('user_id, display_name, avatar_url').in('user_id', ids);
-      if (sh) names = Object.fromEntries(sh.map((s) => [s.user_id, s]));
-    }
-
-    const reviews = parsed.slice(0, limit).map(({ shopper_id, ...r }) => ({
-      ...r,
-      shopper: names[shopper_id] || { display_name: 'Shopper', avatar_url: null },
-    }));
-
-    res.json({ reviews, total: parsed.length });
   })
 );
 
