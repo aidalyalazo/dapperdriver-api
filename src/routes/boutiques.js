@@ -314,6 +314,12 @@ router.get(
       .from('products')
       .select('*')
       .eq('boutique_id', boutiqueId)
+      // Hide soft-deleted products from the boutique's own dashboard. DELETE
+      // /me/products sets status='inactive' (H2); without this the deleted
+      // product kept showing in the owner's list even though it's gone from
+      // the shopper catalog. Only 'inactive' is excluded, so any future status
+      // (e.g. out_of_stock/draft) still shows.
+      .neq('status', 'inactive')
       .order('created_at', { ascending: false });
 
     if (error) throw new Error(error.message);
