@@ -85,7 +85,10 @@ router.get('/return', async (req, res) => {
       .select('stripe_account_id').eq('id', id).single();
     if (row && row.stripe_account_id) {
       const status = await stripeService.getAccountStatus(row.stripe_account_id);
-      const onboarded = !!(status.payouts_enabled || status.details_submitted);
+      // `payouts_enabled` is the authoritative "can be paid" signal, and matches
+      // the account.updated webhook so both writers agree on stripe_onboarded
+      // (details_submitted alone can be true while payouts are still pending).
+      const onboarded = status.payouts_enabled === true;
       await supabaseAdmin.from(table)
         .update({ stripe_onboarded: onboarded }).eq('id', id)
         .then(() => {}, () => {});

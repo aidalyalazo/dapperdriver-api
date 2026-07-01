@@ -193,18 +193,24 @@ router.post(
           const boutiqueId = account.metadata?.boutique_id;
           const driverId   = account.metadata?.driver_id;
 
-          const isReady = account.charges_enabled && account.payouts_enabled;
+          // `payouts_enabled` is the authoritative "can be paid" signal — we only
+          // ever PAY these accounts (Connect transfers), never charge them. Write
+          // the real `stripe_onboarded` column (there is NO stripe_onboarding_complete
+          // column on the DB) so account.updated keeps the mirror fresh on ANY status
+          // change, matching the /connect/return writer. Payout-readiness is still
+          // checked live against Stripe at cash-out; this column is a convenience mirror.
+          const onboarded = account.payouts_enabled === true;
 
           if (boutiqueId) {
             await supabaseAdmin
               .from('boutiques')
-              .update({ stripe_onboarding_complete: isReady })
+              .update({ stripe_onboarded: onboarded })
               .eq('stripe_account_id', account.id);
           }
           if (driverId) {
             await supabaseAdmin
               .from('drivers')
-              .update({ stripe_onboarding_complete: isReady })
+              .update({ stripe_onboarded: onboarded })
               .eq('stripe_account_id', account.id);
           }
           break;
