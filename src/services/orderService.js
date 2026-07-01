@@ -432,24 +432,35 @@ async function createOrder({
   //  • Pickup   → origin city (the boutique's own city). Pickup has no delivery
   //    address, so without this it would fall through to the platform default
   //    rate and over/under-tax the order vs the boutique's actual city.
-  let taxCity = cityData;
-  if (isPickup && boutiqueData?.city_id) {
+  // TAX IS ORIGIN-BASED: charged at the BOUTIQUE's jurisdiction for BOTH delivery
+  // and pickup — never the customer's address. (Same-state delivery is enforced, so
+  // the state always matches; sourcing tax from the boutique ties the rate to the
+  // seller's location and works uniformly as boutiques spread across states.) Rate
+  // comes from the boutique's city (cities.tax_rate via boutique.city_id, which the
+  // admin edits), falling back to the platform default only if the boutique has no
+  // city rate. NOTE: this is the single tax-rate resolution point — a per-boutique
+  // boutiques.tax_rate override or a Stripe Tax lookup can be layered in here later
+  // with no client/app change (the app fetches the resolved rate).
+  let boutiqueCity = null;
+  if (boutiqueData?.city_id) {
     try {
       const { data: bCity } = await supabaseAdmin
         .from('cities').select('id, tax_rate').eq('id', boutiqueData.city_id).single();
-      if (bCity) taxCity = bCity;
-    } catch (_) { /* fall through to the platform default below */ }
+      boutiqueCity = bCity || null;
+    } catch (_) { /* fall through to platform default below */ }
   }
 
   let taxRate;
-  if (taxCity?.tax_rate != null) {
-    taxRate = parseFloat(taxCity.tax_rate);
+  if (boutiqueCity?.tax_rate != null) {
+    taxRate = parseFloat(boutiqueCity.tax_rate);
   } else {
     const taxSetting = await getPlatformSettingJson('tax_rate', { default: 0.0875 });
     taxRate = parseFloat(taxSetting.default || 0.0875);
   }
 
-  const cityId = taxCity?.id || null;
+  // order.city_id: destination city for delivery (demand analytics), boutique city
+  // for pickup. Independent of the tax jurisdiction resolved above.
+  const cityId = (isPickup ? boutiqueCity?.id : cityData?.id) || null;
 
   // Delivery fee = base (driver keeps 100% via delivery_fee_cut) + express
   // premium when express (platform keeps the premium minus any express driver
