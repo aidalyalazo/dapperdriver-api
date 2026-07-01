@@ -181,4 +181,61 @@ router.get(
   })
 );
 
+/**
+ * GET /api/v1/reviews/product/:productId/fit-insights
+ * Fit-satisfaction aggregation: how reviewers said this product fit — overall and
+ * per size. Powers the "Size M: 80% said true to size" widget. Keys on fit_feedback
+ * × selected_size (no body measurements needed). Returns { active:false } until the
+ * fit_feedback column exists (migration 036).
+ */
+router.get(
+  '/product/:productId/fit-insights',
+  asyncHandler(async (req, res) => {
+    const { productId } = req.params;
+    const q = await supabaseAdmin
+      .from('product_reviews')
+      .select('rating, selected_size, fit_feedback')
+      .eq('product_id', productId)
+      .not('fit_feedback', 'is', null)
+      .limit(2000);
+    if (q.error) {
+      // fit_feedback column not present yet (migration 036 not run) → feature inactive.
+      if (q.error.code === '42703' || q.error.code === 'PGRST204') {
+        return res.json({ active: false, total: 0, overall: null, by_size: [] });
+      }
+      throw new Error(q.error.message);
+    }
+    const rows = q.data || [];
+
+    const tally = (list) => {
+      const c = { small: 0, true: 0, large: 0 };
+      let rSum = 0, rN = 0;
+      for (const r of list) {
+        if (c[r.fit_feedback] != null) c[r.fit_feedback] += 1;
+        if (r.rating != null) { rSum += Number(r.rating); rN += 1; }
+      }
+      const n = c.small + c.true + c.large;
+      const verdict = n === 0 ? null
+        : (c.true >= c.small && c.true >= c.large) ? 'true'
+        : (c.small > c.large ? 'small' : 'large');
+      const pct = (x) => (n ? Math.round((x / n) * 100) : 0);
+      return {
+        count: n,
+        small: c.small, true: c.true, large: c.large,
+        small_pct: pct(c.small), true_pct: pct(c.true), large_pct: pct(c.large),
+        avg_rating: rN ? Math.round((rSum / rN) * 10) / 10 : null,
+        verdict,
+      };
+    };
+
+    const overall = tally(rows);
+    const sizes = [...new Set(rows.map((r) => r.selected_size).filter(Boolean))];
+    const by_size = sizes
+      .map((size) => ({ size, ...tally(rows.filter((r) => r.selected_size === size)) }))
+      .sort((a, b) => b.count - a.count);
+
+    res.json({ active: true, total: overall.count, overall, by_size });
+  })
+);
+
 module.exports = router;
