@@ -135,7 +135,7 @@ router.get(
     // Fetch reviews
     const { data: rawReviews, error } = await supabaseAdmin
       .from('product_reviews')
-      .select('id, shopper_id, rating, comment, height, weight, photo_urls, selected_size, selected_color, created_at')
+      .select('id, shopper_id, rating, comment, height, weight, photo_urls, selected_size, selected_color, fit_feedback, created_at')
       .eq('product_id', productId)
       .order('created_at', { ascending: false })
       .range(offset, offset + limit - 1);
