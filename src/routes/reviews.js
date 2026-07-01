@@ -23,6 +23,7 @@ router.post(
     body('photo_urls').optional().isArray(),
     body('selected_size').optional().isString().trim(),
     body('selected_color').optional().isString().trim(),
+    body('fit_feedback').optional().isIn(['small', 'true', 'large']).withMessage('fit_feedback must be small|true|large'),
     validate,
   ],
   asyncHandler(async (req, res) => {
@@ -36,6 +37,7 @@ router.post(
       photo_urls,
       selected_size,
       selected_color,
+      fit_feedback,
     } = req.body;
 
     // Verify the shopper owns this order and it's delivered
@@ -68,23 +70,28 @@ router.post(
       throw Object.assign(new Error('You already reviewed this item for this order'), { status: 409 });
     }
 
-    // Insert review
-    const { data: review, error } = await supabaseAdmin
-      .from('product_reviews')
-      .insert({
-        shopper_id: req.userId,
-        product_id,
-        order_id,
-        rating,
-        comment: comment || null,
-        height: height || null,
-        weight: weight || null,
-        photo_urls: photo_urls || [],
-        selected_size: selected_size || null,
-        selected_color: selected_color || null,
-      })
-      .select()
-      .single();
+    // Insert review. fit_feedback ('small'|'true'|'large') is the primary fit signal
+    // for the fit-insights analytic; its column may not exist until the migration runs,
+    // so retry without it on an unknown-column error (self-activates once the column exists).
+    const reviewRow = {
+      shopper_id: req.userId,
+      product_id,
+      order_id,
+      rating,
+      comment: comment || null,
+      height: height || null,
+      weight: weight || null,
+      photo_urls: photo_urls || [],
+      selected_size: selected_size || null,
+      selected_color: selected_color || null,
+      fit_feedback: fit_feedback || null,
+    };
+    let ins = await supabaseAdmin.from('product_reviews').insert(reviewRow).select().single();
+    if (ins.error && (ins.error.code === '42703' || ins.error.code === 'PGRST204')) {
+      delete reviewRow.fit_feedback;
+      ins = await supabaseAdmin.from('product_reviews').insert(reviewRow).select().single();
+    }
+    const { data: review, error } = ins;
 
     if (error) throw new Error(error.message);
 
