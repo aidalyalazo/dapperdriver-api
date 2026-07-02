@@ -434,7 +434,7 @@ router.post(
     const boutiqueId = await getBoutiqueId(req.userId);
     if (!boutiqueId) return res.status(404).json({ error: 'Boutique not found' });
 
-    const { name, description, price, compare_price, category, images, image_urls, stock, stock_quantity, inventory_count, sizes, colors, tags, sku, source, material_composition, variant_stock } = req.body;
+    const { name, description, price, compare_price, cost, category, images, image_urls, stock, stock_quantity, inventory_count, sizes, colors, tags, sku, source, material_composition, variant_stock } = req.body;
 
     const stockVal = stock || stock_quantity || inventory_count || 0;
 
@@ -446,6 +446,9 @@ router.post(
         description:          description || null,
         price,
         compare_price:        compare_price || null,
+        // M36: private wholesale cost — unlocks true GMROI in the boutique
+        // report; never exposed on public product endpoints (allow-lists).
+        cost:                 cost || null,
         category,
         images:               images || image_urls || [],
         stock:                stockVal,
@@ -481,7 +484,7 @@ router.patch(
       return res.status(422).json({ error: `source must be one of: ${VALID_SOURCES.join(', ')}` });
     }
 
-    const allowed = ['name', 'description', 'price', 'compare_price', 'category', 'images',
+    const allowed = ['name', 'description', 'price', 'compare_price', 'cost', 'category', 'images',
                      'stock', 'sizes', 'colors', 'tags', 'sku', 'source', 'status',
                      'material_composition', 'variant_stock'];
     const updates = Object.fromEntries(

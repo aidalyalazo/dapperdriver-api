@@ -547,6 +547,34 @@ router.post(
 );
 
 /**
+ * GET /api/v1/drivers/me/documents
+ * The caller's verification documents (latest row per doc_type). H3: the
+ * documents screen previously PATCHed phantom drivers columns and had nothing
+ * to read status back from — this is that read path.
+ */
+router.get(
+  '/me/documents',
+  requireRole('driver'),
+  asyncHandler(async (req, res) => {
+    const { data: driverRow } = await supabaseAdmin
+      .from('drivers').select('id').eq('user_id', req.userId).single();
+    if (!driverRow) throw Object.assign(new Error('Driver profile not found'), { status: 404 });
+
+    const { data, error } = await supabaseAdmin
+      .from('driver_documents')
+      .select('doc_type, file_url, status, created_at')
+      .eq('driver_id', driverRow.id)
+      .order('created_at', { ascending: false });
+    if (error) throw new Error(error.message);
+
+    // Latest row per doc_type wins
+    const latest = {};
+    for (const d of data || []) if (!latest[d.doc_type]) latest[d.doc_type] = d;
+    res.json({ documents: Object.values(latest) });
+  })
+);
+
+/**
  * GET /api/v1/drivers/me/balance
  * Withdrawable earnings (unpaid delivery earnings + tips).
  */

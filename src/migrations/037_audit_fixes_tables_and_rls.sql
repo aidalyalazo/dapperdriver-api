@@ -67,3 +67,9 @@ BEGIN
        USING (public.is_admin()) WITH CHECK (public.is_admin())', t, t);
   END LOOP;
 END $$;
+
+-- ── 4. H3: ID documents must not be world-readable ───────────────────────────
+-- driver-documents held licenses/insurance behind PUBLIC urls. Private bucket:
+-- uploads (authenticated) keep working; docs are reviewed via the Supabase
+-- dashboard until an admin review surface ships.
+UPDATE storage.buckets SET public = false WHERE id = 'driver-documents';

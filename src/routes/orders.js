@@ -48,17 +48,23 @@ const { validate } = require('../middleware/validate');
 router.post(
   '/:id/refund',
   requireRole('admin'),
-  [body('amount').optional().isFloat({ min: 0 })],
+  [
+    body('amount').optional().isFloat({ min: 0 }),
+    // M34: the return REASON is the only real keep/return fit signal the
+    // marketplace generates at launch (try-on is off) — capture it with the money.
+    body('return_reason').optional().isIn(['too_small', 'too_large', 'fit_style', 'quality', 'damaged', 'wrong_item', 'changed_mind', 'other']),
+    body('return_detail').optional().isString().trim().isLength({ max: 500 }),
+  ],
   validate,
   asyncHandler(async (req, res) => {
     const { stripe } = require('../config/stripe');
     const { supabaseAdmin } = require('../config/supabase');
     const orderId = req.params.id;
-    const { amount } = req.body;
+    const { amount, return_reason, return_detail } = req.body;
 
     const { data: order } = await supabaseAdmin
       .from('orders')
-      .select('stripe_payment_intent_id, total_amount, subtotal, tax, delivery_fee, promo_discount, boutique_earnings, dd_commission_amount, refund_amount, shopper_id, order_number')
+      .select('stripe_payment_intent_id, total_amount, subtotal, tax, delivery_fee, promo_discount, boutique_earnings, dd_commission_amount, refund_amount, shopper_id, order_number, notes')
       .eq('id', orderId)
       .single();
 
@@ -152,6 +158,19 @@ router.post(
         }
       }
     }
+    // M34: persist the return reason into the order's notes JSON — linked to the
+    // order (and via order_items to size variants), never a bare unlinked signal.
+    if (return_reason) {
+      let existingNotes = {};
+      try { existingNotes = order.notes ? (typeof order.notes === 'string' ? JSON.parse(order.notes) : order.notes) : {}; } catch { existingNotes = {}; }
+      updatePayload.notes = JSON.stringify({
+        ...existingNotes,
+        return_reason,
+        return_detail: return_detail || null,
+        return_recorded_at: new Date().toISOString(),
+      });
+    }
+
     // If already paid out before the refund it's a real loss with no auto-reversal —
     // surfaced below (the daily money-reconcile job is the backstop).
     const { data: refundedRow } = await supabaseAdmin
