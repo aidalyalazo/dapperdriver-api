@@ -1699,3 +1699,28 @@ CREATE TABLE IF NOT EXISTS payout_failures (
 CREATE INDEX IF NOT EXISTS idx_payout_failures_recipient ON payout_failures (recipient_id);
 CREATE INDEX IF NOT EXISTS idx_payout_failures_attempted ON payout_failures (attempted_at DESC);
 ALTER TABLE payout_failures ENABLE ROW LEVEL SECURITY;
+
+-- ── Mz2. Migration 037 — shopper_favorites + admin RLS on Intelligence tables ─
+-- (payout_failures covered in §Mz above; 037 file also includes it idempotently)
+CREATE TABLE IF NOT EXISTS shopper_favorites (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  shopper_id  UUID NOT NULL,
+  boutique_id UUID NOT NULL REFERENCES boutiques(id) ON DELETE CASCADE,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (shopper_id, boutique_id)
+);
+CREATE INDEX IF NOT EXISTS idx_shopper_favorites_shopper ON shopper_favorites (shopper_id);
+ALTER TABLE shopper_favorites ENABLE ROW LEVEL SECURITY;
+DO $$
+DECLARE t TEXT;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['product_reviews','saved_items','cart_items','shopper_addresses','payout_failures','shopper_favorites']
+  LOOP
+    BEGIN
+      EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
+      EXECUTE format('DROP POLICY IF EXISTS admin_all_%I ON %I', t, t);
+      EXECUTE format('CREATE POLICY admin_all_%I ON %I FOR ALL TO authenticated USING (public.is_admin()) WITH CHECK (public.is_admin())', t, t);
+    EXCEPTION WHEN undefined_table THEN RAISE NOTICE 'SKIPPED: %', t;
+    END;
+  END LOOP;
+END $$;

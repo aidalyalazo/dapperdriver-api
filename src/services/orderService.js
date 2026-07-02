@@ -787,20 +787,31 @@ async function createOrder({
       .catch((e) => console.warn('[ORDER] Failed to record promo redemption:', e.message));
   }
 
-  // Notify boutique (non-critical — don't await)
-  supabaseAdmin.from('boutiques').select('fcm_token').eq('id', boutiqueId).single()
-    .then(({ data: boutiqueFcm }) => {
-      const tokens = [boutiqueFcm?.fcm_token].filter(Boolean);
+  // Notify boutique (non-critical — don't await). G1: ALWAYS write the in-app
+  // notification row — with push deferred, this row is how the boutique learns
+  // a new order exists without staring at the orders screen.
+  supabaseAdmin.from('boutiques').select('fcm_token, user_id').eq('id', boutiqueId).single()
+    .then(({ data: boutiqueRow }) => {
+      const title = '🛍️ New Order Received!';
+      const body = `You have a new order (${orderItems.length} item${orderItems.length !== 1 ? 's' : ''}). Please confirm within 10 minutes.`;
+      const tokens = [boutiqueRow?.fcm_token].filter(Boolean);
       if (tokens.length > 0) {
-        sendOrderNotification({
-          tokens,
-          title: '🛍️ New Order Received!',
-          body: `You have a new order (${orderItems.length} item${orderItems.length !== 1 ? 's' : ''}). Please confirm within 10 minutes.`,
-          orderId: order.id,
-        }).catch((e) => console.warn('[ORDER] Boutique notification failed:', e.message));
+        sendOrderNotification({ tokens, title, body, orderId: order.id })
+          .catch((e) => console.warn('[ORDER] Boutique notification failed:', e.message));
+      }
+      if (boutiqueRow?.user_id) {
+        return supabaseAdmin.from('notifications').insert({
+          user_id: boutiqueRow.user_id,
+          type: 'new_order',
+          title,
+          body,
+          data: { order_id: order.id },
+          is_read: false,
+          sent_push: tokens.length > 0,
+        });
       }
     })
-    .catch(() => {});
+    .then(() => {}, (e) => console.warn('[ORDER] boutique new-order notification failed:', e?.message));
 
   return order;
 }
@@ -852,12 +863,15 @@ async function updateOrderStatus({ orderId, newStatus, actorId, driverId }) {
     }
   }
 
-  // Fetch push tokens separately (each table has its own FK structure)
+  // Fetch push tokens separately (each table has its own FK structure).
+  // orders.driver_id = drivers.id (NOT the auth user id) — the old .eq('user_id')
+  // lookup never resolved, so driver push silently no-op'd. Also grab boutique
+  // user_id for the in-app notification row (G1).
   const [shopperRow, boutiqueRow, driverRow] = await Promise.all([
     supabaseAdmin.from('shoppers').select('fcm_token').eq('user_id', order.shopper_id).single().then(r => r.data),
-    supabaseAdmin.from('boutiques').select('fcm_token').eq('id', order.boutique_id).single().then(r => r.data),
+    supabaseAdmin.from('boutiques').select('fcm_token, user_id').eq('id', order.boutique_id).single().then(r => r.data),
     order.driver_id
-      ? supabaseAdmin.from('drivers').select('fcm_token').eq('user_id', order.driver_id).single().then(r => r.data)
+      ? supabaseAdmin.from('drivers').select('fcm_token').eq('id', order.driver_id).single().then(r => r.data)
       : Promise.resolve(null),
   ]);
   order.shoppers  = shopperRow  || {};
@@ -1079,6 +1093,30 @@ async function updateOrderStatus({ orderId, newStatus, actorId, driverId }) {
       is_read:   false,
       sent_push: tokens.length > 0,
     }).then(() => {}, (e) => console.warn('[ORDER] in-app notification insert failed:', e?.message));
+  }
+
+  // G1: boutiques get role-appropriate in-app rows for the transitions that
+  // affect them — with push deferred, these rows ARE the boutique's notifications.
+  // (Live probe: 0 of the last 268 notification rows went to a boutique.)
+  const BOUTIQUE_STATUS_COPY = {
+    cancelled: { title: '❌ Order Cancelled', body: 'An order was cancelled. Any held stock has been restored.' },
+    picked_up: isPickup
+      ? { title: '📦 Order Collected', body: 'The customer collected their pickup order.' }
+      : { title: '📦 Order Picked Up', body: 'The driver picked up the order — it\'s on its way to the customer.' },
+    delivered: { title: '✅ Order Delivered', body: 'The order was delivered. Earnings were added to your balance.' },
+    completed: { title: '✅ Order Completed', body: 'The pickup order is complete. Earnings were added to your balance.' },
+  };
+  const bNotif = BOUTIQUE_STATUS_COPY[newStatus];
+  if (bNotif && order.boutiques?.user_id) {
+    supabaseAdmin.from('notifications').insert({
+      user_id:   order.boutiques.user_id,
+      type:      `order_${newStatus}`,
+      title:     bNotif.title,
+      body:      bNotif.body,
+      data:      { order_id: orderId, status: newStatus },
+      is_read:   false,
+      sent_push: !!order.boutiques?.fcm_token,
+    }).then(() => {}, (e) => console.warn('[ORDER] boutique in-app notification failed:', e?.message));
   }
 
   return updated;

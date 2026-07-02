@@ -57,6 +57,18 @@ router.post(
       throw Object.assign(new Error('Can only review delivered orders'), { status: 400 });
     }
 
+    // The reviewed product must actually be part of the cited order — otherwise
+    // one delivered $1 order unlocks "verified" reviews on the whole catalog.
+    const { data: inOrder } = await supabaseAdmin
+      .from('order_items')
+      .select('id')
+      .eq('order_id', order_id)
+      .eq('product_id', product_id)
+      .limit(1);
+    if (!inOrder || inOrder.length === 0) {
+      throw Object.assign(new Error('This product was not part of that order.'), { status: 422 });
+    }
+
     // Check for duplicate review
     const { data: existing } = await supabaseAdmin
       .from('product_reviews')

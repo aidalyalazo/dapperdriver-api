@@ -21,10 +21,13 @@ const OUT_FOR_DELIVERY_LAST_RESORT_DAYS = 5; // capture an in-flight order only 
 
 async function captureFulfilledOrders() {
   try {
+    // L7: also scan payment_status='pending' — fulfilled orders whose webhook
+    // never landed sit at 'pending' WITH a real PI and were structurally
+    // invisible to this net (6 such rows existed in live data).
     const { data: orders, error } = await supabaseAdmin
       .from('orders')
-      .select('id, order_number, stripe_payment_intent_id, total_amount, status, created_at')
-      .eq('payment_status', 'authorized')
+      .select('id, order_number, stripe_payment_intent_id, total_amount, status, payment_status, created_at')
+      .in('payment_status', ['authorized', 'pending'])
       .in('status', [...FULFILLED, 'out_for_delivery'])
       .not('stripe_payment_intent_id', 'is', null)
       .limit(200);
@@ -41,7 +44,51 @@ async function captureFulfilledOrders() {
       }
       try {
         const pi = await stripe.paymentIntents.retrieve(o.stripe_payment_intent_id);
-        if (pi.status !== 'requires_capture') continue; // already captured, or voided/canceled
+
+        // L7: handle every PI state explicitly — the old `continue` silently
+        // swallowed expired auths (money lost, nobody told).
+        if (pi.status === 'succeeded') {
+          // Money already captured but the order row never learned — heal it.
+          await Promise.resolve(
+            supabaseAdmin.from('orders').update({ payment_status: 'paid' }).eq('id', o.id)
+          ).catch(() => {});
+          console.log(`[CAPTURE SAFETY NET] healed ${o.order_number}: PI already captured, order row was ${o.payment_status}.`);
+          continue;
+        }
+        if (pi.status === 'canceled') {
+          // Auth expired or was voided — the money is GONE. Alert once and stop retrying.
+          const reason = pi.cancellation_reason === 'expired' ? 'auth_expired' : 'pi_canceled';
+          await Promise.resolve(
+            supabaseAdmin.from('orders')
+              .update({ payment_status: 'failed', decline_reason: reason })
+              .eq('id', o.id)
+          ).catch(() => {});
+          await notifyAdmins({
+            type: 'capture_failed',
+            title: '🚨 Fulfilled order lost its payment',
+            body: `Order ${o.order_number} ($${o.total_amount}, ${o.status}) — the Stripe authorization is ${reason === 'auth_expired' ? 'EXPIRED' : 'canceled'}; the money can no longer be captured. The boutique/driver were owed this order. Follow up with the customer for re-payment or absorb the loss.`,
+            data: { order_id: o.id, reason },
+          }).catch(() => {});
+          continue;
+        }
+        if (pi.status !== 'requires_capture') {
+          // requires_payment_method / requires_confirmation / requires_action =
+          // fulfilled but the customer NEVER authorized payment. Can't capture.
+          if (['requires_payment_method', 'requires_confirmation', 'requires_action'].includes(pi.status)) {
+            await Promise.resolve(
+              supabaseAdmin.from('orders')
+                .update({ payment_status: 'failed', decline_reason: 'never_authorized' })
+                .eq('id', o.id)
+            ).catch(() => {});
+            await notifyAdmins({
+              type: 'capture_failed',
+              title: '🚨 Fulfilled order was never paid',
+              body: `Order ${o.order_number} ($${o.total_amount}, ${o.status}) was fulfilled but its payment was never authorized (PI ${pi.status}). No money can be captured — follow up with the customer.`,
+              data: { order_id: o.id },
+            }).catch(() => {});
+          }
+          continue; // 'processing' etc. — give it another cycle
+        }
         const captureCents = Math.round(Number(o.total_amount) * 100);
         const res = await stripe.paymentIntents.capture(
           o.stripe_payment_intent_id,

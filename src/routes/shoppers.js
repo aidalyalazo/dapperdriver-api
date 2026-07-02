@@ -175,7 +175,8 @@ router.get(
   asyncHandler(async (req, res) => {
     const { data, error } = await supabaseAdmin
       .from('shopper_favorites')
-      .select('boutique_id, boutiques(id, name, logo_url, city, rating)')
+      // boutiques has city_id (no 'city' column) — the old select 42703'd.
+      .select('boutique_id, boutiques(id, name, logo_url, city_id, rating)')
       .eq('shopper_id', req.userId);
 
     if (error) throw new Error(error.message);

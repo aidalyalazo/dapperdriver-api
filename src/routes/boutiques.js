@@ -275,6 +275,26 @@ router.patch(
     }
     const updates = mapped;
 
+    // M10: same-state enforcement reads boutiques.state and origin tax reads
+    // boutiques.city_id — but the portal only ever saved the address JSON, so
+    // both stayed NULL for self-service boutiques until an admin hand-fixed
+    // them. Derive them here whenever the address changes.
+    if (updates.address) {
+      try {
+        const addr = typeof updates.address === 'string' ? JSON.parse(updates.address) : updates.address;
+        const { normalizeState } = require('../utils/usStates');
+        const st = normalizeState(addr?.state);
+        if (st) updates.state = st;
+        if (addr?.city) {
+          const { data: city } = await supabaseAdmin
+            .from('cities').select('id').ilike('name', `${addr.city.trim()}%`).maybeSingle();
+          if (city?.id) updates.city_id = city.id;
+        }
+      } catch (e) {
+        console.warn('[BOUTIQUE] address state/city derivation skipped:', e.message);
+      }
+    }
+
     const { data, error } = await supabaseAdmin
       .from('boutiques')
       .update({ ...updates, updated_at: new Date().toISOString() })
