@@ -427,11 +427,7 @@ async function createOrder({
 
   const trustedProductsMap = Object.fromEntries((productsData || []).map((p) => [p.id, p]));
 
-  // Tax rate: prefer city-specific, fall back to platform default.
-  //  • Delivery → destination city (resolved from the delivery address above).
-  //  • Pickup   → origin city (the boutique's own city). Pickup has no delivery
-  //    address, so without this it would fall through to the platform default
-  //    rate and over/under-tax the order vs the boutique's actual city.
+  // Tax rate: prefer the boutique's city-specific rate, fall back to platform default.
   // TAX IS ORIGIN-BASED: charged at the BOUTIQUE's jurisdiction for BOTH delivery
   // and pickup — never the customer's address. (Same-state delivery is enforced, so
   // the state always matches; sourcing tax from the boutique ties the rate to the

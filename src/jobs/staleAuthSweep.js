@@ -61,10 +61,11 @@ async function sweepStaleAuthorizations() {
       try {
         await orderService.updateOrderStatus({ orderId: o.id, newStatus: 'cancelled', actorId: 'system' });
         // updateOrderStatus voids the hold + restores stock + notifies the shopper,
-        // but takes no reason arg — stamp one for the audit trail.
+        // but takes no reason arg — stamp one for the audit trail. Use decline_reason
+        // (the column every other cancel/fail path writes + orderTimeoutProcessor reads).
         await Promise.resolve(
           supabaseAdmin.from('orders')
-            .update({ cancelled_reason: 'auth_expiring_unfulfilled' })
+            .update({ decline_reason: 'auth_expiring_unfulfilled' })
             .eq('id', o.id)
         ).catch(() => {});
         cancelled++;
