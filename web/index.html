@@ -2106,7 +2106,7 @@
   // Waitlist form — TODO(launch): replace WAITLIST_ENDPOINT with Formspree / Resend / API.
   // Until then, leads are kept in localStorage as a safety net so we never lose one.
   (function () {
-    const WAITLIST_ENDPOINT = ''; // e.g. 'https://formspree.io/f/xxxxxx'
+    const WAITLIST_ENDPOINT = 'https://dapperdriver-api-production.up.railway.app/api/v1/support/waitlist'; // M29: lands in the admin Support page
     const form = document.getElementById('waitlist-form');
     const success = document.getElementById('waitlist-success');
     if (!form) return;

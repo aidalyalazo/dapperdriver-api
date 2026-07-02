@@ -5,9 +5,6 @@ const { body, param } = require('express-validator');
 const { validate } = require('../middleware/validate');
 const { supabaseAdmin } = require('../config/supabase');
 
-// All support routes require authentication
-router.use(authenticate);
-
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 /** Generate a human-readable ticket number like DD-20260328-A1B2 */
@@ -16,6 +13,36 @@ function generateTicketNumber() {
   const rand = Math.random().toString(36).substring(2, 6).toUpperCase();
   return `DD-${date}-${rand}`;
 }
+
+// ── POST /api/v1/support/waitlist — PUBLIC marketing-site waitlist (M29) ────
+// The dapperdriver.com waitlist form previously stored emails only in the
+// visitor's OWN localStorage — every signup was invisible to the business.
+// Lands as a support ticket so it's readable in the admin Support page.
+const rateLimit = require('express-rate-limit');
+const waitlistLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 20, standardHeaders: true, legacyHeaders: false });
+router.post(
+  '/waitlist',
+  waitlistLimiter,
+  [body('email').isEmail().normalizeEmail(), validate],
+  asyncHandler(async (req, res) => {
+    const { error } = await supabaseAdmin.from('support_tickets').insert({
+      ticket_number: generateTicketNumber(),
+      user_email: req.body.email,
+      user_role: 'shopper',
+      category: 'other',
+      subject: 'Waitlist signup (dapperdriver.com)',
+      description: `Joined the website waitlist${req.body.city ? ` — city: ${String(req.body.city).slice(0, 60)}` : ''}.`,
+      status: 'open',
+      priority: 'low',
+    });
+    if (error) console.warn('[WAITLIST] insert failed:', error.message);
+    // Always 200 — never leak validity/state to the public form.
+    res.json({ ok: true });
+  })
+);
+
+// All other support routes require authentication
+router.use(authenticate);
 
 // ── POST /api/v1/support/tickets — Create a new support ticket ──────────────
 

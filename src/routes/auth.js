@@ -260,8 +260,13 @@ router.post(
   authLimiter,
   [body('email').isEmail().normalizeEmail(), validate],
   asyncHandler(async (req, res) => {
+    // H9: FRONTEND_URL was unset/localhost in prod, dead-ending the reset link.
+    // Default to the hosted reset page (web/reset-password.html on dapperdriver.com).
+    const frontendUrl = process.env.FRONTEND_URL && !process.env.FRONTEND_URL.includes('localhost')
+      ? process.env.FRONTEND_URL
+      : 'https://dapperdriver.com';
     await supabasePublic.auth.resetPasswordForEmail(req.body.email, {
-      redirectTo: `${process.env.FRONTEND_URL}/reset-password`,
+      redirectTo: `${frontendUrl}/reset-password`,
     });
     // Always return 200 to prevent email enumeration
     res.json({ message: 'If that email exists, a reset link has been sent.' });
