@@ -2,6 +2,7 @@ const cron = require('node-cron');
 const { supabaseAdmin } = require('../config/supabase');
 const { stripe } = require('../config/stripe');
 const orderService = require('../services/orderService');
+const { notifyAdmins } = require('../utils/adminAlerts');
 
 /**
  * Abandoned-checkout sweep.
@@ -34,10 +35,36 @@ async function sweepAbandonedPending() {
 
     for (const o of orders) {
       try {
-        // Void the uncaptured PI so the customer's authorization (if any) is released.
         if (o.stripe_payment_intent_id) {
           const pi = await stripe.paymentIntents.retrieve(o.stripe_payment_intent_id);
-          if (!['canceled', 'succeeded'].includes(pi.status)) {
+
+          // WEBHOOK-FAILURE RECONCILER: payment_status 'authorized' has exactly
+          // one writer (the amount_capturable_updated webhook). If the customer
+          // actually paid but the webhook never landed, the PI tells the truth —
+          // HEAL the order instead of voiding a real customer's payment.
+          if (pi.status === 'requires_capture' || pi.status === 'succeeded') {
+            const healedStatus = pi.status === 'succeeded' ? 'paid' : 'authorized';
+            await supabaseAdmin.from('orders')
+              .update({ payment_status: healedStatus })
+              .eq('id', o.id);
+            await orderService.updateOrderStatus({
+              orderId: o.id, newStatus: 'confirmed', actorId: 'system-webhook-heal',
+            });
+            console.warn(`[ABANDONED SWEEP] HEALED order ${o.id}: PI ${pi.status} but payment_status was stale — webhook delivery likely broken, investigate.`);
+            await notifyAdmins({
+              type: 'webhook_heal',
+              title: '🩹 Order healed — Stripe webhook may be down',
+              body: `Order ${o.id} had PI status '${pi.status}' but the order was never marked ${healedStatus} — the sweep healed it. If this repeats, webhook delivery is broken (check the Stripe endpoint + signing secret).`,
+              data: { order_id: o.id, pi_status: pi.status },
+            }).catch(() => {});
+            continue;
+          }
+
+          // PI is still processing — give the webhook another sweep cycle.
+          if (pi.status === 'processing') continue;
+
+          // Genuinely unpaid — void the PI so any partial auth is released.
+          if (pi.status !== 'canceled') {
             await stripe.paymentIntents.cancel(pi.id).catch(() => {});
           }
         }

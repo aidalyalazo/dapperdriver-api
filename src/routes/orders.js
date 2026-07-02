@@ -281,8 +281,9 @@ router.post(
       });
     }
 
+    let tipPi;
     try {
-      await stripe.paymentIntents.create(
+      tipPi = await stripe.paymentIntents.create(
         {
           amount: tipCents,
           currency: 'usd',
@@ -325,10 +326,35 @@ router.post(
         // CAS missed only because tip was NULL (no tip yet) — apply the first tip.
         await supabaseAdmin.from('orders').update({ tip: target }).eq('id', orderId);
         persistedTip = target;
-      } else {
-        // A concurrent identical tip already landed this delta (single deduped charge)
-        // — accept it; re-adding would over-credit the driver for money never collected.
+      } else if (cur === target) {
+        // A concurrent IDENTICAL tip already landed this delta. Identical tips share
+        // the same idempotency key → Stripe deduped to ONE charge — accept it;
+        // re-adding would over-credit the driver for money never collected.
         persistedTip = cur;
+      } else {
+        // L8: a concurrent DIFFERENT-amount tip won the CAS. Different amounts have
+        // different idempotency keys → OUR charge is a real, distinct second charge
+        // that can no longer be credited. Refund it so the customer isn't silently
+        // billed for a tip that never lands.
+        try {
+          await stripe.refunds.create({ payment_intent: tipPi.id });
+          return res.status(409).json({
+            error: 'Another tip was applied to this order at the same time. This charge was refunded — check the order and tip again if needed.',
+            tip: cur,
+          });
+        } catch (refundErr) {
+          const { notifyAdmins } = require('../utils/adminAlerts');
+          await notifyAdmins({
+            type: 'tip_uncredited_charge',
+            title: '🚨 Uncredited tip charge needs manual refund',
+            body: `Order ${orderId}: a concurrent tip race left PI ${tipPi.id} ($${amount.toFixed(2)}) charged but uncredited, and the automatic refund failed (${refundErr.message}). Refund it manually in Stripe.`,
+            data: { order_id: orderId, payment_intent: tipPi.id, amount },
+          }).catch(() => {});
+          return res.status(409).json({
+            error: 'Another tip was applied at the same time. Our team will refund the duplicate charge.',
+            tip: cur,
+          });
+        }
       }
     }
 

@@ -172,11 +172,27 @@ router.post(
           // payment_status='paid') — otherwise the boutique/driver lose the unrefunded
           // remainder. Idempotent: never re-stamp an already-refunded order.
           if (charge.amount_refunded >= charge.amount) {
-            await supabaseAdmin
+            const { data: refunded } = await supabaseAdmin
               .from('orders')
               .update({ payment_status: 'refunded', refunded_at: new Date().toISOString() })
               .eq('stripe_payment_intent_id', pi)
-              .neq('payment_status', 'refunded');
+              .neq('payment_status', 'refunded')
+              .select('id, order_number, status, driver_id, driver_paid, driver_earnings, tip');
+            // POLICY GUARD (M27): a FULL refund issued from the Stripe dashboard
+            // bypasses the API's refund policy (driver fee+tip never refunded; the
+            // driver is always paid for completed work). payment_status='refunded'
+            // makes the order payout-ineligible, silently stripping the driver's
+            // pay — alert ops to pay the driver manually.
+            for (const o of (refunded || [])) {
+              if (['delivered', 'completed'].includes(o.status) && o.driver_id && o.driver_paid === false) {
+                await notifyAdmins({
+                  type: 'refund_stripped_driver_pay',
+                  title: '⚠️ Full refund stripped driver pay',
+                  body: `Order ${o.order_number || o.id} was FULLY refunded (likely via the Stripe dashboard) after the driver completed the delivery. The order is no longer payout-eligible, so the driver's $${Number(o.driver_earnings || 0).toFixed(2)} earnings + $${Number(o.tip || 0).toFixed(2)} tip will never sweep — pay the driver manually (policy: drivers are always paid for completed work).`,
+                  data: { order_id: o.id, driver_id: o.driver_id },
+                }).catch(() => {});
+              }
+            }
           } else {
             // Partial refund: record the amount, keep the order payout-eligible.
             await supabaseAdmin

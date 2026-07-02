@@ -55,9 +55,15 @@ async function reconcileMoney() {
         }
       }
 
-      const expectedTotal = n(o.subtotal) + n(o.delivery_fee) + n(o.service_fee) + n(o.tax) + n(o.tip) - n(o.promo_discount);
-      if (Math.abs(expectedTotal - n(o.total_amount)) > CENT) {
-        issues.push(`order ${o.id.slice(0, 8)}: total_amount (${n(o.total_amount).toFixed(2)}) ≠ sum of parts (${expectedTotal.toFixed(2)})`);
+      // A CHECKOUT tip is baked into total_amount; a POST-DELIVERY tip is a
+      // separate PI that updates orders.tip WITHOUT touching total_amount (by
+      // design, orders.js tip endpoint). Both are legitimate, so the invariant
+      // passes if the total matches either with or without the tip component.
+      const expectedWithTip = n(o.subtotal) + n(o.delivery_fee) + n(o.service_fee) + n(o.tax) + n(o.tip) - n(o.promo_discount);
+      const expectedNoTip = expectedWithTip - n(o.tip);
+      if (Math.abs(expectedWithTip - n(o.total_amount)) > CENT &&
+          Math.abs(expectedNoTip - n(o.total_amount)) > CENT) {
+        issues.push(`order ${o.id.slice(0, 8)}: total_amount (${n(o.total_amount).toFixed(2)}) ≠ sum of parts (${expectedWithTip.toFixed(2)} with tip / ${expectedNoTip.toFixed(2)} without)`);
       }
 
       // NOTE: boutique_paid=false on a delivered/paid order is NORMAL now — payouts

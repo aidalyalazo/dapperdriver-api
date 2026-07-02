@@ -6,6 +6,22 @@ const { supabaseAdmin } = require('../config/supabase');
 
 router.use(authenticate);
 
+/**
+ * True when a Stripe error means the stored Connect account id is unusable by
+ * the CURRENT platform key — nonexistent, deleted, or created under another
+ * mode/account (the test→live cutover case: live key + acct_ created in test
+ * mode → PermissionError/403). Treat as "no account" and let the caller heal.
+ */
+function isStaleConnectAccountError(e) {
+  return (
+    e?.code === 'resource_missing' ||
+    e?.code === 'account_invalid' ||
+    e?.type === 'StripePermissionError' ||
+    e?.statusCode === 403 ||
+    e?.statusCode === 404
+  );
+}
+
 // ── Boutique Onboarding ───────────────────────────────────────────────────
 
 /**
@@ -27,12 +43,22 @@ router.post(
     }
 
     if (boutique.stripe_account_id) {
-      // Already has account — just return a fresh onboarding link
-      const link = await stripeService.createAccountLink({
-        stripeAccountId: boutique.stripe_account_id,
-        boutiqueId:      boutique.id,
-      });
-      return res.json({ onboarding_url: link.url, already_exists: true });
+      // Already has an account — return a fresh onboarding link. If the stored
+      // id is stale (test-mode/deleted → live key can't use it), NULL it and
+      // fall through to create a NEW account instead of dead-ending.
+      try {
+        const link = await stripeService.createAccountLink({
+          stripeAccountId: boutique.stripe_account_id,
+          boutiqueId:      boutique.id,
+        });
+        return res.json({ onboarding_url: link.url, already_exists: true });
+      } catch (e) {
+        if (!isStaleConnectAccountError(e)) throw e;
+        console.warn(`[CONNECT] boutique ${boutique.id} stored account ${boutique.stripe_account_id} is stale (${e.code || e.statusCode}); creating a fresh one.`);
+        await supabaseAdmin.from('boutiques')
+          .update({ stripe_account_id: null })
+          .eq('id', boutique.id);
+      }
     }
 
     const account = await stripeService.createConnectAccount({
@@ -67,8 +93,15 @@ router.get(
       return res.json({ onboarded: false });
     }
 
-    const status = await stripeService.getAccountStatus(boutique.stripe_account_id);
-    res.json({ onboarded: true, ...status });
+    try {
+      const status = await stripeService.getAccountStatus(boutique.stripe_account_id);
+      res.json({ onboarded: true, ...status });
+    } catch (e) {
+      // Stale/cross-mode account: report "not onboarded" so the app shows
+      // SET UP PAYOUT (which now self-heals) instead of leaking a raw Stripe error.
+      if (!isStaleConnectAccountError(e)) throw e;
+      res.json({ onboarded: false, stale_account: true });
+    }
   })
 );
 
@@ -93,11 +126,20 @@ router.post(
     }
 
     if (driver.stripe_account_id) {
-      const link = await stripeService.createDriverAccountLink({
-        stripeAccountId: driver.stripe_account_id,
-        driverId:        driver.id,
-      });
-      return res.json({ onboarding_url: link.url, already_exists: true });
+      // Same self-heal as the boutique path: stale stored account → NULL + recreate.
+      try {
+        const link = await stripeService.createDriverAccountLink({
+          stripeAccountId: driver.stripe_account_id,
+          driverId:        driver.id,
+        });
+        return res.json({ onboarding_url: link.url, already_exists: true });
+      } catch (e) {
+        if (!isStaleConnectAccountError(e)) throw e;
+        console.warn(`[CONNECT] driver ${driver.id} stored account ${driver.stripe_account_id} is stale (${e.code || e.statusCode}); creating a fresh one.`);
+        await supabaseAdmin.from('drivers')
+          .update({ stripe_account_id: null })
+          .eq('id', driver.id);
+      }
     }
 
     const account = await stripeService.createDriverConnectAccount({
@@ -132,8 +174,13 @@ router.get(
       return res.json({ onboarded: false });
     }
 
-    const status = await stripeService.getAccountStatus(driver.stripe_account_id);
-    res.json({ onboarded: true, ...status });
+    try {
+      const status = await stripeService.getAccountStatus(driver.stripe_account_id);
+      res.json({ onboarded: true, ...status });
+    } catch (e) {
+      if (!isStaleConnectAccountError(e)) throw e;
+      res.json({ onboarded: false, stale_account: true });
+    }
   })
 );
 

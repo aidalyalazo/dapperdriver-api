@@ -1682,3 +1682,20 @@ EXCEPTION
     RAISE NOTICE 'SKIPPED: %', SQLERRM;
 END $run$;
 
+
+-- ── Mz. Migration 026a — payout_failures table (H5, July 2 2026 audit) ───────
+-- mondayPayouts.js writes failed driver-payout records here (silently .catch'd
+-- until now) and GET /admin/payouts/failures reads it. Idempotent.
+CREATE TABLE IF NOT EXISTS payout_failures (
+  id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  recipient_id   UUID,
+  recipient_type TEXT CHECK (recipient_type IN ('boutique', 'driver')),
+  amount         NUMERIC(12, 2) NOT NULL DEFAULT 0,
+  order_ids      JSONB NOT NULL DEFAULT '[]'::jsonb,
+  error_message  TEXT,
+  attempted_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_payout_failures_recipient ON payout_failures (recipient_id);
+CREATE INDEX IF NOT EXISTS idx_payout_failures_attempted ON payout_failures (attempted_at DESC);
+ALTER TABLE payout_failures ENABLE ROW LEVEL SECURITY;
