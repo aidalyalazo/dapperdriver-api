@@ -152,7 +152,8 @@ router.get(
         .select('user_id, display_name, avatar_url')
         .in('user_id', shopperIds);
       if (shoppers) {
-        shoppersMap = Object.fromEntries(shoppers.map(s => [s.user_id, s]));
+        // M7: key by user_id but embed ONLY safe fields — never the auth user_id.
+        shoppersMap = Object.fromEntries(shoppers.map(s => [s.user_id, { display_name: s.display_name, avatar_url: s.avatar_url }]));
       }
     }
 

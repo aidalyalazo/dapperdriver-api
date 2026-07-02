@@ -137,6 +137,61 @@ async function sweepStalledOrders() {
       );
     }
 
+    // ── Accepted-then-abandoned deliveries (M12) ────────────────────────────
+    // A driver taps Accept and then goes dark (app deleted, phone died) without
+    // ever tapping picked_up or Decline. Nothing else rescues this: the no-driver
+    // sweep above filters driver_id NULL, so the order strands the shopper until
+    // the ~day-6 auth alert. Release the driver and re-broadcast the search.
+    const ASSIGNED_TIMEOUT_MINUTES = 45;      // standard: accept → pickup budget
+    const ASSIGNED_TIMEOUT_EXPRESS = 20;      // express promises <2h door-to-door
+    const assignedCutoff = new Date(Date.now() - ASSIGNED_TIMEOUT_EXPRESS * 60 * 1000).toISOString();
+    const { data: abandoned, error: abErr } = await supabaseAdmin
+      .from('orders')
+      .select('id, updated_at, delivery_speed, boutique_id, shopper_id, driver_id')
+      .eq('status', 'driver_assigned')
+      .eq('fulfillment_type', 'delivery')
+      .not('driver_id', 'is', null)
+      .lt('updated_at', assignedCutoff);
+    if (abErr) {
+      console.error('[STALLED SWEEP] driver_assigned query failed:', abErr.message);
+    } else {
+      for (const order of abandoned || []) {
+        const idleMin = (Date.now() - new Date(order.updated_at).getTime()) / 60000;
+        const budget = order.delivery_speed === 'express' ? ASSIGNED_TIMEOUT_EXPRESS : ASSIGNED_TIMEOUT_MINUTES;
+        if (idleMin < budget) continue;
+
+        // Atomic release — only acts if the driver still hasn't picked up.
+        const { data: released } = await supabaseAdmin
+          .from('orders')
+          .update({ status: 'ready_for_pickup', driver_id: null })
+          .eq('id', order.id)
+          .eq('status', 'driver_assigned')
+          .eq('driver_id', order.driver_id)
+          .select('id')
+          .single();
+        if (!released) continue;
+
+        await Promise.resolve(supabaseAdmin.from('order_timeline').insert({
+          order_id: order.id,
+          status: 'ready_for_pickup',
+          label: 'Driver Released (Inactivity)',
+          notes: `Driver accepted but did not pick up within ${Math.round(idleMin)} min — released and search re-broadcast.`,
+        })).catch(() => {});
+
+        await notifyAdmins({
+          type: 'driver_released_inactive',
+          title: '⚠️ Driver released — accepted but never picked up',
+          body: `Order ${order.id.slice(0, 8)}: driver ${String(order.driver_id).slice(0, 8)} sat at driver_assigned for ${Math.round(idleMin)} min. Released; search re-broadcast.`,
+          data: { order_id: order.id, driver_id: order.driver_id },
+        });
+
+        const { broadcastAvailableOrder } = require('../services/driverAssignmentService');
+        Promise.resolve(broadcastAvailableOrder(order.id)).catch((e) =>
+          console.error('[STALLED SWEEP] Re-broadcast after release failed:', order.id, e.message)
+        );
+      }
+    }
+
     // ── Pickup orders the shopper never collected ───────────────────────────
     // A pickup order sits at ready_for_pickup until the shopper marks it picked_up.
     // If they never collect, nothing rescues it (the no-driver sweep above is

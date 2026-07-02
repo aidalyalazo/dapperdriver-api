@@ -51,12 +51,16 @@ router.get(
     const driverId = await getDriverId(req.userId);
     if (!driverId) return res.status(404).json({ error: 'Driver not found' });
 
+    // M13: mirror /me/earnings exactly — delivered OR completed (pickup skips
+    // 'delivered') AND payment captured — so the dashboard and earnings screen
+    // can never show contradictory lifetime numbers again.
     const [deliveredRes, activeRes, earningsRes] = await Promise.all([
       supabaseAdmin
         .from('orders')
         .select('id', { count: 'exact', head: true })
         .eq('driver_id', driverId)
-        .eq('status', 'delivered'),
+        .in('status', ['delivered', 'completed'])
+        .eq('payment_status', 'paid'),
       supabaseAdmin
         .from('orders')
         .select('id', { count: 'exact', head: true })
@@ -66,7 +70,8 @@ router.get(
         .from('orders')
         .select('driver_earnings, tip')
         .eq('driver_id', driverId)
-        .eq('status', 'delivered')),
+        .in('status', ['delivered', 'completed'])
+        .eq('payment_status', 'paid')),
     ]);
 
     const totalEarnings = (earningsRes.data || []).reduce(

@@ -155,10 +155,14 @@ router.get(
         { count: 'exact' }
       )
       .eq('boutique_id', req.params.id)
+      // Public endpoint: never expose soft-deleted (inactive) products (M6).
+      .eq('status', 'active')
       .range((page - 1) * limit, page * limit - 1);
 
     if (category) q = q.eq('category', category);
-    if (in_stock !== undefined) q = q.eq('in_stock', in_stock === 'true');
+    // There is no in_stock column — filter on stock itself (the old
+    // .eq('in_stock', …) 42703'd → 500 on every ?in_stock= request).
+    if (in_stock !== undefined) q = in_stock === 'true' ? q.gt('stock', 0) : q.lte('stock', 0);
 
     const { data, error, count } = await q;
     if (error) throw new Error(error.message);
@@ -208,7 +212,8 @@ router.get(
     if (ids.length) {
       const { data: sh } = await supabaseAdmin
         .from('shoppers').select('user_id, display_name, avatar_url').in('user_id', ids);
-      if (sh) names = Object.fromEntries(sh.map((s) => [s.user_id, s]));
+      // M7: key by user_id but embed ONLY safe fields — never the auth user_id.
+      if (sh) names = Object.fromEntries(sh.map((s) => [s.user_id, { display_name: s.display_name, avatar_url: s.avatar_url }]));
     }
 
     const reviews = parsed.slice(0, limit).map(({ shopper_id, ...r }) => ({

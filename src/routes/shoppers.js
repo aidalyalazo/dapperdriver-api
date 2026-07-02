@@ -990,6 +990,15 @@ router.delete(
     }
 
     console.log(`[ACCOUNT] Shopper account deleted: ${userId}`);
+    // M22: surface in the admin "Account Deletions" card (mirrors the driver +
+    // boutique deletion paths — shopper deletions were the only silent ones).
+    const { notifyAdmins } = require('../utils/adminAlerts');
+    await notifyAdmins({
+      type: 'account_deleted',
+      title: 'Shopper account deleted',
+      body: `A shopper permanently deleted their account (user ${String(userId).slice(0, 8)}…).`,
+      data: { user_id: userId, role: 'shopper' },
+    }).catch(() => {});
     res.json({ deleted: true });
   })
 );

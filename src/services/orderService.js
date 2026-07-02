@@ -326,9 +326,9 @@ async function createOrder({
           .catch(() => null)
       : Promise.resolve(null),
 
-    // Boutique-specific commission rate
+    // Boutique-specific commission rates (delivery + pickup overrides)
     supabaseAdmin.from('boutiques')
-      .select('commission_rate, state, name, address, city_id')
+      .select('commission_rate, pickup_commission_rate, state, name, address, city_id')
       .eq('id', boutiqueId)
       .single()
       .then((r) => r.data)
@@ -469,7 +469,11 @@ async function createOrder({
   // Commission rate (per-boutique override wins, else platform default 20%)
   let commissionRate;
   if (isPickup) {
-    commissionRate = parseFloat(pickupCommissionSetting?.default || 20) / 100;
+    // M17: honor the per-boutique pickup override the admin panel edits
+    // (mirrors the delivery override below); platform default is the fallback.
+    commissionRate = boutiqueData?.pickup_commission_rate != null
+      ? parseFloat(boutiqueData.pickup_commission_rate) / 100
+      : parseFloat(pickupCommissionSetting?.default || 20) / 100;
   } else if (boutiqueData?.commission_rate != null) {
     commissionRate = parseFloat(boutiqueData.commission_rate) / 100;
   } else {
@@ -544,10 +548,18 @@ async function createOrder({
       const { validatePromo, calculateDiscount } = require('./promoService');
       const promo = await validatePromo({ code: promoCode, boutiqueId, subtotal, shopperId });
       promoId = promo.id;
-      promoDiscount = calculateDiscount(promo, subtotal, deliveryFee);
+      // M5: free_delivery waives only the BASE fee — the express premium stays
+      // chargeable (platform revenue), matching what the display validator shows.
+      promoDiscount = calculateDiscount(promo, subtotal, baseDeliveryFee);
     } catch (e) {
-      // Promo failure must not block order creation
+      // M2: a failing promo must NOT silently charge full price — the shopper
+      // approved a discounted total. Surface it as a 422 so the app can show
+      // the reason and let them remove the code or fix it.
       console.warn('[ORDER] Promo code validation failed:', e.message);
+      throw Object.assign(
+        new Error(`Promo code ${promoCode.toUpperCase()}: ${e.message}`),
+        { status: 422, code: 'INVALID_PROMO' }
+      );
     }
   }
 
