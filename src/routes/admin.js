@@ -634,7 +634,7 @@ router.get(
       .from('orders')
       .select('id, status, payment_status, boutique_paid, payout_id, total_amount, subtotal, ' +
               'delivery_fee, service_fee, tax, tip, promo_discount, dd_commission_amount, ' +
-              'boutique_earnings, driver_earnings')
+              'boutique_earnings, driver_earnings, refund_amount')
       .eq('payment_status', 'paid')
       .gte('created_at', from)
       .lte('created_at', to)
@@ -653,6 +653,7 @@ router.get(
       driver_payouts: 0,
       tips: 0,
       promo_discounts: 0,
+      refunds: 0,
     };
     let ledgerDrift = 0;
     const unsettled = { count: 0, amount: 0 };
@@ -668,6 +669,7 @@ router.get(
       s.driver_payouts += n(o.driver_earnings) + n(o.tip);
       s.tips += n(o.tip);
       s.promo_discounts += n(o.promo_discount);
+      s.refunds += n(o.refund_amount);
 
       if (Math.abs(n(o.boutique_earnings) + n(o.dd_commission_amount) - n(o.subtotal)) > 0.01) ledgerDrift++;
 
@@ -719,6 +721,7 @@ router.get(
         total: round2(s.boutique_payouts + s.driver_payouts),
         actual_boutique_transferred: round2(actual.boutique_paid),
         actual_driver_transferred: round2(actual.driver_paid),
+        refunds_to_shoppers: round2(s.refunds),
       },
       retained: {
         platform_commission: round2(s.platform_commission),

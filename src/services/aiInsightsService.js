@@ -279,10 +279,15 @@ async function gatherBriefingData() {
         .gte('created_at', since7),
       supabaseAdmin.from('shoppers')
         .select('id, created_at, body_measurements'),
+      // Only count DELIVERY orders unclaimed for >12 min (mirrors the stalled-order
+      // sweep's threshold). Without the age gate a seconds-old healthy order showed
+      // up as a HIGH-urgency "waiting on a driver" briefing task — cry-wolf noise.
       supabaseAdmin.from('orders')
         .select('id, created_at', { count: 'exact' })
         .eq('status', 'ready_for_pickup')
-        .is('driver_id', null),
+        .eq('fulfillment_type', 'delivery')
+        .is('driver_id', null)
+        .lt('updated_at', new Date(Date.now() - 12 * 60 * 1000).toISOString()),
       supabaseAdmin.from('try_on_queues')
         .select('id', { count: 'exact', head: true })
         .eq('status', 'waiting'),
@@ -588,7 +593,7 @@ async function gatherBoutiqueData(boutiqueId) {
       : Promise.resolve({ data: [] }),
     productIds.length
       ? supabaseAdmin.from('product_reviews')
-          .select('product_id, rating, comment, selected_size, created_at')
+          .select('product_id, rating, comment, selected_size, fit_feedback, created_at')
           .in('product_id', productIds).order('created_at', { ascending: false }).limit(100)
       : Promise.resolve({ data: [] }),
     // Guarded cost fetch for GMROI — if the column doesn't exist yet, this just
@@ -841,6 +846,18 @@ async function gatherBoutiqueData(boutiqueId) {
   const ratings = reviews.map((r) => parseFloat(r.rating)).filter((n) => Number.isFinite(n));
   const avgRating = ratings.length ? Math.round(ratings.reduce((s, n) => s + n, 0) / ratings.length * 10) / 10 : null;
   const lowReviews = reviews.filter((r) => parseFloat(r.rating) <= 3 && (r.comment || '').trim());
+  // Fit tallies from fit_feedback ('small'|'true'|'large') — overall and per selected size.
+  const fitCounts = { small: 0, true: 0, large: 0, unanswered: 0 };
+  const fitBySize = {};
+  for (const r of reviews) {
+    const f = r.fit_feedback;
+    if (f === 'small' || f === 'true' || f === 'large') {
+      fitCounts[f] += 1;
+      if (r.selected_size) (fitBySize[r.selected_size] ||= { small: 0, true: 0, large: 0 })[f] += 1;
+    } else {
+      fitCounts.unanswered += 1;
+    }
+  }
   const reviewSummary = reviews.length ? {
     count: reviews.length,
     avg_rating: avgRating,
@@ -848,6 +865,8 @@ async function gatherBoutiqueData(boutiqueId) {
     low_rated_count: ratings.filter((n) => n <= 3).length,
     recent_negative_comments: lowReviews.slice(0, 5).map((r) => ({ rating: parseFloat(r.rating), comment: (r.comment || '').slice(0, 200), size: r.selected_size || null })),
     recent_positive_comments: reviews.filter((r) => parseFloat(r.rating) >= 4 && (r.comment || '').trim()).slice(0, 3).map((r) => (r.comment || '').slice(0, 160)),
+    fit: fitCounts,
+    fit_by_size: fitBySize,
   } : null;
 
   // ── Hour-of-day demand (promo/staffing timing) ────────────────────────────
@@ -1160,6 +1179,14 @@ function fallbackReport(d) {
     let body = `${r.count} reviews, ${r.avg_rating}★ average (${r.five_star_pct}% five-star).`;
     if (r.recent_negative_comments && r.recent_negative_comments.length) {
       body += ` Recent low ratings mention: ${r.recent_negative_comments.map((c) => `"${c.comment}"`).slice(0, 2).join(' ')} — address these themes in listings or quality.`;
+    }
+    const f = r.fit || {};
+    if ((f.small || 0) + (f.true || 0) + (f.large || 0) > 0) {
+      const fitBits = [];
+      if (f.true) fitBits.push(`${f.true} true to size`);
+      if (f.small) fitBits.push(`${f.small} runs small`);
+      if (f.large) fitBits.push(`${f.large} runs large`);
+      body += ` Fit: ${fitBits.join(' · ')}.`;
     }
     sections.push({ heading: 'What reviews are telling you', body });
   }

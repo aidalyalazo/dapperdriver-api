@@ -991,7 +991,7 @@ async function updateOrderStatus({ orderId, newStatus, actorId, driverId }) {
         // Promise.resolve(): builder has no .catch (would throw and skip the update,
         // leaving a captured order stuck at 'authorized' until the webhook).
         await Promise.resolve(
-          supabaseAdmin.from('orders').update({ payment_status: 'paid' }).eq('id', orderId)
+          supabaseAdmin.from('orders').update({ payment_status: 'paid', payment_confirmed_at: new Date().toISOString() }).eq('id', orderId)
         ).catch(() => {});
       }
 
@@ -1132,7 +1132,7 @@ async function assignDriver({ orderId, driverId }) {
   // pay themselves the delivery fee + self-tip and cash it out). driverId here
   // is the driver's auth user id, same namespace as orders.shopper_id.
   const { data: ord } = await supabaseAdmin
-    .from('orders').select('shopper_id').eq('id', orderId).single();
+    .from('orders').select('shopper_id, city_id').eq('id', orderId).single();
   if (ord && ord.shopper_id === driverId) {
     throw Object.assign(new Error('You cannot accept your own order'), { status: 403 });
   }
@@ -1140,11 +1140,23 @@ async function assignDriver({ orderId, driverId }) {
   // Resolve drivers.id from drivers.user_id (auth UUID)
   const { data: driverRow } = await supabaseAdmin
     .from('drivers')
-    .select('id, is_approved, max_active_orders')
+    .select('id, is_approved, max_active_orders, city_id')
     .eq('user_id', driverId)
     .single();
 
   const driverTableId = driverRow?.id || driverId; // fallback keeps existing behaviour
+
+  // City guard at claim time (mismatch-only): the feed already city-filters, but
+  // the claim path accepted any driver for any city — a Miami driver could claim
+  // a Chicago order via a stale/direct request. Blocks only an EXPLICIT mismatch;
+  // either side NULL keeps the feed's fail-open behaviour (suburb orders /
+  // legacy NULL-city drivers are never locked out).
+  if (ord?.city_id && driverRow?.city_id && ord.city_id !== driverRow.city_id) {
+    throw Object.assign(
+      new Error('This order is in a different city than your driver profile.'),
+      { status: 403, code: 'CITY_MISMATCH' }
+    );
+  }
 
   // #9: the live accept path must enforce approval + capacity. assignDriver was the only
   // assign path that skipped both, so drivers.max_active_orders was effectively unenforced

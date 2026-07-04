@@ -57,8 +57,8 @@ router.post(
 
           console.log(`[WEBHOOK] PI authorized — amount_capturable: $${(pi.amount_capturable / 100).toFixed(2)}, order: ${orderId}`);
 
-          // Mark payment as authorized (pre-auth hold on card)
-          // NOTE: payment_confirmed_at column added in migration v2 — included once that runs.
+          // Mark payment as authorized (pre-auth hold on card).
+          // payment_confirmed_at is set only on the transition to 'paid', not here.
           await supabaseAdmin
             .from('orders')
             .update({ payment_status: 'authorized' })
@@ -88,12 +88,16 @@ router.post(
           const orderId = pi.metadata?.order_id;
           if (!orderId) break;
 
-          // Mark order as fully paid
-          // NOTE: payment_confirmed_at column added in migration v2.
+          // Mark order as fully paid. Guarded: Stripe can retry this event days
+          // later, and an unconditional write would clobber a 'refunded' (or
+          // 'failed') status back to 'paid' — only transition from the states
+          // that legitimately precede capture. (paid→paid is no longer rewritten,
+          // which is fine for idempotency.)
           await supabaseAdmin
             .from('orders')
-            .update({ payment_status: 'paid' })
-            .eq('id', orderId);
+            .update({ payment_status: 'paid', payment_confirmed_at: new Date().toISOString() })
+            .eq('id', orderId)
+            .in('payment_status', ['pending', 'authorized']);
 
           // Advance order to 'confirmed' if it somehow never got confirmed
           // (e.g. if amount_capturable_updated was missed)

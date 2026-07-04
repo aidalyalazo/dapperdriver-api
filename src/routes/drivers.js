@@ -181,7 +181,17 @@ router.get(
     const period = String(req.query.period || 'all').toLowerCase();
     const now = new Date();
     let since = null;
-    if (period === 'today') { const d = new Date(now); d.setUTCHours(0, 0, 0, 0); since = d.toISOString(); }
+    if (period === 'today') {
+      // Start of the current LOCAL day, not the UTC day — with setUTCHours(0,0,0,0)
+      // the "day" flipped at 6–7 PM Chicago, so evening deliveries vanished from Today.
+      // No-dep approach: Intl gives the local H/M/S in tz; subtract ms-into-day from now.
+      // (Off by 1h on DST-transition days — acceptable.)
+      const tz = process.env.EARNINGS_TIMEZONE || 'America/Chicago';
+      const parts = new Intl.DateTimeFormat('en-US', { timeZone: tz, hour12: false, hour: 'numeric', minute: 'numeric', second: 'numeric' }).formatToParts(now);
+      const part = (t) => parseInt(parts.find((p) => p.type === t)?.value, 10) || 0;
+      const msIntoLocalDay = (((part('hour') % 24) * 3600 + part('minute') * 60 + part('second')) * 1000) + now.getMilliseconds();
+      since = new Date(now.getTime() - msIntoLocalDay).toISOString();
+    }
     else if (period === 'week')  { since = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString(); }
     else if (period === 'month') { since = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString(); }
 

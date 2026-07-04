@@ -13,11 +13,9 @@ const { notifyAdmins } = require('../utils/adminAlerts');
  * Invariants checked (per delivered/completed order in the window):
  *   1. boutique_earnings + dd_commission_amount ≈ subtotal
  *   2. total_amount ≈ subtotal + delivery_fee + service_fee + tax + tip − promo_discount
- *   3. delivered/completed + payment captured ⇒ boutique should be paid
- *      (boutique_paid = true). A false here = a failed/owed boutique transfer.
- *   4. payment_status = 'refunded' AND (boutique_paid OR driver_paid) with no
+ *   3. payment_status = 'refunded' AND (boutique_paid OR driver_paid) with no
  *      reversal = money paid out on a refunded order → flag for review.
- *   5. cancelled order with payment_status = 'paid' = should have been refunded.
+ *   4. cancelled order with payment_status = 'paid' = should have been refunded.
  */
 const CENT = 0.01;
 
@@ -90,7 +88,7 @@ async function reconcileMoney() {
     console.error(`[MONEY RECONCILE] ⚠️ ${issues.length} discrepancies:\n  ${issues.join('\n  ')}`);
     await notifyAdmins({
       type: 'money_reconcile',
-      title: `🚨 ${issues.length} ledger discrepancy${issues.length === 1 ? '' : 'ies'}`,
+      title: `🚨 ${issues.length} ledger discrepanc${issues.length === 1 ? 'y' : 'ies'}`,
       body: shown.join(' | ') + (issues.length > shown.length ? ` …(+${issues.length - shown.length} more in logs)` : ''),
       data: { count: issues.length, scanned: orders.length },
     });

@@ -129,6 +129,28 @@ router.post(
       console.warn('[REVIEWS] Failed to update product rating:', e.message);
     }
 
+    // Fire-and-forget in-app notification to the boutique owner. Must never fail
+    // the request — the review is already committed at this point.
+    Promise.resolve((async () => {
+      const { data: prod } = await supabaseAdmin
+        .from('products')
+        .select('name, boutique_id, boutiques(user_id)')
+        .eq('id', product_id)
+        .single();
+      const ownerId = prod?.boutiques?.user_id;
+      if (!ownerId) return;
+      const snippet = (comment || '').trim().slice(0, 60);
+      await supabaseAdmin.from('notifications').insert({
+        user_id: ownerId,
+        type: 'new_review',
+        title: `⭐ New ${rating}-star review`,
+        body: snippet ? `${prod.name || 'Your product'}: "${snippet}"` : `${prod.name || 'Your product'} received a new review.`,
+        data: { product_id, review_id: review.id },
+        is_read: false,
+        sent_push: false,
+      });
+    })()).catch(() => {});
+
     res.status(201).json(review);
   })
 );
