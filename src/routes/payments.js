@@ -18,7 +18,14 @@ function isStaleConnectAccountError(e) {
     e?.code === 'account_invalid' ||
     e?.type === 'StripePermissionError' ||
     e?.statusCode === 403 ||
-    e?.statusCode === 404
+    e?.statusCode === 404 ||
+    // Cross-mode case seen live July 3: accountLinks.create with a TEST-mode
+    // acct under the LIVE key returns a plain 400 InvalidRequestError with NO
+    // code — "You requested an account link for an account that is not
+    // connected to your platform or does not exist." Match the stable message
+    // so the self-heal (NULL + recreate) fires instead of surfacing the error.
+    (e?.statusCode === 400 &&
+      /not connected to your platform|does not exist/i.test(e?.message || ''))
   );
 }
 
