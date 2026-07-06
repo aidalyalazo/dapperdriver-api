@@ -1539,9 +1539,12 @@ router.patch(
 router.get(
   '/insights/daily',
   asyncHandler(async (req, res) => {
-    const { getDailyBriefing } = require('../services/aiInsightsService');
-    const briefing = await getDailyBriefing({ refresh: req.query.refresh === '1' });
-    res.json(briefing);
+    // Cold generations take 60–120s; answer a cache miss with 202 and let the
+    // panel poll (getDailyBriefingAsync dedupes concurrent generations).
+    const { getDailyBriefingAsync } = require('../services/aiInsightsService');
+    const r = await getDailyBriefingAsync({ refresh: req.query.refresh === '1' });
+    if (r.status === 'ready') return res.json(r.content);
+    res.status(202).json({ generating: true });
   })
 );
 
@@ -1555,9 +1558,11 @@ router.get(
   [param('id').isUUID()],
   validate,
   asyncHandler(async (req, res) => {
-    const { getBoutiqueReport } = require('../services/aiInsightsService');
-    const report = await getBoutiqueReport(req.params.id, { refresh: req.query.refresh === '1' });
-    res.json(report);
+    // Same 202-and-poll contract as /insights/daily — see the note there.
+    const { getBoutiqueReportAsync } = require('../services/aiInsightsService');
+    const r = await getBoutiqueReportAsync(req.params.id, { refresh: req.query.refresh === '1' });
+    if (r.status === 'ready') return res.json(r.content);
+    res.status(202).json({ generating: true });
   })
 );
 

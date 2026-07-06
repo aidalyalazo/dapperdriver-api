@@ -494,19 +494,26 @@ function fallbackBriefing(d) {
   };
 }
 
+/** Cached briefing for today, or null. */
+async function readBriefingCache() {
+  const today = new Date().toISOString().slice(0, 10);
+  const { data: existing } = await supabaseAdmin
+    .from('ai_insights')
+    .select('content, source, created_at')
+    .eq('kind', 'daily_briefing')
+    .eq('insight_date', today)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return existing ? { ...existing.content, _source: existing.source, _generated_at: existing.created_at } : null;
+}
+
 async function getDailyBriefing({ refresh = false } = {}) {
   const today = new Date().toISOString().slice(0, 10);
 
   if (!refresh) {
-    const { data: existing } = await supabaseAdmin
-      .from('ai_insights')
-      .select('content, source, created_at')
-      .eq('kind', 'daily_briefing')
-      .eq('insight_date', today)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (existing) return { ...existing.content, _source: existing.source, _generated_at: existing.created_at };
+    const cached = await readBriefingCache();
+    if (cached) return cached;
   }
 
   const data = await gatherBriefingData();
@@ -522,7 +529,7 @@ async function getDailyBriefing({ refresh = false } = {}) {
       '(4) EFFICIENCY/GROWTH — concrete levers to grow GMV or run leaner, drawn from the patterns (e.g. a city outpacing supply, a demand gap nobody stocks, a boutique worth featuring). ' +
       'Cross-reference signals — connect the dots between cities, boutiques, keep rate, and demand gaps rather than listing them. Cite exact numbers; NEVER invent any. Be concise but insightful; every item earns its place.\n\n' +
       'Benchmark context to ground your read: try-on keep rate is the fit north-star — below ~60% is a red flag worth investigating; fashion repeat-purchase rate of 12–26% is normal, so marketplace retention above that is a strength. Compare to these where relevant.',
-    prompt: `Today's full data snapshot (use every relevant block; compute comparisons and the run-rate projection from month_to_date):\n${JSON.stringify(data, null, 1)}\n\nWrite today's strategic briefing.`,
+    prompt: `Today's full data snapshot (use every relevant block; compute comparisons and the run-rate projection from month_to_date):\n${JSON.stringify(data)}\n\nWrite today's strategic briefing.`,
     schema: BRIEFING_SCHEMA,
   });
 
@@ -1278,19 +1285,25 @@ function fallbackReport(d) {
   };
 }
 
+/** Cached report (<24h) for one boutique, or null. */
+async function readReportCache(boutiqueId) {
+  const dayAgo = new Date(Date.now() - DAY_MS).toISOString();
+  const { data: existing } = await supabaseAdmin
+    .from('ai_insights')
+    .select('content, source, created_at')
+    .eq('kind', 'boutique_report')
+    .eq('subject_id', boutiqueId)
+    .gte('created_at', dayAgo)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return existing ? { ...existing.content, _source: existing.source, _generated_at: existing.created_at } : null;
+}
+
 async function getBoutiqueReport(boutiqueId, { refresh = false } = {}) {
   if (!refresh) {
-    const dayAgo = new Date(Date.now() - DAY_MS).toISOString();
-    const { data: existing } = await supabaseAdmin
-      .from('ai_insights')
-      .select('content, source, created_at')
-      .eq('kind', 'boutique_report')
-      .eq('subject_id', boutiqueId)
-      .gte('created_at', dayAgo)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (existing) return { ...existing.content, _source: existing.source, _generated_at: existing.created_at };
+    const cached = await readReportCache(boutiqueId);
+    if (cached) return cached;
   }
 
   const data = await gatherBoutiqueData(boutiqueId);
@@ -1306,7 +1319,7 @@ async function getBoutiqueReport(boutiqueId, { refresh = false } = {}) {
       BENCHMARKS + '\n\n' +
       'Use the season_context field to make timing advice city-correct and current (e.g. what to buy deeper or clear right now for their market) — never give generic seasonal advice.\n\n' +
       'End with a prioritized, numbered action list: the specific marketing / merchandising / operations moves that will most improve their sales, each tied to the exact number that motivates it ("Restock the Wide Leg Trouser in M — 2 left, your #1 size"; "Bundle the Linen Set + Straw Tote — bought together 6×"; "Email past buyers ~day 28, your repeat cadence"; "Mark down the 5 items under 40% sell-through to free trapped cash"). Cite exact numbers; NEVER invent data; every claim must trace to a value in the data. The owner should finish reading and know exactly what to do Monday morning.',
-    prompt: `This boutique's full shopper + boutique dataset. Analyze it holistically — find the patterns across blocks, compare metrics to the benchmarks, and use season_context for timing. The "audience" block is WHO actually buys here (age, gender, style vibes, occasions, budget, plus stated SIZES and average body MEASUREMENTS) — use it to tailor buying/merchandising advice to this boutique's real customer base, and specifically use audience.sizes + audience.measurements to recommend how deep to buy each size and how to grade fit (e.g. "your shoppers skew size S top / 27 waist — buy depth there"); if audience is null or low coverage, say the demographic signal is still thin:\n${JSON.stringify(data, null, 1)}\n\nWrite the intelligence report.`,
+    prompt: `This boutique's full shopper + boutique dataset. Analyze it holistically — find the patterns across blocks, compare metrics to the benchmarks, and use season_context for timing. The "audience" block is WHO actually buys here (age, gender, style vibes, occasions, budget, plus stated SIZES and average body MEASUREMENTS) — use it to tailor buying/merchandising advice to this boutique's real customer base, and specifically use audience.sizes + audience.measurements to recommend how deep to buy each size and how to grade fit (e.g. "your shoppers skew size S top / 27 waist — buy depth there"); if audience is null or low coverage, say the demographic signal is still thin:\n${JSON.stringify(data)}\n\nWrite the intelligence report.`,
     schema: REPORT_SCHEMA,
   });
 
@@ -1373,11 +1386,51 @@ async function analyzeUnavailable(data) {
       'You analyze out-of-stock events for DapperDriver admin ops. Boutiques can mark an item unavailable on an active customer order; too much of it signals broken inventory accuracy and frustrates shoppers. ' +
       'Given the aggregated data, find the real patterns and prescribe fixes: name the boutique with an accuracy problem (cite count + rate — a rate ≥15% of their orders is a red flag), the products that keep overselling, and shoppers being repeatedly let down (churn risk). ' +
       'Connect signals and prioritize by impact. Cite exact numbers; never invent. Be concise and operational — each action should be something the admin can do this week.',
-    prompt: `Out-of-stock analytics:\n${JSON.stringify(data, null, 1)}\n\nAnalyze the pattern and prescribe fixes.`,
+    prompt: `Out-of-stock analytics:\n${JSON.stringify(data)}\n\nAnalyze the pattern and prescribe fixes.`,
     schema: UNAVAILABLE_SCHEMA,
   });
   const source = ai ? 'claude' : 'fallback';
   return { ...(ai || fallbackUnavailable(data)), _source: source };
 }
 
-module.exports = { getDailyBriefing, getBoutiqueReport, analyzeUnavailable };
+// ── Async generation with in-flight dedup ────────────────────────────────────
+// Cold generations take 60–120s (Claude writes a ~6k-token report). Serving them
+// synchronously left the panel on a bare spinner for the whole wait, and every
+// retry-click spawned ANOTHER full generation (observed live July 6: four
+// concurrent generations of the same boutique report in ~35s). The routes now
+// answer a cache miss with 202 {generating:true}, kick the generation off in the
+// background exactly once per subject, and the panel polls the cache.
+const inFlightGenerations = new Set();
+
+function generateInBackground(key, fn) {
+  if (inFlightGenerations.has(key)) return;
+  inFlightGenerations.add(key);
+  Promise.resolve(fn())
+    .catch((e) => console.error(`[AI INSIGHTS] background generation ${key} failed:`, e.message))
+    .finally(() => inFlightGenerations.delete(key));
+}
+
+/** Non-blocking briefing: cached → ready; else start one generation, report generating. */
+async function getDailyBriefingAsync({ refresh = false } = {}) {
+  if (!refresh) {
+    const cached = await readBriefingCache();
+    if (cached) return { status: 'ready', content: cached };
+  }
+  generateInBackground('daily_briefing', () => getDailyBriefing({ refresh: true }));
+  return { status: 'generating' };
+}
+
+/** Non-blocking boutique report: cached → ready; else start one generation, report generating. */
+async function getBoutiqueReportAsync(boutiqueId, { refresh = false } = {}) {
+  if (!refresh) {
+    const cached = await readReportCache(boutiqueId);
+    if (cached) return { status: 'ready', content: cached };
+  }
+  generateInBackground(`boutique_report_${boutiqueId}`, () => getBoutiqueReport(boutiqueId, { refresh: true }));
+  return { status: 'generating' };
+}
+
+module.exports = {
+  getDailyBriefing, getBoutiqueReport, analyzeUnavailable,
+  getDailyBriefingAsync, getBoutiqueReportAsync,
+};
