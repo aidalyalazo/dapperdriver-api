@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const { asyncHandler } = require('../middleware/errorHandler');
+const { optionalAuth } = require('../middleware/auth');
 const { supabaseAdmin } = require('../config/supabase');
 
 /**
@@ -8,6 +9,7 @@ const { supabaseAdmin } = require('../config/supabase');
  */
 router.get(
   '/search',
+  optionalAuth,
   asyncHandler(async (req, res) => {
     const { q, type = 'all', city_id, page = 1, limit = 20 } = req.query;
 
@@ -79,7 +81,9 @@ router.get(
         query: String(q).slice(0, 200),
         result_count: total,
         city_id: city_id || null,
-        shopper_id: null, // route is unauthenticated; keep logs anonymous
+        // optionalAuth: attributed when the app sends its usual Bearer token,
+        // anonymous otherwise — attribution powers per-shopper demand analytics.
+        shopper_id: req.userId ?? null,
       })
       .then(() => {}, () => {});
 

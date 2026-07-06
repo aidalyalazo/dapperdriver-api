@@ -92,10 +92,19 @@ async function getBoutiqueAnalytics(boutiqueId, { days = 30 } = {}) {
       .select('id, name, category, stock, style_tags, tags')
       .eq('boutique_id', boutiqueId)
       .limit(10000),
-    supabaseAdmin.from('search_logs')
-      .select('query, result_count, created_at')
-      .gte('created_at', since)
-      .limit(20000),
+    // City-scoped when the boutique has a city: explicit other-city searches are
+    // excluded (Miami queries must not read as demand for a Chicago boutique);
+    // NULL-city logs still count — most app searches don't carry a city param.
+    (b.city_id
+      ? supabaseAdmin.from('search_logs')
+          .select('query, result_count, created_at')
+          .or(`city_id.eq.${b.city_id},city_id.is.null`)
+          .gte('created_at', since)
+          .limit(20000)
+      : supabaseAdmin.from('search_logs')
+          .select('query, result_count, created_at')
+          .gte('created_at', since)
+          .limit(20000)),
     b.city_id
       ? supabaseAdmin.from('orders')
           .select('boutique_id, status, payment_status, total_amount')
@@ -124,8 +133,12 @@ async function getBoutiqueAnalytics(boutiqueId, { days = 30 } = {}) {
     fetchIn((ids) => supabaseAdmin.from('saved_items')
       .select('product_id')
       .in('product_id', ids), productIds),
+    // "Current interest" means NOW — cap carts at 14 days so months-old
+    // abandoned demo carts don't inflate the number (audit: 11 of 13 live
+    // rows were Mar–Jun leftovers).
     fetchIn((ids) => supabaseAdmin.from('cart_items')
       .select('product_id')
+      .gte('created_at', new Date(now - 14 * DAY_MS).toISOString())
       .in('product_id', ids), productIds),
     fetchIn((ids) => supabaseAdmin.from('product_reviews')
       .select('product_id, rating, comment, selected_size, fit_feedback, created_at')

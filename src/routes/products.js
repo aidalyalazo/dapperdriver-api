@@ -1,5 +1,5 @@
 const router = require('express').Router();
-const { authenticate, requireRole } = require('../middleware/auth');
+const { authenticate, optionalAuth, requireRole } = require('../middleware/auth');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { supabaseAdmin } = require('../config/supabase');
 
@@ -12,6 +12,7 @@ const { supabaseAdmin } = require('../config/supabase');
  */
 router.get(
   '/',
+  optionalAuth,
   asyncHandler(async (req, res) => {
     const {
       boutique_id,
@@ -102,7 +103,8 @@ router.get(
           // overstate per-city demand for a city-scoped search.
           result_count: (city_id || wantOnSale) ? filtered.length : (count || 0),
           city_id: city_id || null,
-          shopper_id: null,
+          // optionalAuth: attributed when the app's Bearer token is present.
+          shopper_id: req.userId ?? null,
         })
         .then(() => {}, () => {});
     }

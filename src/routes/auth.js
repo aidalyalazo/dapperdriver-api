@@ -162,7 +162,7 @@ router.post(
         if (addrErr) console.warn('[REGISTER] address save failed (non-fatal):', addrErr.message);
       }
       const survey = {};
-      for (const k of ['size_tops', 'size_bottoms', 'size_shoes', 'style_preferences', 'category_prefs', 'shopping_occasions', 'price_tier']) {
+      for (const k of ['size_tops', 'size_bottoms', 'size_shoes', 'size_dresses', 'style_preferences', 'category_prefs', 'shopping_occasions', 'price_tier']) {
         if (req.body[k] != null) survey[k] = req.body[k];
       }
       if (Object.keys(survey).length) {

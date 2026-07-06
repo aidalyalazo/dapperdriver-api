@@ -34,6 +34,27 @@ async function authenticate(req, res, next) {
 }
 
 /**
+ * Best-effort identity on PUBLIC routes: attaches req.user/req.userId when a
+ * valid Bearer token is present, continues anonymously otherwise — never 401s.
+ * Used to attribute demand signals (e.g. search_logs.shopper_id) on routes the
+ * app calls both logged-in and logged-out. NEVER use this to gate access.
+ */
+async function optionalAuth(req, _res, next) {
+  try {
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const token = authHeader.split(' ')[1];
+      const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
+      if (!error && user) {
+        req.user = user;
+        req.userId = user.id;
+      }
+    }
+  } catch (_) { /* anonymous is fine */ }
+  next();
+}
+
+/**
  * Role-based guard. Call AFTER authenticate.
  * app_metadata.role is authoritative (only writable server-side); falls back
  * to user_metadata.role for legacy accounts — EXCEPT for 'admin', which must
@@ -78,4 +99,4 @@ function resolveRole(req) {
   return umRole || null;
 }
 
-module.exports = { authenticate, requireRole, resolveRole };
+module.exports = { authenticate, optionalAuth, requireRole, resolveRole };
