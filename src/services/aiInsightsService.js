@@ -560,7 +560,7 @@ async function gatherBoutiqueData(boutiqueId) {
       supabaseAdmin.from('order_items')
         // Filtered to this boutique's done orders in JS below; explicit high cap so
         // PostgREST's default 1000-row limit can't silently truncate the size/sales curve.
-        .select('order_id, product_id, name, quantity, unit_price, selected_size')
+        .select('order_id, product_id, name, quantity, qty, unit_price, price, selected_size')
         .limit(100000),
       supabaseAdmin.from('products')
         .select('id, name, price, status, category, variant_stock, created_at', { count: 'exact' })
@@ -627,10 +627,14 @@ async function gatherBoutiqueData(boutiqueId) {
   const byProduct = {};
   const bySize = {};
   for (const i of items) {
-    const qty = i.quantity || 1;
+    // Live rows carry the value in the legacy columns (price/qty) with
+    // unit_price/quantity NULL — without the fallback every product's revenue
+    // reads $0 and the AI report's merchandising advice is built on nothing.
+    const qty = i.quantity ?? i.qty ?? 1;
+    const unit = parseFloat(i.unit_price ?? i.price ?? 0);
     if (!byProduct[i.product_id]) byProduct[i.product_id] = { name: i.name, units: 0, revenue: 0 };
     byProduct[i.product_id].units += qty;
-    byProduct[i.product_id].revenue = money(byProduct[i.product_id].revenue + qty * parseFloat(i.unit_price || 0));
+    byProduct[i.product_id].revenue = money(byProduct[i.product_id].revenue + qty * unit);
     if (i.selected_size) bySize[i.selected_size] = (bySize[i.selected_size] || 0) + qty;
   }
 

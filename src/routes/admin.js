@@ -1566,6 +1566,24 @@ router.get(
   })
 );
 
+/**
+ * GET /api/v1/admin/boutiques/:id/analytics?days=30
+ * Raw per-boutique analytics (performance / behavior / intelligence / search)
+ * — the structured numbers behind the drawer, no AI and no cache. days snaps
+ * to 7, 30, or 90.
+ */
+router.get(
+  '/boutiques/:id/analytics',
+  [param('id').isUUID()],
+  validate,
+  asyncHandler(async (req, res) => {
+    const raw = Math.min(Math.max(parseInt(req.query.days) || 30, 7), 90);
+    const days = [7, 30, 90].reduce((best, v) => (Math.abs(v - raw) < Math.abs(best - raw) ? v : best), 7);
+    const { getBoutiqueAnalytics } = require('../services/boutiqueAnalyticsService');
+    res.json(await getBoutiqueAnalytics(req.params.id, { days }));
+  })
+);
+
 // ── Out-of-Stock / Unavailable-Item Analytics ────────────────────────────────
 
 /**
