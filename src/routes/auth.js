@@ -32,8 +32,9 @@ const supabasePublic = createClient(
  * POST /api/v1/auth/register
  * Creates a Supabase Auth user and the corresponding profile record.
  * `role` must be one of: shopper | boutique | driver
- * Shopper body may also include demographic fields persisted to the profile:
- * date_of_birth (ISO date, validated 13–120 yrs) and gender.
+ * Shopper body may also include OPTIONAL demographic fields persisted to the
+ * profile: date_of_birth (ISO date; 13–120 yrs validated ONLY when provided —
+ * registration succeeds without it, Apple 5.1.1(v)) and gender.
  */
 router.post(
   '/register',
@@ -43,7 +44,9 @@ router.post(
     body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters'),
     body('role').isIn(['shopper', 'boutique', 'driver']).withMessage('role must be shopper, boutique, or driver'),
     body('full_name').notEmpty().withMessage('full_name is required'),
-    body('date_of_birth').optional({ nullable: true }).isISO8601().withMessage('date_of_birth must be YYYY-MM-DD')
+    // values:'falsy' skips validation when absent, null, OR '' — DOB is fully
+    // optional; the 13+/120 age check below runs only when a real value arrives.
+    body('date_of_birth').optional({ values: 'falsy' }).isISO8601().withMessage('date_of_birth must be YYYY-MM-DD')
       .custom((v) => {
         const dob = new Date(v);
         if (isNaN(dob.getTime())) throw new Error('invalid date');
