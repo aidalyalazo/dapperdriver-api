@@ -5,6 +5,7 @@ const { body, param } = require('express-validator');
 const { validate } = require('../middleware/validate');
 const { supabaseAdmin } = require('../config/supabase');
 const { stripe } = require('../config/stripe');
+const { logAdminAction } = require('../utils/adminAudit');
 
 // All admin routes require authentication and admin role
 router.use(authenticate);
@@ -103,6 +104,7 @@ router.patch(
       })).catch(() => {});
     }
 
+    logAdminAction(req, { action: 'boutique.status', targetType: 'boutique', targetId: req.params.id, detail: { status } });
     res.json(data);
   })
 );
@@ -246,6 +248,7 @@ router.patch(
         .catch(() => {});
     }
 
+    logAdminAction(req, { action: 'driver.document_status', targetType: 'driver', targetId: req.params.id, detail: { document_id: req.params.docId, doc_type: data?.doc_type, status } });
     res.json(data);
   })
 );
@@ -403,6 +406,7 @@ router.post(
       .single();
 
     if (error) throw new Error(error.message);
+    logAdminAction(req, { action: 'promo.create', targetType: 'promo', targetId: data?.id, detail: { code: data?.code, type, value } });
     res.status(201).json(data);
   })
 );
@@ -432,6 +436,7 @@ router.patch(
       .single();
 
     if (error) throw new Error(error.message);
+    logAdminAction(req, { action: 'promo.update', targetType: 'promo', targetId: req.params.id, detail: updates });
     res.json(data);
   })
 );
@@ -446,6 +451,7 @@ router.delete(
   asyncHandler(async (req, res) => {
     await supabaseAdmin.from('promos').update({ is_active: false }).eq('id', req.params.id);
 
+    logAdminAction(req, { action: 'promo.deactivate', targetType: 'promo', targetId: req.params.id });
     res.json({ message: 'Promo deactivated.' });
   })
 );
@@ -466,6 +472,7 @@ router.post(
         recipientId: recipient_id,
         recipientType: recipient_type,
       });
+      logAdminAction(req, { action: 'payout.trigger', targetType: 'payout', targetId: recipient_id, detail: { recipient_type, amount: result?.amount ?? null } });
       res.json(result);
     } catch (e) {
       throw Object.assign(new Error(e.message), { status: e.status || 500 });
@@ -842,6 +849,7 @@ router.patch(
       .select()
       .single();
     if (error) throw new Error(error.message);
+    logAdminAction(req, { action: 'support.ticket_update', targetType: 'support_ticket', targetId: req.params.id, detail: patch });
     res.json(data);
   })
 );
@@ -938,6 +946,7 @@ router.post(
     if (ticket.status === 'open') patch.status = 'in_progress';
     await Promise.resolve(supabaseAdmin.from('support_tickets').update(patch).eq('id', ticket.id)).catch(() => {});
 
+    logAdminAction(req, { action: 'support.ticket_reply', targetType: 'support_ticket', targetId: ticket.id, detail: { channel, subject, app_sent: result.app_sent, email_sent: result.email_sent } });
     res.json({ ...result, status: patch.status || ticket.status });
   })
 );
@@ -2020,6 +2029,126 @@ router.post(
     )).catch(() => {});
 
     res.status(201).json({ batch, assigned_orders: assignedIds, skipped_orders: skipped });
+  })
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ADMIN AUDIT LOG + DRIVER INCIDENTS (migration 028)
+//
+// admin_actions is written fire-and-forget by logAdminAction across the admin
+// mutations; driver_incidents is the ops record of driver problems. Both are
+// RLS-locked (no policies) so ONLY these service-role routes can touch them.
+// Every read here degrades to an empty list until the owner runs migration 028
+// — a missing table must never 500 the panel.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const INCIDENT_CATEGORIES = ['never_delivered', 'late', 'no_show', 'customer_complaint', 'safety', 'other'];
+const INCIDENT_SEVERITIES = ['note', 'warning', 'hold', 'deactivation'];
+
+/** Missing-table detection: PostgREST answers 42P01 (undefined_table) or
+ *  PGRST205 ("Could not find the table … in the schema cache"). */
+const isMissingTable = (error) => !!error && (
+  error.code === '42P01' || error.code === 'PGRST205' ||
+  /does not exist|schema cache/i.test(error.message || '')
+);
+
+/**
+ * GET /api/v1/admin/actions
+ * Paginated audit log. Query: target_type, action, limit (≤200), offset.
+ * Returns { data: [], available: false } until migration 028 has run.
+ */
+router.get(
+  '/actions',
+  asyncHandler(async (req, res) => {
+    const limit = Math.min(parseInt(req.query.limit, 10) || 50, 200);
+    const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+
+    let q = supabaseAdmin
+      .from('admin_actions')
+      .select('*', { count: 'exact' })
+      .order('created_at', { ascending: false })
+      .range(offset, offset + limit - 1);
+    if (req.query.target_type) q = q.eq('target_type', req.query.target_type);
+    if (req.query.action) q = q.eq('action', req.query.action);
+
+    const { data, count, error } = await q;
+    if (error) {
+      if (isMissingTable(error)) {
+        return res.json({ data: [], total: 0, limit, offset, available: false, message: 'admin_actions table missing — run migration 028 in Supabase.' });
+      }
+      throw new Error(error.message);
+    }
+    res.json({ data: data || [], total: count || 0, limit, offset, available: true });
+  })
+);
+
+/**
+ * POST /api/v1/admin/drivers/:id/incidents
+ * Record a driver incident (:id = drivers.id, the row id). Body:
+ * { category, severity?, description?, order_id? }. Also logs an admin_action.
+ */
+router.post(
+  '/drivers/:id/incidents',
+  [
+    param('id').isUUID(),
+    body('category').isIn(INCIDENT_CATEGORIES),
+    body('severity').optional().isIn(INCIDENT_SEVERITIES),
+    body('description').optional().isString().trim().isLength({ max: 2000 }),
+    body('order_id').optional().isUUID(),
+  ],
+  validate,
+  asyncHandler(async (req, res) => {
+    const { category, severity, description, order_id } = req.body;
+
+    const { data, error } = await supabaseAdmin
+      .from('driver_incidents')
+      .insert({
+        driver_id: req.params.id,
+        order_id: order_id || null,
+        category,
+        severity: severity || 'note',
+        description: description || null,
+        created_by: req.userId,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      if (isMissingTable(error)) {
+        return res.status(503).json({ error: 'driver_incidents table missing — run migration 028 in Supabase first.' });
+      }
+      throw new Error(error.message);
+    }
+
+    logAdminAction(req, { action: 'driver.incident', targetType: 'driver', targetId: req.params.id, reason: description || null, detail: { incident_id: data?.id, category, severity: severity || 'note', order_id: order_id || null } });
+    res.status(201).json(data);
+  })
+);
+
+/**
+ * GET /api/v1/admin/drivers/:id/incidents
+ * Incident history for a driver, newest first. Empty list until migration 028.
+ */
+router.get(
+  '/drivers/:id/incidents',
+  [param('id').isUUID()],
+  validate,
+  asyncHandler(async (req, res) => {
+    const limit = Math.min(parseInt(req.query.limit, 10) || 100, 200);
+    const { data, error } = await supabaseAdmin
+      .from('driver_incidents')
+      .select('*')
+      .eq('driver_id', req.params.id)
+      .order('created_at', { ascending: false })
+      .limit(limit);
+
+    if (error) {
+      if (isMissingTable(error)) {
+        return res.json({ data: [], available: false, message: 'driver_incidents table missing — run migration 028 in Supabase.' });
+      }
+      throw new Error(error.message);
+    }
+    res.json({ data: data || [], available: true });
   })
 );
 

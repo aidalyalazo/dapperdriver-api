@@ -229,6 +229,7 @@ router.post(
       console.warn('[REFUND] shopper notification failed (non-fatal):', e?.message);
     }
 
+    require('../utils/adminAudit').logAdminAction(req, { action: 'order.refund', targetType: 'order', targetId: orderId, reason: return_reason || null, detail: { amount: actualAmount, cumulative_refund: cumulativeRefund, full_refund: isFullRefund, return_detail: return_detail || null } });
     res.json({ refund, amount: actualAmount });
   })
 );

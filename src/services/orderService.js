@@ -326,9 +326,12 @@ async function createOrder({
           .catch(() => null)
       : Promise.resolve(null),
 
-    // Boutique-specific commission rates (delivery + pickup overrides)
+    // Boutique-specific commission rates (delivery + pickup overrides).
+    // status rides along for the kill-switch check below — the browse layer
+    // already hides non-active boutiques, but a direct POST /orders naming a
+    // suspended boutique must ALSO be blocked at creation.
     supabaseAdmin.from('boutiques')
-      .select('commission_rate, pickup_commission_rate, state, name, address, city_id')
+      .select('commission_rate, pickup_commission_rate, state, name, address, city_id, status')
       .eq('id', boutiqueId)
       .single()
       .then((r) => r.data)
@@ -371,6 +374,17 @@ async function createOrder({
   ]);
 
   // ── Process Phase 1 results ───────────────────────────────────────────────
+
+  // Boutique kill switch: block order creation for any non-active boutique
+  // (suspended/pending/closed). The storefront already hides them, but this is
+  // the authoritative gate for direct API calls. Fails open on a null row or
+  // null status (legacy rows), matching the other guards' null handling.
+  if (boutiqueData?.status && boutiqueData.status !== 'active') {
+    throw Object.assign(
+      new Error(`${boutiqueData.name || 'This boutique'} is not currently accepting orders.`),
+      { status: 422, code: 'BOUTIQUE_UNAVAILABLE' }
+    );
+  }
 
   // Same-state delivery rule: delivery orders must ship to an address in the
   // boutique's state. Pickup orders are exempt. Skipped when either state is
@@ -441,9 +455,27 @@ async function createOrder({
   if (boutiqueData?.city_id) {
     try {
       const { data: bCity } = await supabaseAdmin
-        .from('cities').select('id, tax_rate').eq('id', boutiqueData.city_id).single();
+        .from('cities').select('id, tax_rate, name, status').eq('id', boutiqueData.city_id).single();
       boutiqueCity = bCity || null;
     } catch (_) { /* fall through to platform default below */ }
+  }
+
+  // CITY kill-switch: the admin can pause an entire market (cities.status =
+  // 'paused' via the panel's Cities page) and every checkout at a boutique in
+  // that city — delivery AND pickup — is blocked immediately. Only 'paused'
+  // gates: 'coming_soon'/'inactive' cities have no active boutiques to order
+  // from anyway. Fails OPEN when the boutique has no city or the row can't be
+  // read (mirrors the same-state + radius rules — never block an order on
+  // incomplete data). The shipped app shows this 422 message verbatim (same
+  // path as OUT_OF_STATE_DELIVERY).
+  if (boutiqueCity?.status === 'paused') {
+    throw Object.assign(
+      new Error(
+        `Ordering is temporarily paused in ${boutiqueCity.name || 'this city'}. ` +
+        `Please check back soon.`
+      ),
+      { status: 422, code: 'CITY_PAUSED' }
+    );
   }
 
   let taxRate;

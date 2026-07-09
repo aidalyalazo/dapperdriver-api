@@ -862,7 +862,7 @@ EXCEPTION
 END $run$;
 
 
--- ── Mg. Migration 027 — shopper date_of_birth + age view ──────────────────
+-- ── Mg. Migration 028 — shopper date_of_birth + age view ──────────────────
 
 DO $run$ BEGIN
   EXECUTE $stmt$ALTER TABLE shoppers ADD COLUMN IF NOT EXISTS date_of_birth DATE$stmt$;
@@ -1724,3 +1724,41 @@ BEGIN
     END;
   END LOOP;
 END $$;
+
+-- ── Mz3. Migration 028 — admin_actions audit trail + driver_incidents ────────
+-- admin_actions: every admin mutation logs one row via src/utils/adminAudit.js
+-- (fire-and-forget); read by GET /admin/actions → the panel's Audit Log page.
+-- driver_incidents: ops record of driver problems, written/read only through
+-- POST/GET /admin/drivers/:id/incidents. Both are SERVICE-ROLE ONLY: RLS
+-- enabled with NO policies (payout_failures lockdown pattern). Idempotent.
+CREATE TABLE IF NOT EXISTS admin_actions (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  actor_id    UUID,
+  actor_email TEXT,
+  action      TEXT NOT NULL,
+  target_type TEXT,
+  target_id   TEXT,
+  reason      TEXT,
+  detail      JSONB DEFAULT '{}'::jsonb,
+  created_at  TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_admin_actions_created ON admin_actions (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_admin_actions_target ON admin_actions (target_type, target_id);
+ALTER TABLE admin_actions ENABLE ROW LEVEL SECURITY;
+
+CREATE TABLE IF NOT EXISTS driver_incidents (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  driver_id   UUID NOT NULL,                -- drivers.id (row id, NOT user_id)
+  order_id    UUID,
+  category    TEXT NOT NULL CHECK (category IN (
+    'never_delivered', 'late', 'no_show', 'customer_complaint', 'safety', 'other'
+  )),
+  severity    TEXT NOT NULL DEFAULT 'note' CHECK (severity IN (
+    'note', 'warning', 'hold', 'deactivation'
+  )),
+  description TEXT,
+  created_by  UUID,                         -- admin auth user id
+  created_at  TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_driver_incidents_driver ON driver_incidents (driver_id);
+ALTER TABLE driver_incidents ENABLE ROW LEVEL SECURITY;
