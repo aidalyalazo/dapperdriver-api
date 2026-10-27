@@ -119,6 +119,17 @@ router.post(
         await supabaseAdmin.auth.admin.deleteUser(userId);
         return res.status(400).json({ error: profileError.message });
       }
+
+      // Surface new boutique/driver signups in the admin alerts feed — a real
+      // boutique signed up Oct 27 2026 and the admin was never notified.
+      // Non-blocking: a notification failure must never fail registration.
+      const { notifyAdmins } = require('../utils/adminAlerts');
+      notifyAdmins({
+        type: `${role}_registered`,
+        title: role === 'boutique' ? '🏬 New boutique signed up' : '🚗 New driver signed up',
+        body: `${(role === 'boutique' ? profileData.name : full_name) || email} (${email}) just registered as a ${role}. Review and approve them in the admin panel.`,
+        data: { user_id: userId, role },
+      }).catch(() => {});
     } else {
       // Shopper: upsert the profile row.
       // The DB trigger may have auto-created the row with user_id = userId.
