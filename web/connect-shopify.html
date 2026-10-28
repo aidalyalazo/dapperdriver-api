@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex">
+  <title>Connect Shopify — DapperDriver</title>
+  <style>
+    :root { --blue:#1E66CA; --charcoal:#0C1A2E; --offwhite:#F5F7FC; --border:#D0E4FF; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Montserrat', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: var(--offwhite); color: var(--charcoal);
+      min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px;
+    }
+    .card {
+      background: #fff; border: 1px solid var(--border); border-radius: 18px;
+      padding: 36px 32px; width: 100%; max-width: 440px;
+      box-shadow: 0 18px 44px rgba(12,26,46,.08);
+    }
+    .brand { font-weight: 800; letter-spacing: 2px; font-size: 13px; color: var(--blue); text-transform: uppercase; margin-bottom: 18px; }
+    h1 { font-size: 22px; margin-bottom: 6px; }
+    p.sub { font-size: 13px; color: #5A6B84; margin-bottom: 22px; line-height: 1.55; }
+    label { display: block; font-size: 11px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: #5A6B84; margin: 14px 0 6px; }
+    input {
+      width: 100%; background: #fff; border: 1.5px solid var(--border); border-radius: 14px;
+      padding: 13px 14px; font-size: 15px; color: var(--charcoal); outline: none;
+    }
+    input:focus { border-color: var(--blue); }
+    .hint { font-size: 11.5px; color: #8B97AB; margin-top: 6px; }
+    button {
+      width: 100%; margin-top: 22px; padding: 14px; border: none; border-radius: 14px;
+      background: var(--blue); color: #fff; font-size: 14px; font-weight: 700; letter-spacing: 1px;
+      text-transform: uppercase; cursor: pointer;
+    }
+    button:disabled { opacity: .5; cursor: default; }
+    .msg { margin-top: 16px; font-size: 13px; line-height: 1.5; display: none; }
+    .msg.err { color: #C62828; display: block; }
+    .msg.ok  { color: #1B7B3A; display: block; }
+    .step2 { display: none; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="brand">D.D — DapperDriver</div>
+    <h1>Connect your Shopify</h1>
+    <p class="sub">Link your Shopify store to DapperDriver and your products sync automatically. Sign in with your DapperDriver <strong>boutique</strong> account, then enter your Shopify store name.</p>
+
+    <div id="step1">
+      <label for="email">Boutique account email</label>
+      <input id="email" type="email" autocomplete="email" placeholder="you@yourboutique.com">
+      <label for="pw">Password</label>
+      <input id="pw" type="password" autocomplete="current-password" placeholder="Your DapperDriver password">
+      <button id="loginBtn">Sign in</button>
+    </div>
+
+    <div id="step2" class="step2">
+      <label for="shop">Your Shopify store</label>
+      <input id="shop" type="text" autocapitalize="none" autocorrect="off" placeholder="your-store">
+      <p class="hint">The first part of your-store<strong>.myshopify.com</strong> — or paste the whole thing.</p>
+      <button id="connectBtn">Connect to Shopify</button>
+    </div>
+
+    <div id="msg" class="msg"></div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+  <script>
+    const API = 'https://dapperdriver-api-production.up.railway.app';
+    // Anon key is a public client credential (same one shipped in the app).
+    const supabase = window.supabase.createClient(
+      'https://iqryvxepigcqpxokgbtj.supabase.co',
+      'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imlxcnl2eGVwaWdjcXB4b2tnYnRqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMwOTc4NzksImV4cCI6MjA4ODY3Mzg3OX0.orq5AZiicdEvt05o6LA7pkl3zbCs4DZ2vQjD9S0e-Pk'
+    );
+    const msg = document.getElementById('msg');
+    function show(kind, text) { msg.className = 'msg ' + kind; msg.textContent = text; }
+    let token = null;
+
+    document.getElementById('loginBtn').addEventListener('click', async () => {
+      const email = document.getElementById('email').value.trim();
+      const pw = document.getElementById('pw').value;
+      if (!email || !pw) return show('err', 'Enter your email and password.');
+      const btn = document.getElementById('loginBtn'); btn.disabled = true;
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password: pw });
+      btn.disabled = false;
+      if (error) return show('err', error.message === 'Invalid login credentials' ? 'Wrong email or password.' : error.message);
+      token = data.session.access_token;
+      document.getElementById('step1').style.display = 'none';
+      document.getElementById('step2').style.display = 'block';
+      show('ok', '✓ Signed in. Now enter your Shopify store name.');
+    });
+
+    document.getElementById('connectBtn').addEventListener('click', async () => {
+      let shop = document.getElementById('shop').value.trim().toLowerCase();
+      shop = shop.replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/\.myshopify\.com$/, '');
+      if (!shop) return show('err', 'Enter your store name.');
+      const btn = document.getElementById('connectBtn'); btn.disabled = true;
+      show('ok', 'Preparing your secure Shopify link…');
+      try {
+        const res = await fetch(API + '/api/v1/integrations/shopify/connect', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+          body: JSON.stringify({ shop_domain: shop }),
+        });
+        const d = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(d.error || ('HTTP ' + res.status));
+        show('ok', '✓ Redirecting you to Shopify to approve…');
+        window.location.href = d.install_url;
+      } catch (e) {
+        btn.disabled = false;
+        show('err', 'Could not start the connection: ' + e.message + ' — make sure you signed in with your boutique account, or contact us.');
+      }
+    });
+  </script>
+</body>
+</html>
