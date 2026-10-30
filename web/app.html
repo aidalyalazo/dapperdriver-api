@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Get the App — DapperDriver</title>
+<meta name="description" content="DapperDriver — boutique fashion, delivered. Get the app.">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;1,300;1,400&family=Jost:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --night:#0E0D0B; --night-2:#131210; --ivory:#EDE7DB; --ivory-soft:#B7B0A2;
+    --ivory-faint:#8B877C; --blue:#5E8FDC; --hair:rgba(237,231,219,.16);
+    --serif:'Cormorant Garamond',Georgia,serif; --sans:'Jost',-apple-system,sans-serif;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{
+    background:var(--night); color:var(--ivory); font-family:var(--sans); font-weight:300;
+    min-height:100svh; display:flex; flex-direction:column; align-items:center; justify-content:center;
+    text-align:center; padding:32px 24px; gap:0;
+  }
+  .wordmark{font-family:var(--serif); font-weight:400; font-size:15px; letter-spacing:.42em; text-transform:uppercase; color:var(--ivory-soft); margin-bottom:3.2rem}
+  .wordmark span{color:var(--blue)}
+  h1{font-family:var(--serif); font-weight:300; font-size:clamp(2.6rem,9vw,4.6rem); line-height:1.05; max-width:14ch}
+  h1 em{font-style:italic; font-weight:400; color:var(--blue)}
+  p.sub{margin-top:1.4rem; font-size:14.5px; line-height:1.8; color:var(--ivory-soft); max-width:40ch}
+  .rule{width:34px; height:1px; background:var(--hair); margin:2.6rem auto}
+
+  /* store buttons (shown when released) */
+  .stores{display:none; flex-direction:column; gap:.9rem; width:100%; max-width:320px}
+  .stores a{
+    display:flex; align-items:center; justify-content:center; gap:.6rem;
+    border:1px solid var(--hair); border-radius:999px; padding:1.05em 1.6em .95em;
+    color:var(--ivory); text-decoration:none; font-size:12px; font-weight:500;
+    letter-spacing:.28em; text-transform:uppercase; transition:all .3s;
+  }
+  .stores a:hover{border-color:var(--blue); color:var(--blue)}
+  .stores a.primary{background:var(--ivory); color:var(--night); border-color:var(--ivory)}
+  .stores a.primary:hover{background:var(--blue); border-color:var(--blue); color:#fff}
+
+  /* waitlist (coming-soon state) */
+  .waitlist{display:none; width:100%; max-width:380px}
+  .waitlist form{display:flex; gap:.6rem; margin-top:.4rem}
+  .waitlist input{
+    flex:1; background:transparent; border:none; border-bottom:1px solid var(--hair);
+    padding:.9rem .2rem; font-family:var(--sans); font-weight:300; font-size:15px;
+    color:var(--ivory); border-radius:0; outline:none; transition:border-color .3s; text-align:left;
+  }
+  .waitlist input::placeholder{color:var(--ivory-faint)}
+  .waitlist input:focus{border-bottom-color:var(--blue)}
+  .waitlist button{
+    background:var(--ivory); color:var(--night); border:none; border-radius:999px;
+    font-family:var(--sans); font-size:10.5px; font-weight:600; letter-spacing:.3em;
+    text-transform:uppercase; padding:1em 1.8em .9em; cursor:pointer; transition:all .3s; white-space:nowrap;
+  }
+  .waitlist button:hover{background:var(--blue); color:#fff}
+  .wl-ok{display:none; margin-top:1.2rem; font-size:13px; color:var(--blue)}
+  .wl-ok.show{display:block}
+  .fine{margin-top:3rem; font-size:10px; letter-spacing:.34em; text-transform:uppercase; color:var(--ivory-faint)}
+  .fine a{color:var(--ivory-faint)}
+  @media(max-width:480px){ .waitlist form{flex-direction:column} .waitlist button{width:100%} }
+</style>
+</head>
+<body>
+  <div class="wordmark">Dapper<span>Driver</span></div>
+
+  <h1 id="headline">The boutiques are <em>coming.</em></h1>
+  <p class="sub" id="subline">DapperDriver is almost at your door. Leave your email and be first in line when your city goes live.</p>
+
+  <div class="rule"></div>
+
+  <!-- RELEASED state -->
+  <div class="stores" id="stores">
+    <a id="ios-link" class="primary" href="#">&#63743; Download on the App&nbsp;Store</a>
+    <a id="android-link" href="#">&#9654; Get it on Google&nbsp;Play</a>
+  </div>
+
+  <!-- COMING SOON state -->
+  <div class="waitlist" id="waitlist">
+    <form id="wl-form" novalidate>
+      <input id="wl-email" type="email" placeholder="you@example.com" autocomplete="email" aria-label="Email address">
+      <button type="submit">Notify me</button>
+    </form>
+    <p class="wl-ok" id="wl-ok">&#10003; You're on the list. We'll write the moment it's live.</p>
+  </div>
+
+  <p class="fine"><a href="https://dapperdriver.com">dapperdriver.com</a></p>
+
+<script>
+  // ───────────────────────────────────────────────────────────────────────────
+  // LAUNCH SWITCH — the only thing to edit on release day.
+  // Fill in a URL to flip this page from "coming soon" to download mode.
+  // iPhones and Android phones that scan the QR will be redirected STRAIGHT
+  // to their store (no page shown). Desktop visitors see both buttons.
+  //
+  // When released on the App Store, set:
+  //   APP_STORE_URL = 'https://apps.apple.com/us/app/id6761159582'
+  // When released on Google Play, set its listing URL.
+  // ───────────────────────────────────────────────────────────────────────────
+  const APP_STORE_URL  = '';
+  const PLAY_STORE_URL = '';
+
+  const ua = navigator.userAgent || '';
+  const isIOS = /iPhone|iPad|iPod/i.test(ua);
+  const isAndroid = /Android/i.test(ua);
+
+  // Scan-to-store: skip the page entirely when the right store exists.
+  if (isIOS && APP_STORE_URL)      location.replace(APP_STORE_URL);
+  else if (isAndroid && PLAY_STORE_URL) location.replace(PLAY_STORE_URL);
+
+  const released = !!(APP_STORE_URL || PLAY_STORE_URL);
+  if (released) {
+    document.getElementById('headline').innerHTML = 'Your city, <em>at your door.</em>';
+    document.getElementById('subline').textContent = 'Boutique fashion, delivered the same day. Download DapperDriver and start browsing your city’s boutiques.';
+    const st = document.getElementById('stores'); st.style.display = 'flex';
+    const ios = document.getElementById('ios-link');
+    const and = document.getElementById('android-link');
+    if (APP_STORE_URL) ios.href = APP_STORE_URL; else ios.style.display = 'none';
+    if (PLAY_STORE_URL) and.href = PLAY_STORE_URL; else and.style.display = 'none';
+  } else {
+    document.getElementById('waitlist').style.display = 'block';
+  }
+
+  // Waitlist — lands in the admin Support page.
+  const WAITLIST_ENDPOINT = 'https://dapperdriver-api-production.up.railway.app/api/v1/support/waitlist';
+  document.getElementById('wl-form').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const email = document.getElementById('wl-email').value.trim();
+    if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return;
+    try {
+      const stored = JSON.parse(localStorage.getItem('dd_waitlist') || '[]');
+      stored.push({ email, at: new Date().toISOString(), source: 'qr-app-page' });
+      localStorage.setItem('dd_waitlist', JSON.stringify(stored));
+    } catch (_) {}
+    try {
+      await fetch(WAITLIST_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, source: 'qr-app-page' }),
+      });
+    } catch (_) {}
+    document.getElementById('wl-form').reset();
+    document.getElementById('wl-ok').classList.add('show');
+  });
+</script>
+</body>
+</html>
