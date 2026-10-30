@@ -25,13 +25,16 @@ router.post(
   waitlistLimiter,
   [body('email').isEmail().normalizeEmail(), validate],
   asyncHandler(async (req, res) => {
+    // Attribution: which surface captured the signup (qr-app-page, web-waitlist, ...).
+    // Sanitized to a slug so the subject stays clean whatever the client sends.
+    const source = String(req.body.source || 'web').toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 40) || 'web';
     const { error } = await supabaseAdmin.from('support_tickets').insert({
       ticket_number: generateTicketNumber(),
       user_email: req.body.email,
       user_role: 'shopper',
       category: 'other',
-      subject: 'Waitlist signup (dapperdriver.com)',
-      description: `Joined the website waitlist${req.body.city ? ` — city: ${String(req.body.city).slice(0, 60)}` : ''}.`,
+      subject: `Waitlist signup (${source})`,
+      description: `Joined the waitlist via ${source}${req.body.city ? `, city: ${String(req.body.city).slice(0, 60)}` : ''}.`,
       status: 'open',
       priority: 'low',
     });
