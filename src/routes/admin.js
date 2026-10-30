@@ -887,8 +887,15 @@ router.post(
     const toEmail = ticket.user_email;
     const result = { app_sent: false, email_sent: false, needs_mailto: false, mailto: null };
 
+    // Waitlist tickets belong to the system account (waitlist@dapperdriver.com) —
+    // an in-app reply would land in a mailbox no human reads. Email is the only
+    // real channel for them, so skip the app write instead of reporting a
+    // misleading "in-app sent".
+    const WAITLIST_SYSTEM_USER_ID = '1ec7604f-c633-4edb-a47f-615d3abaf104';
+    const isWaitlistTicket = ticket.user_id === WAITLIST_SYSTEM_USER_ID;
+
     // In-app inbox + push
-    if (channel === 'app' || channel === 'both') {
+    if ((channel === 'app' || channel === 'both') && !isWaitlistTicket) {
       const { error: nErr } = await Promise.resolve(supabaseAdmin
         .from('notifications')
         .insert({
