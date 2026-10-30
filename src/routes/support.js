@@ -28,8 +28,14 @@ router.post(
     // Attribution: which surface captured the signup (qr-app-page, web-waitlist, ...).
     // Sanitized to a slug so the subject stays clean whatever the client sends.
     const source = String(req.body.source || 'web').toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 40) || 'web';
+    // support_tickets.user_id is NOT NULL (anonymous inserts fail silently) —
+    // all waitlist tickets attach to the dedicated system user. Discovered
+    // Oct 30 2026: the waitlist captured ZERO emails from July to now because
+    // of this constraint; always verify POST → row, not just HTTP 200.
+    const WAITLIST_SYSTEM_USER_ID = '1ec7604f-c633-4edb-a47f-615d3abaf104'; // waitlist@dapperdriver.com
     const { error } = await supabaseAdmin.from('support_tickets').insert({
       ticket_number: generateTicketNumber(),
+      user_id: WAITLIST_SYSTEM_USER_ID,
       user_email: req.body.email,
       user_role: 'shopper',
       category: 'other',
