@@ -855,6 +855,27 @@ router.patch(
 );
 
 /**
+ * DELETE /api/v1/admin/support/tickets/:id
+ * Permanently remove a ticket (spam, tests, clutter). Audited; irreversible.
+ */
+router.delete(
+  '/support/tickets/:id',
+  [param('id').isUUID()],
+  validate,
+  asyncHandler(async (req, res) => {
+    const { data, error } = await supabaseAdmin
+      .from('support_tickets')
+      .delete()
+      .eq('id', req.params.id)
+      .select('id, ticket_number, subject')
+      .single();
+    if (error) throw new Error(error.message);
+    logAdminAction(req, { action: 'support.ticket_delete', targetType: 'support_ticket', targetId: req.params.id, detail: { ticket_number: data.ticket_number, subject: data.subject } });
+    res.json({ deleted: true, ticket_number: data.ticket_number });
+  })
+);
+
+/**
  * POST /api/v1/admin/support/tickets/:id/message
  * Reply to the reporter via the in-app inbox and/or email.
  *   channel: 'app' | 'email' | 'both'
