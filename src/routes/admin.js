@@ -1022,14 +1022,20 @@ router.post(
       const from = process.env.SUPPORT_FROM_EMAIL || 'DapperDriver Support <support@dapperdriver.com>';
       if (apiKey && toEmail) {
         try {
+          // Deliverability hygiene: strip emoji/symbols from the subject (spam
+          // signal), reference the ticket for threading + legitimacy, and append
+          // a transactional footer (why-you-got-this + sender identity) — the
+          // trust signals mailbox filters look for on a young domain.
+          const emailSubject = `${String(subject).replace(/[\u2600-\u27BF\u{1F000}-\u{1FAFF}\u{2B00}-\u{2BFF}\uFE0F]/gu, '').replace(/\s{2,}/g, ' ').trim() || 'A reply from DapperDriver Support'} [${ticket.ticket_number}]`;
+          const emailText = `${messageBody}\n\n—\nDapperDriver Support\nYou're receiving this because you contacted DapperDriver support (ticket ${ticket.ticket_number}).\nDapperDriver LLC · Miami, FL · https://dapperdriver.com`;
           const r = await fetch('https://api.resend.com/emails', {
             method: 'POST',
             headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({
               from,
               to: [toEmail],
-              subject,
-              text: messageBody,
+              subject: emailSubject,
+              text: emailText,
               reply_to: process.env.SUPPORT_REPLY_TO || undefined,
             }),
           });
