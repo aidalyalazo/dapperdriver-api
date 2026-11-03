@@ -130,6 +130,91 @@ router.post(
 );
 
 /**
+ * DELETE /api/v1/admin/boutiques/:id
+ * Admin removal, mode decided by order history:
+ *  - any order IN FLIGHT        -> 422 refuse
+ *  - zero orders ever           -> HARD delete (products + child refs, hours,
+ *    follows, integrations, storage photos, boutique row, auth user)
+ *  - terminal orders exist      -> ANONYMIZE + close (financial records kept),
+ *    products deactivated, auth user removed (mirrors the self-delete flow)
+ */
+router.delete(
+  '/boutiques/:id',
+  [param('id').isUUID()],
+  validate,
+  asyncHandler(async (req, res) => {
+    const { data: b, error: bErr } = await supabaseAdmin
+      .from('boutiques').select('id, name, email, user_id').eq('id', req.params.id).single();
+    if (bErr || !b) throw Object.assign(new Error('Boutique not found.'), { status: 404 });
+
+    const IN_FLIGHT = ['pending', 'confirmed', 'preparing', 'ready_for_pickup', 'driver_assigned', 'picked_up', 'out_for_delivery'];
+    const { count: inFlight } = await supabaseAdmin.from('orders')
+      .select('id', { count: 'exact', head: true }).eq('boutique_id', b.id).in('status', IN_FLIGHT);
+    if ((inFlight || 0) > 0) {
+      return res.status(422).json({ error: `${b.name} has ${inFlight} order(s) in flight. Resolve them first.` });
+    }
+    const { count: totalOrders } = await supabaseAdmin.from('orders')
+      .select('id', { count: 'exact', head: true }).eq('boutique_id', b.id);
+
+    let mode = (totalOrders || 0) === 0 ? 'hard' : 'anonymized';
+    if (mode === 'hard') {
+      const { data: prods } = await supabaseAdmin.from('products').select('id').eq('boutique_id', b.id);
+      const prodIds = (prods || []).map((p) => p.id);
+      if (prodIds.length) {
+        for (const t of ['product_image_hotspots', 'cart_items', 'saved_items', 'post_product_tags', 'product_reviews']) {
+          await Promise.resolve(supabaseAdmin.from(t).delete().in('product_id', prodIds)).catch(() => {});
+        }
+      }
+      const { error: pErr } = await supabaseAdmin.from('products').delete().eq('boutique_id', b.id);
+      if (pErr) {
+        mode = 'anonymized'; // something still references these products — take the safe path
+        console.warn('[ADMIN] boutique hard-delete blocked by product refs, anonymizing instead:', pErr.message);
+      } else {
+        for (const t of ['boutique_hours', 'boutique_follows', 'boutique_integrations']) {
+          await Promise.resolve(supabaseAdmin.from(t).delete().eq('boutique_id', b.id)).catch(() => {});
+        }
+        // Product photos live under the OWNER user_id folder in storage.
+        if (b.user_id) {
+          try {
+            const { data: files } = await supabaseAdmin.storage.from('product-photos').list(b.user_id, { limit: 1000 });
+            if (files && files.length) {
+              await supabaseAdmin.storage.from('product-photos').remove(files.map((f) => `${b.user_id}/${f.name}`));
+            }
+          } catch (_) { /* best effort */ }
+        }
+        const { error: delErr } = await supabaseAdmin.from('boutiques').delete().eq('id', b.id);
+        if (delErr) {
+          mode = 'anonymized';
+          console.warn('[ADMIN] boutique row delete blocked, anonymizing instead:', delErr.message);
+        }
+      }
+    }
+
+    if (mode === 'anonymized') {
+      await supabaseAdmin.from('products').update({ status: 'inactive' }).eq('boutique_id', b.id);
+      await supabaseAdmin.from('boutiques').update({
+        name: 'Deleted Boutique',
+        email: b.user_id ? `deleted-${b.user_id.slice(0, 8)}@deleted.dapperdriver.com` : null,
+        phone: null, owner_name: null, logo_url: null, logo_bg: null, address: null,
+        stripe_account_id: null, fcm_token: null, status: 'closed',
+      }).eq('id', b.id);
+    }
+
+    if (b.user_id) {
+      const { error: authErr } = await supabaseAdmin.auth.admin.deleteUser(b.user_id);
+      if (authErr) {
+        await Promise.resolve(supabaseAdmin.auth.admin.updateUserById(b.user_id, {
+          password: require('crypto').randomUUID(), ban_duration: '876000h', user_metadata: { deleted: true },
+        })).catch(() => {});
+      }
+    }
+
+    logAdminAction(req, { action: 'boutique.delete', targetType: 'boutique', targetId: b.id, detail: { name: b.name, email: b.email, mode, orders: totalOrders || 0 } });
+    res.json({ deleted: true, mode, name: b.name });
+  })
+);
+
+/**
  * PATCH /api/v1/admin/boutiques/:id/commission
  */
 router.patch(
