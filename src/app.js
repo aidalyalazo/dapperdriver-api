@@ -47,6 +47,7 @@ require('./jobs/moneyReconciliationJob');
 require('./jobs/captureFulfilledOrdersJob');
 require('./jobs/abandonedOrderSweep');
 require('./jobs/staleAuthSweep');
+require('./jobs/orphanUploadSweep');
 require('./jobs/marketplaceInvariantsJob');
 
 const { errorHandler } = require('./middleware/errorHandler');
