@@ -64,11 +64,11 @@
     <div id="msg" class="msg"></div>
   </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
   <script>
     const API = 'https://dapperdriver-api-production.up.railway.app';
     // Anon key is a public client credential (same one shipped in the app).
-    const supabase = window.supabase.createClient(
+    const sb = window.supabase.createClient(
       'https://iqryvxepigcqpxokgbtj.supabase.co',
       'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imlxcnl2eGVwaWdjcXB4b2tnYnRqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMwOTc4NzksImV4cCI6MjA4ODY3Mzg3OX0.orq5AZiicdEvt05o6LA7pkl3zbCs4DZ2vQjD9S0e-Pk'
     );
@@ -81,7 +81,7 @@
       const pw = document.getElementById('pw').value;
       if (!email || !pw) return show('err', 'Enter your email and password.');
       const btn = document.getElementById('loginBtn'); btn.disabled = true;
-      const { data, error } = await supabase.auth.signInWithPassword({ email, password: pw });
+      const { data, error } = await sb.auth.signInWithPassword({ email, password: pw });
       btn.disabled = false;
       if (error) return show('err', error.message === 'Invalid login credentials' ? 'Wrong email or password.' : error.message);
       token = data.session.access_token;
