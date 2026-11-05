@@ -24,10 +24,16 @@ const SHOPIFY_SCOPE = 'read_products,read_inventory,write_inventory';
  * boutique_id is passed as state so we can link the callback to the boutique.
  */
 function buildInstallUrl(shopDomain, boutiqueId) {
-  const apiKey = process.env.SHOPIFY_API_KEY;
+  // Per-store custom-distribution app when the domain is mapped in
+  // SHOPIFY_APPS; platform-wide app otherwise.
+  const { getAppForShop } = require('../utils/shopifyApps');
+  const apiKey = getAppForShop(shopDomain).clientId;
+  if (!apiKey) throw new Error(`No Shopify app configured for ${shopDomain}`);
   const redirectUri = encodeURIComponent(`${process.env.API_BASE_URL}/api/v1/integrations/shopify/callback`);
   const { signState } = require('../utils/oauthState');
-  const state = signState({ boutique_id: boutiqueId });
+  // aud + shop make the state single-purpose: the callback rejects states
+  // minted by other flows or for a different store.
+  const state = signState({ aud: 'shopify-connect', boutique_id: boutiqueId, shop: shopDomain });
   const scope = encodeURIComponent(SHOPIFY_SCOPE);
   return `https://${shopDomain}/admin/oauth/authorize?client_id=${apiKey}&scope=${scope}&redirect_uri=${redirectUri}&state=${state}`;
 }
@@ -36,10 +42,12 @@ function buildInstallUrl(shopDomain, boutiqueId) {
  * Exchange authorization code for permanent access token.
  */
 async function exchangeToken(shopDomain, code) {
+  const { getAppForShop } = require('../utils/shopifyApps');
+  const app = getAppForShop(shopDomain);
   return new Promise((resolve, reject) => {
     const body = JSON.stringify({
-      client_id: process.env.SHOPIFY_API_KEY,
-      client_secret: process.env.SHOPIFY_API_SECRET,
+      client_id: app.clientId,
+      client_secret: app.clientSecret,
       code,
     });
     const options = {

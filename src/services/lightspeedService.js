@@ -27,7 +27,7 @@ function buildInstallUrl(boutiqueId) {
   const clientId   = process.env.LIGHTSPEED_CLIENT_ID;
   const redirectUri = encodeURIComponent(`${process.env.API_BASE_URL}/api/v1/integrations/lightspeed/callback`);
   const { signState } = require('../utils/oauthState');
-  const state      = signState({ boutique_id: boutiqueId });
+  const state      = signState({ aud: 'lightspeed-connect', boutique_id: boutiqueId });
   const scope      = encodeURIComponent(LS_SCOPE);
   return `https://${LS_AUTH_BASE}/oauth/authorize?response_type=code&client_id=${clientId}&scope=${scope}&redirect_uri=${redirectUri}&state=${state}`;
 }

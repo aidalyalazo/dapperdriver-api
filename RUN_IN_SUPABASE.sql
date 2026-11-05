@@ -1762,3 +1762,10 @@ CREATE TABLE IF NOT EXISTS driver_incidents (
 );
 CREATE INDEX IF NOT EXISTS idx_driver_incidents_driver ON driver_incidents (driver_id);
 ALTER TABLE driver_incidents ENABLE ROW LEVEL SECURITY;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 038 (Nov 5 2026): one external store ↔ one boutique, enforced in the DB.
+-- App-level SELECT check races the OAuth exchange; this index is the backstop.
+CREATE UNIQUE INDEX IF NOT EXISTS boutique_integrations_platform_shop_unique
+  ON boutique_integrations (platform, lower(shop_domain))
+  WHERE shop_domain IS NOT NULL;

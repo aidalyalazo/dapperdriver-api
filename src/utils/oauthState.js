@@ -53,12 +53,12 @@ function verifyState(state, maxAgeMs = 60 * 60 * 1000) {
 
 /**
  * Verify a Shopify OAuth callback HMAC (Shopify signs the query with the app
- * secret). Returns true when SHOPIFY_API_SECRET is unset (can't verify) so we
- * don't hard-fail in unconfigured environments — the signed state still
- * protects boutique binding.
+ * secret). Pass the per-store app secret for shops mapped in SHOPIFY_APPS;
+ * defaults to the platform-wide SHOPIFY_API_SECRET. Returns true when no
+ * secret is available (can't verify) so we don't hard-fail in unconfigured
+ * environments — the signed state still protects boutique binding there.
  */
-function verifyShopifyHmac(query) {
-  const secret = process.env.SHOPIFY_API_SECRET;
+function verifyShopifyHmac(query, secret = process.env.SHOPIFY_API_SECRET) {
   if (!secret) return true; // not configured — rely on signed state
   const { hmac, ...rest } = query;
   if (!hmac) return false;

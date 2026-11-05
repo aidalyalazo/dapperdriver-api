@@ -20,6 +20,7 @@ const shopify    = require('../services/shopifyService');
 const square     = require('../services/squareService');
 const lightspeed = require('../services/lightspeedService');
 const { verifyState, verifyShopifyHmac } = require('../utils/oauthState');
+const { getAppForShop, platformConnectEnabled } = require('../utils/shopifyApps');
 const { encrypt } = require('../utils/tokenCrypto');
 
 // Resolve boutique ID for current authenticated boutique owner
@@ -52,6 +53,24 @@ router.post(
     let domain = req.body.shop_domain.trim().toLowerCase();
     if (!domain.endsWith('.myshopify.com')) domain = `${domain}.myshopify.com`;
 
+    // A store mapped in SHOPIFY_APPS belongs to exactly one boutique — refuse
+    // to mint an install URL for it on anyone else's behalf. Unmapped stores
+    // are gated behind SHOPIFY_PLATFORM_CONNECT (see platformConnectEnabled),
+    // and an incomplete mapping fails closed rather than falling back.
+    const app = getAppForShop(domain);
+    if (!app.perStore && !platformConnectEnabled()) {
+      return res.status(503).json({ error: 'Shopify connection is not set up for this store yet — contact DapperDriver support.' });
+    }
+    if (!app.clientId || !app.clientSecret) {
+      return res.status(503).json({ error: 'Shopify connection is not set up for this store yet — contact DapperDriver support.' });
+    }
+    if (app.perStore && !app.boutiqueId) {
+      return res.status(503).json({ error: 'This store\'s Shopify setup is incomplete — contact DapperDriver support.' });
+    }
+    if (app.perStore && app.boutiqueId !== boutiqueId) {
+      return res.status(403).json({ error: 'This Shopify store is linked to a different boutique.' });
+    }
+
     const installUrl = shopify.buildInstallUrl(domain, boutiqueId);
     res.json({ install_url: installUrl, shop_domain: domain });
   })
@@ -65,19 +84,93 @@ router.post(
 router.get(
   '/shopify/callback',
   asyncHandler(async (req, res) => {
-    const { code, shop, state } = req.query;
+    const { code, state } = req.query;
+    const shop = String(req.query.shop || '').trim().toLowerCase();
     if (!code || !shop) return res.status(400).send('Missing code or shop');
+    if (!/^[a-z0-9][a-z0-9.-]*\.myshopify\.com$/.test(shop)) {
+      return res.status(400).send('Invalid shop domain');
+    }
 
-    // Verify Shopify's request HMAC, then our signed state — an unsigned/forged
-    // state could bind an attacker's store token to a victim boutique.
-    if (!verifyShopifyHmac(req.query)) {
+    // Verify Shopify's request HMAC with the app that owns this shop (its
+    // per-store custom-distribution app when mapped in SHOPIFY_APPS, else the
+    // platform-wide app).
+    const app = getAppForShop(shop);
+    if (app.perStore && (!app.clientId || !app.clientSecret)) {
+      // Incomplete mapping fails closed BEFORE the HMAC check — with a null
+      // secret, verifyShopifyHmac would skip verification entirely.
+      console.error(`[Shopify] SHOPIFY_APPS entry for ${shop} is missing credentials — refusing callback`);
+      return res.status(500).send('This store\'s Shopify setup is incomplete — contact DapperDriver support');
+    }
+    if (!verifyShopifyHmac(req.query, app.clientSecret)) {
       return res.status(400).send('Invalid request signature');
     }
+
+    // Decode our signed state if present. The signature only proves WE minted
+    // it — not that it belongs to this shop — so it is never trusted on its
+    // own: it must carry the shopify-connect audience, a boutique, and the
+    // exact shop it was minted for.
+    let statePayload = null;
+    try { statePayload = verifyState(state); } catch { statePayload = null; }
+
     let boutiqueId;
-    try {
-      boutiqueId = verifyState(state).boutique_id;
-    } catch {
-      return res.status(400).send('Invalid state parameter');
+    if (app.perStore) {
+      // SHOPIFY_APPS is authoritative for mapped stores: the install may have
+      // started from Shopify's generated install link (which carries no
+      // state), and a state minted for a DIFFERENT boutique or shop must
+      // never out-rank the mapping — that would let anyone who can obtain an
+      // install URL re-bind this store's token to their own boutique. An
+      // entry with no boutique_id fails CLOSED here (never falls through to
+      // the looser unmapped rules below).
+      if (!app.boutiqueId) {
+        console.error(`[Shopify] SHOPIFY_APPS entry for ${shop} has no boutique_id — refusing to bind`);
+        return res.status(500).send('This store\'s Shopify setup is incomplete — contact DapperDriver support');
+      }
+      const mismatched = statePayload && (
+        statePayload.aud !== 'shopify-connect'
+        || statePayload.boutique_id !== app.boutiqueId
+        || statePayload.shop !== shop
+      );
+      if (mismatched) return res.status(400).send('State does not match this store');
+      boutiqueId = app.boutiqueId;
+    } else {
+      // Unmapped stores ride the platform-wide app, which is gated off by
+      // default: without ownership verification, a valid state only proves
+      // which boutique STARTED the flow, not that the store is theirs.
+      if (!platformConnectEnabled()) {
+        return res.status(403).send('Shopify connection is not available for this store');
+      }
+      const stateOk = statePayload
+        && statePayload.aud === 'shopify-connect'
+        && statePayload.boutique_id
+        && statePayload.shop === shop;
+      if (!stateOk) return res.status(400).send('Invalid state parameter');
+      boutiqueId = statePayload.boutique_id;
+    }
+
+    // Pre-exchange sanity — neither check may burn the one-time OAuth code:
+    // the boutique must exist (a stale SHOPIFY_APPS boutique_id would
+    // otherwise crash after the exchange), and one Shopify store can only
+    // ever be connected to one boutique.
+    const { data: boutiqueRow } = await supabaseAdmin
+      .from('boutiques')
+      .select('id')
+      .eq('id', boutiqueId)
+      .single();
+    if (!boutiqueRow) return res.status(400).send('Unknown boutique for this store');
+    const { data: claimed, error: claimedError } = await supabaseAdmin
+      .from('boutique_integrations')
+      .select('boutique_id')
+      .eq('platform', 'shopify')
+      .eq('shop_domain', shop)
+      .neq('boutique_id', boutiqueId)
+      .limit(1);
+    if (claimedError) {
+      // Fail CLOSED: a transient DB error must not skip the uniqueness check.
+      console.error(`[Shopify] Uniqueness check failed for ${shop}:`, claimedError.message);
+      return res.status(500).send('Could not verify this store\'s connection — please try again');
+    }
+    if (claimed && claimed.length) {
+      return res.status(409).send('This Shopify store is already connected to a different boutique');
     }
 
     // Exchange code for permanent access token
@@ -87,7 +180,7 @@ router.get(
     }
 
     // Upsert integration record
-    const { data: integration } = await supabaseAdmin
+    const { data: integration, error: upsertError } = await supabaseAdmin
       .from('boutique_integrations')
       .upsert({
         boutique_id:  boutiqueId,
@@ -99,6 +192,10 @@ router.get(
       }, { onConflict: 'boutique_id,platform' })
       .select()
       .single();
+    if (upsertError || !integration) {
+      console.error(`[Shopify] Failed to save integration for ${shop}:`, upsertError?.message);
+      return res.status(500).send('Failed to save the connection — please try connecting again');
+    }
 
     // Trigger async product sync (don't await — returns immediately to browser)
     shopify.syncProducts(integration.id)
@@ -130,6 +227,12 @@ router.get(
 
 /**
  * GET /api/v1/integrations/square/callback
+ *
+ * SECURITY NOTE (before setting SQUARE_APP_ID/SECRET in production): this
+ * binds on the signed state alone, which proves which boutique STARTED the
+ * flow — not that the Square account belongs to them. Shopify's flow gained
+ * per-store mapping + a platform gate for exactly this; give Square an
+ * equivalent ownership binding before enabling the env keys.
  */
 router.get(
   '/square/callback',
@@ -139,7 +242,9 @@ router.get(
 
     let boutiqueId;
     try {
-      boutiqueId = verifyState(state).boutique_id;
+      const payload = verifyState(state);
+      if (payload.aud !== 'square-connect' || !payload.boutique_id) throw new Error('wrong audience');
+      boutiqueId = payload.boutique_id;
     } catch {
       return res.status(400).send('Invalid state');
     }
@@ -154,7 +259,7 @@ router.get(
       locationId = locations?.find(l => l.status === 'ACTIVE')?.id || locations?.[0]?.id || null;
     } catch (_) {}
 
-    const { data: integration } = await supabaseAdmin
+    const { data: integration, error: squareUpsertError } = await supabaseAdmin
       .from('boutique_integrations')
       .upsert({
         boutique_id:   boutiqueId,
@@ -169,6 +274,10 @@ router.get(
       }, { onConflict: 'boutique_id,platform' })
       .select()
       .single();
+    if (squareUpsertError || !integration) {
+      console.error('[Square] Failed to save integration:', squareUpsertError?.message);
+      return res.status(500).send('Failed to save the connection — please try connecting again');
+    }
 
     square.syncProducts(integration.id)
       .then(r => console.log('[Square] Initial sync:', r))
@@ -222,6 +331,10 @@ router.get(
 /**
  * GET /api/v1/integrations/lightspeed/callback
  * Lightspeed redirects here after boutique grants access.
+ *
+ * SECURITY NOTE: same initiator-state-only binding as Square (see the note on
+ * the Square callback) — add an ownership binding before enabling
+ * LIGHTSPEED_CLIENT_ID/SECRET in production.
  */
 router.get(
   '/lightspeed/callback',
@@ -231,7 +344,9 @@ router.get(
 
     let boutiqueId;
     try {
-      boutiqueId = verifyState(state).boutique_id;
+      const payload = verifyState(state);
+      if (payload.aud !== 'lightspeed-connect' || !payload.boutique_id) throw new Error('wrong audience');
+      boutiqueId = payload.boutique_id;
     } catch {
       return res.status(400).send('Invalid state parameter');
     }
@@ -254,7 +369,7 @@ router.get(
       ? new Date(Date.now() + tokenData.expires_in * 1000).toISOString()
       : null;
 
-    const { data: integration } = await supabaseAdmin
+    const { data: integration, error: lsUpsertError } = await supabaseAdmin
       .from('boutique_integrations')
       .upsert({
         boutique_id:     boutiqueId,
@@ -268,6 +383,10 @@ router.get(
       }, { onConflict: 'boutique_id,platform' })
       .select()
       .single();
+    if (lsUpsertError || !integration) {
+      console.error('[Lightspeed] Failed to save integration:', lsUpsertError?.message);
+      return res.status(500).send('Failed to save the connection — please try connecting again');
+    }
 
     // Async initial product sync
     lightspeed.syncProducts(integration.id)
@@ -309,7 +428,7 @@ router.get(
     // The app uses this to only offer connectable platforms — so e.g.
     // Lightspeed appears the moment its keys are added, no app update needed.
     const available = {
-      shopify:    !!(process.env.SHOPIFY_API_KEY && process.env.SHOPIFY_API_SECRET),
+      shopify:    require('../utils/shopifyApps').anyShopifyAppConfigured(),
       square:     !!(process.env.SQUARE_APP_ID && process.env.SQUARE_APP_SECRET),
       lightspeed: !!(process.env.LIGHTSPEED_CLIENT_ID && process.env.LIGHTSPEED_CLIENT_SECRET),
     };
