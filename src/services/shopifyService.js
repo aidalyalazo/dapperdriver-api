@@ -397,9 +397,15 @@ async function decrementStock(dapperProductId, quantity = 1, size = null) {
   const variant = variantResult.variant;
   if (!variant) return;
 
-  // Get inventory location
-  const locResult = await shopifyGet(shop_domain, access_token, '/locations.json?limit=1');
-  const locationId = locResult.locations?.[0]?.id;
+  // Find the location holding this item via inventory_levels (read_inventory
+  // scope). /locations.json needs read_locations, which our apps don't request
+  // — the old call 403'd and the decrement silently never ran. Prefer a
+  // location with stock (items can be stocked at several).
+  const levelsResult = await shopifyGet(shop_domain, access_token,
+    `/inventory_levels.json?inventory_item_ids=${variant.inventory_item_id}`);
+  const levels = levelsResult.inventory_levels || [];
+  const level = levels.find((l) => (l.available || 0) > 0) || levels[0];
+  const locationId = level?.location_id;
   if (!locationId) return;
 
   // Adjust inventory level. Shopify's adjust endpoint is POST-only — the old
