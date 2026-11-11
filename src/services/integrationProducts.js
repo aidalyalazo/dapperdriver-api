@@ -76,7 +76,7 @@ async function importSyncedProduct({
     productId = created.id;
   }
 
-  await supabaseAdmin.from('integration_product_map').insert({
+  const { error: mapError } = await supabaseAdmin.from('integration_product_map').insert({
     integration_id:      integrationId,
     dapper_product_id:   productId,
     external_product_id: externalProductId,
@@ -84,6 +84,19 @@ async function importSyncedProduct({
     variant_map:         variantMap || null,   // { size: external_variant_id } for per-size decrement
     last_stock_sync:     new Date().toISOString(),
   });
+  if (mapError) {
+    // The map has UNIQUE(integration_id, external_product_id): a losing racer
+    // (or any other insert failure) must not leave its just-created product
+    // live and orphaned.
+    if (!adopted) {
+      const { error: cleanupError } = await supabaseAdmin
+        .from('products').delete().eq('id', productId);
+      if (cleanupError) {
+        console.error(`[Integrations] Orphan cleanup failed for product ${productId}:`, cleanupError.message);
+      }
+    }
+    throw new Error(`Product map insert failed for ${externalProductId}: ${mapError.message}`);
+  }
 
   return { productId, adopted };
 }

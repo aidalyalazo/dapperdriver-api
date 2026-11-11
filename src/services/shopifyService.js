@@ -72,55 +72,79 @@ async function exchangeToken(shopDomain, code) {
 
 // ── Shopify REST helpers ───────────────────────────────────────────────────────
 
-async function shopifyGet(shopDomain, accessToken, path) {
+function shopifyRequestRaw(shopDomain, accessToken, path, method = 'GET', body = null) {
   return new Promise((resolve, reject) => {
+    const bodyStr = body == null ? null : JSON.stringify(body);
     const options = {
       hostname: shopDomain,
       path: `/admin/api/${SHOPIFY_API_VERSION}${path}`,
-      method: 'GET',
+      method,
       headers: {
         'X-Shopify-Access-Token': accessToken,
         'Content-Type': 'application/json',
+        ...(bodyStr ? { 'Content-Length': Buffer.byteLength(bodyStr) } : {}),
       },
     };
     const req = https.request(options, (res) => {
       let data = '';
       res.on('data', (chunk) => data += chunk);
-      res.on('end', () => {
-        try { resolve(JSON.parse(data)); }
-        catch (e) { reject(e); }
-      });
+      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, raw: data }));
     });
     req.on('error', reject);
+    if (bodyStr) req.write(bodyStr);
     req.end();
   });
 }
 
-async function shopifyPut(shopDomain, accessToken, path, body) {
-  return new Promise((resolve, reject) => {
-    const bodyStr = JSON.stringify(body);
-    const options = {
-      hostname: shopDomain,
-      path: `/admin/api/${SHOPIFY_API_VERSION}${path}`,
-      method: 'PUT',
-      headers: {
-        'X-Shopify-Access-Token': accessToken,
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(bodyStr),
-      },
-    };
-    const req = https.request(options, (res) => {
-      let data = '';
-      res.on('data', (chunk) => data += chunk);
-      res.on('end', () => {
-        try { resolve(JSON.parse(data)); }
-        catch (e) { reject(e); }
-      });
-    });
-    req.on('error', reject);
-    req.write(bodyStr);
-    req.end();
-  });
+/**
+ * GET returning { body, link }. Rejects on any non-2xx status with Shopify's
+ * error body in the message — an error response must never read as an empty
+ * result (that is how the page-pagination 400 silently synced zero products).
+ */
+async function shopifyGetWithLink(shopDomain, accessToken, path) {
+  const { status, headers, raw } = await shopifyRequestRaw(shopDomain, accessToken, path);
+  if (status < 200 || status >= 300) {
+    throw new Error(`Shopify GET ${path} failed: HTTP ${status} ${String(raw).slice(0, 300)}`);
+  }
+  let body;
+  try { body = JSON.parse(raw); }
+  catch { throw new Error(`Shopify GET ${path}: invalid JSON response`); }
+  return { body, link: headers.link || null };
+}
+
+/** POST (JSON body), rejecting on non-2xx. */
+async function shopifyPost(shopDomain, accessToken, path, body) {
+  const { status, raw } = await shopifyRequestRaw(shopDomain, accessToken, path, 'POST', body);
+  if (status < 200 || status >= 300) {
+    throw new Error(`Shopify POST ${path} failed: HTTP ${status} ${String(raw).slice(0, 300)}`);
+  }
+  try { return JSON.parse(raw); }
+  catch { throw new Error(`Shopify POST ${path}: invalid JSON response`); }
+}
+
+async function shopifyGet(shopDomain, accessToken, path) {
+  return (await shopifyGetWithLink(shopDomain, accessToken, path)).body;
+}
+
+/**
+ * Cursor pagination (REST `page=` was removed by Shopify: passing it is an HTTP
+ * 400). The Link header's rel="next" URL carries an opaque page_info cursor;
+ * a page_info request may carry no other filters (they are baked into the
+ * cursor), so only limit is re-sent.
+ */
+function nextPathFromLink(linkHeader) {
+  if (!linkHeader) return null;
+  const m = String(linkHeader).match(/<([^>]+)>\s*;\s*rel="?next"?/i);
+  if (!m) return null;
+  // The page_info cursor is OPAQUE: splice its key=value pair through verbatim.
+  // Decoding and re-encoding it (URL/searchParams) corrupts a literal '+' to
+  // %20, sending Shopify a cursor it never issued.
+  const query = m[1].split('?')[1] || '';
+  const pairs = query.split('&');
+  const pageInfoPair = pairs.find((p) => p.startsWith('page_info='));
+  if (!pageInfoPair || pageInfoPair === 'page_info=') return null;
+  const limitPair = pairs.find((p) => p.startsWith('limit=')) || 'limit=250';
+  return `/products.json?${limitPair}&${pageInfoPair}`;
 }
 
 // ── Category mapping ───────────────────────────────────────────────────────────
@@ -138,8 +162,22 @@ function mapShopifyCategory(productType, tags) {
 /**
  * Fetch all Shopify products and upsert into DapperDriver.
  * Returns { imported, skipped, errors }.
+ *
+ * Concurrent calls for the same integration are deduped onto one in-flight run
+ * (the OAuth callback auto-fires a sync; a manual re-sync racing it would
+ * double-import — the map's unique index would orphan the losers' product rows).
  */
-async function syncProducts(integrationId) {
+const syncsInFlight = new Map();
+
+function syncProducts(integrationId) {
+  const inFlight = syncsInFlight.get(integrationId);
+  if (inFlight) return inFlight;
+  const run = _syncProducts(integrationId).finally(() => syncsInFlight.delete(integrationId));
+  syncsInFlight.set(integrationId, run);
+  return run;
+}
+
+async function _syncProducts(integrationId) {
   const { data: integration } = await supabaseAdmin
     .from('boutique_integrations')
     .select('boutique_id, shop_domain, access_token')
@@ -151,18 +189,28 @@ async function syncProducts(integrationId) {
   const { shop_domain, boutique_id } = integration;
   const access_token = require('../utils/tokenCrypto').decrypt(integration.access_token);
 
-  let page = 1;
   let imported = 0, skipped = 0, errors = 0;
 
-  // Shopify paginates at 250 per page
-  while (true) {
-    const result = await shopifyGet(shop_domain, access_token,
-      `/products.json?limit=250&page=${page}&published_status=published`);
+  try {
+  // Cursor-paginated (Link header rel="next"); 250 per page. Filters only on
+  // the first request — page_info cursors carry them.
+  let path = '/products.json?limit=250&published_status=published';
+  let pages = 0;
+  while (path) {
+    if (++pages > 400) throw new Error('Pagination runaway: more than 400 pages — aborting sync');
+    const { body: result, link } = await shopifyGetWithLink(shop_domain, access_token, path);
     const products = result.products || [];
-    if (!products.length) break;
+    path = products.length ? nextPathFromLink(link) : null;
 
     for (const sp of products) {
       try {
+        // Gift cards are not deliverable products — never import them.
+        // Exact-type match only ('giftcard', 'Gift Cards', 'gift-card'), so a
+        // merchandise type like 'Gift & Cards' or 'Gift Wrap' still imports.
+        if (/^gift[\s_-]*cards?$/i.test(String(sp.product_type || '').trim())) {
+          console.log(`[Shopify sync] Skipping gift card product ${sp.id} (${sp.title})`);
+          continue;
+        }
         // Use first variant for price/stock
         const variant = sp.variants?.[0] || {};
         const price = parseFloat(variant.price || sp.variants?.[0]?.price || '0');
@@ -259,9 +307,25 @@ async function syncProducts(integrationId) {
         errors++;
       }
     }
-
-    if (products.length < 250) break;
-    page++;
+  }
+  } catch (e) {
+    // A failed fetch must be LOUD: record it on the row (admin-visible, with
+    // partial tallies so a half-populated catalog is explained) and rethrow —
+    // it must never read as "synced, zero products". The recording write gets
+    // its own guard so it can never mask the original error.
+    try {
+      const { error: recordError } = await supabaseAdmin
+        .from('boutique_integrations')
+        .update({
+          status: 'error',
+          sync_error: `Sync failed after ${imported} imported / ${skipped} updated: ${e.message}`.slice(0, 500),
+        })
+        .eq('id', integrationId);
+      if (recordError) console.error('[Shopify sync] Could not record sync_error:', recordError.message);
+    } catch (e2) {
+      console.error('[Shopify sync] Could not record sync_error:', e2.message);
+    }
+    throw e;
   }
 
   // Update integration record
@@ -338,8 +402,10 @@ async function decrementStock(dapperProductId, quantity = 1, size = null) {
   const locationId = locResult.locations?.[0]?.id;
   if (!locationId) return;
 
-  // Adjust inventory level
-  await shopifyPut(shop_domain, access_token, '/inventory_levels/adjust.json', {
+  // Adjust inventory level. Shopify's adjust endpoint is POST-only — the old
+  // PUT was rejected (and the old resolve-anything helper swallowed that), so
+  // Shopify-side stock never actually decremented before this fix.
+  await shopifyPost(shop_domain, access_token, '/inventory_levels/adjust.json', {
     location_id: locationId,
     inventory_item_id: variant.inventory_item_id,
     available_adjustment: -quantity,
@@ -348,4 +414,8 @@ async function decrementStock(dapperProductId, quantity = 1, size = null) {
   console.log(`[Shopify] Decremented ${quantity} from variant ${variantId}${size ? ` (size ${size})` : ''}`);
 }
 
-module.exports = { buildInstallUrl, exchangeToken, syncProducts, getLiveStock, decrementStock };
+module.exports = {
+  buildInstallUrl, exchangeToken, syncProducts, getLiveStock, decrementStock,
+  // internals exported for tests
+  _internals: { shopifyGetWithLink, nextPathFromLink },
+};
